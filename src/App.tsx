@@ -7,10 +7,11 @@ import Programs from './pages/Programs'
 import Screens from './pages/Screens'
 import Content from './pages/Content'
 import Stats from './pages/Stats'
+import Campaigns from './pages/Campaigns'
 import Sidebar from './components/Sidebar'
 import Pair from './pages/Pair'
 
-type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats'
+type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns'
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
@@ -83,7 +84,7 @@ function Gate() {
 
   const pageLabel: Record<Page, string> = {
     home: 'Inicio', programs: 'Programas', screens: 'Pantallas',
-    content: 'Contenido', stats: 'Estadísticas',
+    content: 'Contenido', stats: 'Estadísticas', campaigns: 'Campañas',
   }
 
   return (
@@ -174,11 +175,12 @@ function Gate() {
         {/* Main content */}
         <main style={{ flex: 1, padding: isMobile ? '1rem' : '1.75rem 2rem', overflowY: 'auto', minWidth: 0 }}>
           <div key={pageKey} className="page-enter">
-            {page === 'home'     && <DashboardHome onNavigate={navigate} onEditProgram={openZoneEditor} />}
-            {page === 'programs' && <Programs initialEditId={editProgramId} />}
-            {page === 'screens'  && <Screens />}
-            {page === 'content'  && <Content />}
-            {page === 'stats'    && <Stats />}
+            {page === 'home'      && <DashboardHome onNavigate={navigate} onEditProgram={openZoneEditor} />}
+            {page === 'programs'  && <Programs initialEditId={editProgramId} />}
+            {page === 'screens'   && <Screens />}
+            {page === 'content'   && <Content />}
+            {page === 'stats'     && <Stats />}
+            {page === 'campaigns' && <Campaigns />}
           </div>
         </main>
       </div>
