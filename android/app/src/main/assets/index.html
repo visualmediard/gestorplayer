@@ -239,15 +239,54 @@
       return null
     }
 
+    // Mira qué viene después sin avanzar el estado
+    function peekNextItem(zoneId) {
+      var state=zoneStates[zoneId], entries=state.entries, total=entries.length
+      if (!total) return null
+      for (var i=0; i<total; i++) {
+        var entry=entries[(state.idx+i)%total]
+        if (entry.kind==='item') return entry.item
+        if (entry.kind==='sub' && entry.items && entry.items.length)
+          return entry.items[entry.si % entry.items.length]
+      }
+      return null
+    }
+
     function playNext(zoneId) {
       var r=getNextItem(zoneId)
       if (!r) { setTimeout(function(){ playNext(zoneId) },5000); return }
       renderItem(zoneId, r.item, r.subName)
     }
 
-    // Elimina todos los hijos del zone excepto el último (el recién agregado)
+    // Elimina todos los hijos excepto el último
     function clearOld(zEl) {
       while (zEl.children.length > 1) zEl.removeChild(zEl.children[0])
+    }
+
+    // Crea un <video> oculto y lo empieza a cargar en el DOM del zone
+    function preloadNextVideo(zoneId) {
+      var state = zoneStates[zoneId]
+      if (state.preloaded) return          // ya hay uno precargando
+      var next = peekNextItem(zoneId)
+      if (!next || next.type !== 'video') return
+
+      var url = storageUrl(next.storage_path)
+      if (state.preloadedUrl === url) return  // ya es el mismo
+
+      var vid = document.createElement('video')
+      vid.src = url; vid.muted = true; vid.preload = 'auto'
+      vid.setAttribute('webkit-playsinline','')
+      vid.setAttribute('disableremoteplayback','')
+      // Invisible, detrás del contenido actual
+      vid.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:fill;opacity:0;pointer-events:none;z-index:0;'
+      vid.load()
+
+      var zEl = document.getElementById('zone-'+zoneId)
+      if (zEl) zEl.insertBefore(vid, zEl.firstChild)  // detrás de todo
+
+      state.preloaded    = vid
+      state.preloadedUrl = url
+      dl('Precargando: '+next.name.slice(0,25),'i')
     }
 
     function renderItem(zoneId, item, subName) {
@@ -264,8 +303,10 @@
       if (item.type==='image') {
         var img=document.createElement('img')
         img.onload=function(){
-          zEl.appendChild(img)   // agrega encima del actual
-          clearOld(zEl)          // elimina el anterior → sin flash
+          zEl.appendChild(img)
+          clearOld(zEl)
+          // Precargar siguiente mientras muestra la imagen
+          preloadNextVideo(zoneId)
           setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||10)*1000)
         }
         img.onerror=function(){ dl('Error img: '+url.slice(0,50),'e'); setTimeout(function(){ playNext(zoneId) },3000) }
@@ -280,21 +321,52 @@
         setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||30)*1000)
 
       } else {
-        var vid=document.createElement('video')
-        vid.src=url; vid.muted=true; vid.autoplay=true; vid.playsInline=true
+        // ── Video: usa el elemento precargado si coincide con la URL ──
+        var vid
+        if (state.preloaded && state.preloadedUrl === url) {
+          vid = state.preloaded
+          vid.style.opacity = '1'
+          vid.style.zIndex  = ''
+          dl('Usando elemento precargado ✓','o')
+        } else {
+          vid = document.createElement('video')
+          vid.src=url; vid.preload='auto'
+        }
+        state.preloaded    = null
+        state.preloadedUrl = null
+
+        vid.muted=true; vid.autoplay=true; vid.playsInline=true
         vid.setAttribute('webkit-playsinline','')
         vid.setAttribute('disableremoteplayback','')
-        vid.preload='auto'
 
-        // Elimina el video anterior en cuanto el nuevo empieza a reproducirse → sin flash negro
         vid.addEventListener('playing', function(){ clearOld(zEl) }, { once:true })
-        // Fallback: si 'playing' no llega en 800ms, limpia igual
-        setTimeout(function(){ clearOld(zEl) }, 800)
+        setTimeout(function(){ clearOld(zEl) }, 600)
 
-        vid.onended=function(){ playNext(zoneId) }
-        vid.onerror=function(){ dl('Error vid: '+url.slice(0,50),'e'); clearOld(zEl); setTimeout(function(){ playNext(zoneId) },3000) }
+        vid.onended = function() {
+          state.preloaded    = null
+          state.preloadedUrl = null
+          playNext(zoneId)
+        }
+        vid.onerror = function() {
+          dl('Error vid: '+url.slice(0,50),'e')
+          state.preloaded = null
+          clearOld(zEl)
+          setTimeout(function(){ playNext(zoneId) },3000)
+        }
 
-        zEl.appendChild(vid)   // apila sobre el video actual
+        // Precargar el siguiente en cuanto este empieza a reproducirse
+        vid.addEventListener('playing', function(){
+          preloadNextVideo(zoneId)
+        }, { once:true })
+
+        // También precargar cuando queden ~2s (para videos cortos)
+        vid.addEventListener('timeupdate', function(){
+          if (vid.duration && vid.currentTime >= vid.duration - 2) {
+            preloadNextVideo(zoneId)
+          }
+        })
+
+        zEl.appendChild(vid)
         vid.play().catch(function(e){ dl('play() rechazado: '+e.message,'w') })
       }
     }
