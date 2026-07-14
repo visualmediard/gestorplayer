@@ -37,10 +37,11 @@ export default function Content() {
   useEffect(() => { load() }, [])
 
   async function handleUpload() {
-    if (!file || !selectedZone) { setError('Selecciona una zona y un archivo.'); return }
+    if (!file) { setError('Selecciona un archivo.'); return }
     setUploading(true); setError(null)
     const ext = file.name.split('.').pop()
-    const path = `${selectedZone}/${Date.now()}.${ext}`
+    const folder = selectedZone || 'library'
+    const path = `${folder}/${Date.now()}.${ext}`
     const isVideo = file.type.startsWith('video/')
     const { error: storageError } = await supabase.storage.from('media').upload(path, file, {
       upsert: false,
@@ -48,7 +49,8 @@ export default function Content() {
     } as any)
     if (storageError) { setError('Error: ' + storageError.message); setUploading(false); return }
     await supabase.from('media_content').insert({
-      zone_id: selectedZone, name: file.name,
+      zone_id: selectedZone || null,
+      name: file.name,
       type: isVideo ? 'video' : 'image',
       storage_path: path,
       duration_seconds: isVideo ? null : duration,
@@ -95,15 +97,11 @@ export default function Content() {
           <h3 style={s.formTitle}>Subir archivo</h3>
           <div style={s.formRow}>
             <div style={s.formGroup}>
-              <label style={s.label}>Zona destino</label>
-              {zones.length === 0 ? (
-                <p style={{ color: '#EF4444', fontSize: '0.8rem' }}>No hay zonas. Crea un programa primero.</p>
-              ) : (
-                <select style={s.input} value={selectedZone} onChange={e => setSelectedZone(e.target.value)}>
-                  <option value="">— Selecciona una zona —</option>
-                  {zones.map(z => <option key={z.id} value={z.id}>{z.program_name} → {z.name}</option>)}
-                </select>
-              )}
+              <label style={s.label}>Zona destino <span style={{ color: '#94A3B8', fontWeight: 400 }}>(opcional)</span></label>
+              <select style={s.input} value={selectedZone} onChange={e => setSelectedZone(e.target.value)}>
+                <option value="">— Solo biblioteca, sin zona —</option>
+                {zones.map(z => <option key={z.id} value={z.id}>{z.program_name} → {z.name}</option>)}
+              </select>
             </div>
             <div style={s.formGroup}>
               <label style={s.label}>Archivo (imagen o video)</label>
