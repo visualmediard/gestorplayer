@@ -41,9 +41,9 @@
       font-family: monospace; font-size: 13px; line-height: 1.8;
       padding: 12px; max-height: 65vh; overflow-y: auto;
       z-index: 99998; word-break: break-all;
-      border-bottom: 2px solid #333; display: none;
+      border-bottom: 2px solid #333; display: block;
     }
-    #debug-panel.visible { display: block; }
+    #debug-panel.hidden { display: none; }
     #debug-panel .log-err  { color: #ff4444; }
     #debug-panel .log-warn { color: #ffaa00; }
     #debug-panel .log-ok   { color: #44ff44; }
@@ -98,11 +98,16 @@
 
     var debugPanel   = document.getElementById('debug-panel')
     var debugLines   = []
-    var debugVisible = false
+    var debugVisible = true
 
     function toggleDebug() {
       debugVisible = !debugVisible
-      debugPanel.className = debugVisible ? 'visible' : ''
+      debugPanel.className = debugVisible ? '' : 'hidden'
+    }
+
+    function hideDebug() {
+      debugVisible = false
+      debugPanel.className = 'hidden'
     }
 
     function dlog(msg, type) {
@@ -396,9 +401,10 @@
 
       buildLayout(progRes.data, zones)
 
-      // Ocultar pantalla de carga y mostrar reproductor
+      // Ocultar pantalla de carga, debug y mostrar reproductor
       setupScreen.style.display = 'none'
       screenEl.style.display    = 'block'
+      setTimeout(hideDebug, 3000)  // oculta debug 3s después de arrancar
 
       zones.forEach(function(z, idx) {
         setTimeout(function() {
@@ -463,7 +469,13 @@
 
       var res
       try {
-        res = await sb.from('screens').select('*').eq('device_token', token).single()
+        var timeoutPromise = new Promise(function(_, reject) {
+          setTimeout(function() { reject(new Error('Timeout: Supabase no respondió en 8s') ) }, 8000)
+        })
+        res = await Promise.race([
+          sb.from('screens').select('*').eq('device_token', token).single(),
+          timeoutPromise
+        ])
       } catch(e) {
         dlog('Excepción de red: ' + e.message, 'err')
         showError('Error de red: ' + e.message)
