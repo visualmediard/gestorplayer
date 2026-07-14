@@ -9,7 +9,10 @@
     html, body { width:100%; height:100%; overflow:hidden; background:#000; }
     #screen { width:100vw; height:100vh; position:relative; background:#000; display:none; }
     .zone { position:absolute; overflow:hidden; background:#000; }
-    .zone img, .zone video { width:100%; height:100%; object-fit:fill; display:block; }
+    .zone img, .zone video {
+      position:absolute; top:0; left:0;
+      width:100%; height:100%; object-fit:fill; display:block;
+    }
     video::-webkit-media-controls { display:none !important; }
     video::-webkit-media-controls-overlay-cast-button { display:none !important; }
     #status {
@@ -242,6 +245,11 @@
       renderItem(zoneId, r.item, r.subName)
     }
 
+    // Elimina todos los hijos del zone excepto el último (el recién agregado)
+    function clearOld(zEl) {
+      while (zEl.children.length > 1) zEl.removeChild(zEl.children[0])
+    }
+
     function renderItem(zoneId, item, subName) {
       var zEl=document.getElementById('zone-'+zoneId); if (!zEl) return
       var state=zoneStates[zoneId]
@@ -252,27 +260,41 @@
       dl('▶ '+item.name.slice(0,30)+' ['+item.type+']','o')
       log('▶ '+item.name.slice(0,28))
       sbInsert('playback_events',{ screen_id:screenData.id, zone_id:zoneId, content_id:item.id })
-      zEl.innerHTML=''
+
       if (item.type==='image') {
         var img=document.createElement('img')
-        img.src=url
-        img.onload=function(){ setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||10)*1000) }
+        img.onload=function(){
+          zEl.appendChild(img)   // agrega encima del actual
+          clearOld(zEl)          // elimina el anterior → sin flash
+          setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||10)*1000)
+        }
         img.onerror=function(){ dl('Error img: '+url.slice(0,50),'e'); setTimeout(function(){ playNext(zoneId) },3000) }
-        zEl.appendChild(img)
+        img.src=url
+
       } else if (item.type==='url') {
         var ifr=document.createElement('iframe')
-        ifr.src=item.url||''; ifr.style.cssText='width:100%;height:100%;border:none;'
+        ifr.src=item.url||''; ifr.style.cssText='position:absolute;top:0;left:0;width:100%;height:100%;border:none;'
         ifr.allow='autoplay; fullscreen;'; ifr.setAttribute('allowfullscreen','')
         zEl.appendChild(ifr)
+        clearOld(zEl)
         setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||30)*1000)
+
       } else {
         var vid=document.createElement('video')
         vid.src=url; vid.muted=true; vid.autoplay=true; vid.playsInline=true
-        vid.setAttribute('webkit-playsinline',''); vid.preload='auto'
+        vid.setAttribute('webkit-playsinline','')
         vid.setAttribute('disableremoteplayback','')
+        vid.preload='auto'
+
+        // Elimina el video anterior en cuanto el nuevo empieza a reproducirse → sin flash negro
+        vid.addEventListener('playing', function(){ clearOld(zEl) }, { once:true })
+        // Fallback: si 'playing' no llega en 800ms, limpia igual
+        setTimeout(function(){ clearOld(zEl) }, 800)
+
         vid.onended=function(){ playNext(zoneId) }
-        vid.onerror=function(){ dl('Error vid: '+url.slice(0,50),'e'); setTimeout(function(){ playNext(zoneId) },3000) }
-        zEl.appendChild(vid)
+        vid.onerror=function(){ dl('Error vid: '+url.slice(0,50),'e'); clearOld(zEl); setTimeout(function(){ playNext(zoneId) },3000) }
+
+        zEl.appendChild(vid)   // apila sobre el video actual
         vid.play().catch(function(e){ dl('play() rechazado: '+e.message,'w') })
       }
     }
