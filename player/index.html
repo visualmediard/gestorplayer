@@ -16,29 +16,9 @@
       color: rgba(255,255,255,0.35); z-index: 9999;
       pointer-events: none; text-align: right; line-height: 1.6;
     }
-    /* ── Panel de diagnóstico visible en pantalla ── */
-    #debug-panel {
-      position: fixed; top: 0; left: 0; right: 0;
-      background: rgba(0,0,0,0.92);
-      color: #00ff00;
-      font-family: monospace; font-size: 14px; line-height: 1.8;
-      padding: 12px; max-height: 70vh; overflow-y: auto;
-      z-index: 99998; word-break: break-all;
-      border-bottom: 2px solid #333;
-      display: none;
-    }
-    #debug-panel.visible { display: block; }
-    #debug-panel .log-err  { color: #ff4444; }
-    #debug-panel .log-warn { color: #ffaa00; }
-    #debug-panel .log-ok   { color: #44ff44; }
-    #debug-panel .log-info { color: #88ccff; }
-    #debug-toggle {
-      position: fixed; top: 8px; left: 8px;
-      background: rgba(255,255,0,0.8); color: #000;
-      font-family: monospace; font-size: 12px; font-weight: bold;
-      border: none; border-radius: 4px; padding: 4px 10px;
-      cursor: pointer; z-index: 99999;
-    }
+    /* ── Panel de diagnóstico (solo desarrollo) ── */
+    #debug-panel { display: none; }
+    #debug-toggle { display: none; }
   </style>
 </head>
 <body>
