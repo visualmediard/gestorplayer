@@ -39,25 +39,52 @@
         <span style="font-size:0.6rem; font-weight:700; background:#EFF6FF; color:#3B82F6; border:1px solid #BFDBFE; border-radius:4px; padding:2px 6px;">BETA</span>
       </div>
       <div style="height:1px; background:#F1F5F9; margin-bottom:1.5rem;"></div>
-      <h2 style="font-size:1.1rem; font-weight:700; color:#0F172A; text-align:center; margin:0;">Conectar pantalla</h2>
-      <p style="color:#94A3B8; font-size:0.85rem; text-align:center; margin-top:0.25rem; margin-bottom:1.5rem;">Ingresa el token asignado a esta pantalla</p>
-      <label style="color:#374151; font-size:0.8rem; font-weight:600; margin-bottom:0.35rem; display:block;">Token de pantalla</label>
-      <input
-        id="token-input"
-        type="text"
-        placeholder="Pega el token aquí..."
-        style="width:100%; padding:0.65rem 0.875rem; border-radius:8px; border:1px solid #E2E8F0; background:#F8FAFC; color:#0F172A; font-size:0.9rem; box-sizing:border-box; outline:none; font-family:monospace;"
-      />
-      <p id="token-error" style="color:#EF4444; font-size:0.8rem; display:none; margin-top:0.5rem; background:#FFF5F5; border:1px solid #FECACA; border-radius:6px; padding:0.5rem 0.75rem;">
-        ❌ Token inválido. Verifica e intenta de nuevo.
-      </p>
-      <button
-        id="token-btn"
-        style="margin-top:1rem; padding:0.7rem; border-radius:8px; border:none; background:#2563EB; color:#fff; font-weight:700; cursor:pointer; font-size:0.95rem; font-family:inherit;"
-      >Conectar pantalla</button>
-      <p style="color:#94A3B8; font-size:0.75rem; text-align:center; margin-top:1rem;">
-        Encuentra el token en el dashboard → Pantallas → Copiar
-      </p>
+
+      <!-- Tabs -->
+      <div style="display:flex; border-radius:8px; overflow:hidden; border:1px solid #E2E8F0; margin-bottom:1.5rem;">
+        <button id="tab-manual" onclick="switchTab('manual')"
+          style="flex:1; padding:0.55rem; border:none; background:#EFF6FF; color:#2563EB; font-weight:700; font-size:0.85rem; cursor:pointer; font-family:inherit; border-right:1px solid #E2E8F0;">
+          ✏️ Token manual
+        </button>
+        <button id="tab-qr" onclick="switchTab('qr')"
+          style="flex:1; padding:0.55rem; border:none; background:#fff; color:#64748B; font-weight:600; font-size:0.85rem; cursor:pointer; font-family:inherit;">
+          📷 Código QR
+        </button>
+      </div>
+
+      <!-- Tab: ingreso manual -->
+      <div id="content-manual">
+        <label style="color:#374151; font-size:0.8rem; font-weight:600; margin-bottom:0.35rem; display:block;">Token de pantalla</label>
+        <input
+          id="token-input"
+          type="text"
+          placeholder="Pega el token aquí..."
+          style="width:100%; padding:0.65rem 0.875rem; border-radius:8px; border:1px solid #E2E8F0; background:#F8FAFC; color:#0F172A; font-size:0.9rem; box-sizing:border-box; outline:none; font-family:monospace;"
+        />
+        <p id="token-error" style="color:#EF4444; font-size:0.8rem; display:none; margin-top:0.5rem; background:#FFF5F5; border:1px solid #FECACA; border-radius:6px; padding:0.5rem 0.75rem;">
+          ❌ Token inválido. Verifica e intenta de nuevo.
+        </p>
+        <button id="token-btn"
+          style="margin-top:1rem; padding:0.7rem; border-radius:8px; border:none; background:#2563EB; color:#fff; font-weight:700; cursor:pointer; font-size:0.95rem; font-family:inherit; width:100%;">
+          Conectar pantalla
+        </button>
+        <p style="color:#94A3B8; font-size:0.75rem; text-align:center; margin-top:1rem;">
+          Encuentra el token en el dashboard → Pantallas → Copiar
+        </p>
+      </div>
+
+      <!-- Tab: QR -->
+      <div id="content-qr" style="display:none; text-align:center;">
+        <p style="color:#64748B; font-size:0.85rem; margin:0 0 1rem;">Escanea con tu celular y selecciona la pantalla</p>
+        <div id="qr-loading" style="color:#94A3B8; font-size:0.85rem; padding:2rem 0;">Generando código QR...</div>
+        <div id="qr-ready" style="display:none;">
+          <img id="qr-img" src="" alt="QR" style="width:180px; height:180px; border-radius:12px; border:1px solid #E2E8F0;" />
+          <div style="margin-top:1rem; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:0.6rem;">
+            <span id="qr-code-display" style="font-family:monospace; font-size:1.3rem; font-weight:700; color:#2563EB; letter-spacing:0.2em;">------</span>
+          </div>
+          <p id="qr-status" style="color:#94A3B8; font-size:0.82rem; margin-top:0.75rem;">Esperando que escanees...</p>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -745,6 +772,66 @@
       document.getElementById('token-screen').style.display = 'none'
       document.getElementById('screen').style.display = 'block'
       await startPlayer(token)
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  TABS Y CONEXIÓN POR QR
+    // ════════════════════════════════════════════════════════════
+
+    var qrCode     = null
+    var qrInterval = null
+
+    function switchTab(tab) {
+      var isQR = tab === 'qr'
+      document.getElementById('content-manual').style.display = isQR ? 'none'  : 'block'
+      document.getElementById('content-qr').style.display     = isQR ? 'block' : 'none'
+      document.getElementById('tab-manual').style.background  = isQR ? '#fff'    : '#EFF6FF'
+      document.getElementById('tab-manual').style.color       = isQR ? '#64748B' : '#2563EB'
+      document.getElementById('tab-qr').style.background      = isQR ? '#EFF6FF' : '#fff'
+      document.getElementById('tab-qr').style.color           = isQR ? '#2563EB' : '#64748B'
+      if (isQR && !qrCode) startQRPairing()
+      if (!isQR && qrInterval) { clearInterval(qrInterval); qrInterval = null }
+    }
+
+    async function startQRPairing() {
+      // Genera código de 6 chars: ej. "A7B3X9"
+      qrCode = Math.random().toString(36).substring(2, 8).toUpperCase()
+
+      // Inserta en device_pairings
+      try {
+        var res = await sb.from('device_pairings').insert({ code: qrCode, token: null })
+        if (res.error) throw new Error(res.error.message)
+      } catch(e) {
+        document.getElementById('qr-loading').textContent = 'Error creando código: ' + e.message
+        return
+      }
+
+      // Muestra QR
+      var pairUrl = window.location.origin + '/pair?code=' + qrCode
+      document.getElementById('qr-img').src =
+        'https://api.qrserver.com/v1/create-qr-code/?size=180x180&ecc=M&data=' + encodeURIComponent(pairUrl)
+      document.getElementById('qr-code-display').textContent = qrCode
+      document.getElementById('qr-loading').style.display = 'none'
+      document.getElementById('qr-ready').style.display   = 'block'
+
+      // Polling: espera que el teléfono complete el emparejamiento
+      qrInterval = setInterval(async function() {
+        var r = await sb.from('device_pairings').select('token').eq('code', qrCode).single()
+        if (r.data && r.data.token) {
+          clearInterval(qrInterval)
+          var token = r.data.token
+          // Limpia el registro de emparejamiento
+          sb.from('device_pairings').delete().eq('code', qrCode)
+          document.getElementById('qr-status').textContent  = '✅ ¡Conectado! Arrancando...'
+          document.getElementById('qr-status').style.color  = '#10B981'
+          lsSet('device_token', token)
+          setTimeout(function() {
+            document.getElementById('token-screen').style.display = 'none'
+            document.getElementById('screen').style.display = 'block'
+            startPlayer(token)
+          }, 1200)
+        }
+      }, 2000)
     }
 
     init()

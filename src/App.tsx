@@ -8,6 +8,7 @@ import Screens from './pages/Screens'
 import Content from './pages/Content'
 import Stats from './pages/Stats'
 import Sidebar from './components/Sidebar'
+import Pair from './pages/Pair'
 
 type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats'
 
@@ -217,5 +218,7 @@ const avatarStyle: React.CSSProperties = {
 }
 
 export default function App() {
+  // Ruta pública de emparejamiento — no requiere auth
+  if (window.location.pathname === '/pair') return <Pair />
   return <AuthProvider><Gate /></AuthProvider>
 }
