@@ -637,6 +637,8 @@
       // 3. Mostrar pantalla de emparejamiento
       dl('Sin token → mostrando pantalla de emparejamiento','w')
       setupEl.style.display = 'none'
+      dbgEl.style.display = 'none'
+      document.getElementById('dclose').style.display = 'none'
       var ts = document.getElementById('token-screen')
       ts.style.display = 'flex'
       startQRPairing()
