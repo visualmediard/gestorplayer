@@ -47,8 +47,8 @@ export default function Content() {
       upsert: false,
       onUploadProgress: (p: any) => setProgress(Math.round((p.loaded / p.total) * 100)),
     } as any)
-    if (storageError) { setError('Error: ' + storageError.message); setUploading(false); return }
-    await supabase.from('media_content').insert({
+    if (storageError) { setError('Error al subir: ' + storageError.message); setUploading(false); return }
+    const { error: insertError } = await supabase.from('media_content').insert({
       zone_id: selectedZone || null,
       name: file.name,
       type: isVideo ? 'video' : 'image',
@@ -56,6 +56,7 @@ export default function Content() {
       duration_seconds: isVideo ? null : duration,
       uploaded_by: profile?.id,
     })
+    if (insertError) { setError('Error al guardar: ' + insertError.message); setUploading(false); return }
     setFile(null); setProgress(0); setUploading(false); setDuration(10)
     setSelectedZone(''); setShowForm(false)
     if (fileRef.current) fileRef.current.value = ''
