@@ -16,14 +16,41 @@
       color: rgba(255,255,255,0.35); z-index: 9999;
       pointer-events: none; text-align: right; line-height: 1.6;
     }
-  
+    /* ── Panel de diagnóstico visible en pantalla ── */
+    #debug-panel {
+      position: fixed; top: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.92);
+      color: #00ff00;
+      font-family: monospace; font-size: 14px; line-height: 1.8;
+      padding: 12px; max-height: 70vh; overflow-y: auto;
+      z-index: 99998; word-break: break-all;
+      border-bottom: 2px solid #333;
+      display: none;
+    }
+    #debug-panel.visible { display: block; }
+    #debug-panel .log-err  { color: #ff4444; }
+    #debug-panel .log-warn { color: #ffaa00; }
+    #debug-panel .log-ok   { color: #44ff44; }
+    #debug-panel .log-info { color: #88ccff; }
+    #debug-toggle {
+      position: fixed; top: 8px; left: 8px;
+      background: rgba(255,255,0,0.8); color: #000;
+      font-family: monospace; font-size: 12px; font-weight: bold;
+      border: none; border-radius: 4px; padding: 4px 10px;
+      cursor: pointer; z-index: 99999;
+    }
   </style>
 </head>
 <body>
+  <!-- Botón para mostrar/ocultar diagnóstico -->
+  <button id="debug-toggle" onclick="toggleDebug()">🔍 DEBUG</button>
+
+  <!-- Panel de diagnóstico -->
+  <div id="debug-panel"></div>
+
+  <!-- Pantalla de ingreso de token (si no hay token guardado) -->
   <div id="token-screen" style="display:none; position:fixed; inset:0; background:#F8FAFC; display:flex; align-items:center; justify-content:center; z-index:9999; font-family:'Inter',system-ui,sans-serif;">
     <div style="background:#fff; border:1px solid #E2E8F0; border-radius:16px; padding:2.5rem; width:380px; display:flex; flex-direction:column; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-
-      <!-- Logo -->
       <div style="display:flex; align-items:center; justify-content:center; gap:0.5rem; margin-bottom:1.5rem;">
         <div style="width:36px; height:36px; background:#3B82F6; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
@@ -31,12 +58,9 @@
         <span style="font-weight:800; font-size:1.25rem; color:#0F172A;">GestorPlayer</span>
         <span style="font-size:0.6rem; font-weight:700; background:#EFF6FF; color:#3B82F6; border:1px solid #BFDBFE; border-radius:4px; padding:2px 6px;">BETA</span>
       </div>
-
       <div style="height:1px; background:#F1F5F9; margin-bottom:1.5rem;"></div>
-
       <h2 style="font-size:1.1rem; font-weight:700; color:#0F172A; text-align:center; margin:0;">Conectar pantalla</h2>
       <p style="color:#94A3B8; font-size:0.85rem; text-align:center; margin-top:0.25rem; margin-bottom:1.5rem;">Ingresa el token asignado a esta pantalla</p>
-
       <label style="color:#374151; font-size:0.8rem; font-weight:600; margin-bottom:0.35rem; display:block;">Token de pantalla</label>
       <input
         id="token-input"
@@ -44,99 +68,239 @@
         placeholder="Pega el token aquí..."
         style="width:100%; padding:0.65rem 0.875rem; border-radius:8px; border:1px solid #E2E8F0; background:#F8FAFC; color:#0F172A; font-size:0.9rem; box-sizing:border-box; outline:none; font-family:monospace;"
       />
-
       <p id="token-error" style="color:#EF4444; font-size:0.8rem; display:none; margin-top:0.5rem; background:#FFF5F5; border:1px solid #FECACA; border-radius:6px; padding:0.5rem 0.75rem;">
         ❌ Token inválido. Verifica e intenta de nuevo.
       </p>
-
       <button
         id="token-btn"
         style="margin-top:1rem; padding:0.7rem; border-radius:8px; border:none; background:#2563EB; color:#fff; font-weight:700; cursor:pointer; font-size:0.95rem; font-family:inherit;"
-      >
-        Conectar pantalla
-      </button>
-
+      >Conectar pantalla</button>
       <p style="color:#94A3B8; font-size:0.75rem; text-align:center; margin-top:1rem;">
         Encuentra el token en el dashboard → Pantallas → Copiar
       </p>
     </div>
   </div>
+
   <div id="screen" style="display:none;"></div>
-  <div id="status">Conectando...</div>
-  <button 
-    onclick="localStorage.removeItem('device_token'); location.reload()"
+  <div id="status">Iniciando...</div>
+  <button
+    onclick="clearTokenAndReload()"
     style="position:fixed; bottom:8px; left:12px; background:transparent; border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.2); font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; font-family:monospace; z-index:9999;"
-  >
-    ⚙ cambiar pantalla
-  </button>
+  >⚙ cambiar pantalla</button>
 
-  <script type="module">
-    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+  <!-- ── Supabase como UMD (sin ES modules, compatible con WebView Android) ── -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 
-    const SUPABASE_URL = 'https://pekjgxyllilzfwkdyzmm.supabase.co'
-    const SUPABASE_KEY = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
+  <script>
+    // ════════════════════════════════════════════════════════════
+    //  CONFIGURACIÓN
+    // ════════════════════════════════════════════════════════════
 
-    // Lee el token de la URL o lo pide al usuario
-    function getDeviceToken() {
-      const params = new URLSearchParams(window.location.search)
-      const urlToken = params.get('token')
-      if (urlToken) {
-        localStorage.setItem('device_token', urlToken)
-        return urlToken
-      }
-      const saved = localStorage.getItem('device_token')
-      if (saved) return saved
-      return null
+    var SUPABASE_URL    = 'https://pekjgxyllilzfwkdyzmm.supabase.co'
+    var SUPABASE_KEY    = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
+
+    // Token fijo para este dispositivo (rellena si no hay forma de usar el UI)
+    // Deja vacío ('') para usar siempre localStorage / pantalla de ingreso.
+    var HARDCODED_TOKEN = ''
+
+    // ════════════════════════════════════════════════════════════
+    //  PANEL DE DIAGNÓSTICO
+    // ════════════════════════════════════════════════════════════
+
+    var debugPanel  = document.getElementById('debug-panel')
+    var debugLines  = []
+    var debugVisible = false
+
+    function toggleDebug() {
+      debugVisible = !debugVisible
+      debugPanel.className = debugVisible ? 'visible' : ''
     }
 
-    const DEVICE_TOKEN = getDeviceToken()
+    function dlog(msg, type) {
+      var t    = new Date().toLocaleTimeString('es', { hour12: false })
+      var cls  = 'log-' + (type || 'info')
+      var line = '<div class="' + cls + '">[' + t + '] ' + escapeHtml(msg) + '</div>'
+      debugLines.push(line)
+      if (debugLines.length > 60) debugLines.shift()
+      debugPanel.innerHTML = debugLines.join('')
+      debugPanel.scrollTop = debugPanel.scrollHeight
+      console.log('[GP]', msg)
+    }
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { persistSession: false, autoRefreshToken: false }
-    })
-    supabase.auth.signOut()
-    const screenEl = document.getElementById('screen')
-    const statusEl = document.getElementById('status')
-  
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+    }
 
-    let screenData     = null
-    let isOnline       = true
-    const zoneStates   = {}
+    // ════════════════════════════════════════════════════════════
+    //  HELPERS
+    // ════════════════════════════════════════════════════════════
+
+    var statusEl = document.getElementById('status')
+    var screenEl = document.getElementById('screen')
 
     function log(msg) {
       statusEl.textContent = msg
-      console.log('[GestorPlayer]', msg)
+      dlog(msg, 'info')
     }
+
+    function clearTokenAndReload() {
+      try { localStorage.removeItem('device_token') } catch(e) {}
+      location.reload()
+    }
+
+    // localStorage con fallback (falla en file:// sin permisos)
+    var _memStore = {}
+    function lsGet(key) {
+      try { return localStorage.getItem(key) } catch(e) { return _memStore[key] || null }
+    }
+    function lsSet(key, val) {
+      try { localStorage.setItem(key, val) } catch(e) { _memStore[key] = val }
+    }
+    function lsDel(key) {
+      try { localStorage.removeItem(key) } catch(e) { delete _memStore[key] }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  INIT SUPABASE
+    // ════════════════════════════════════════════════════════════
+
+    var supabaseLib = window.supabase
+    if (!supabaseLib) {
+      dlog('ERROR CRÍTICO: Supabase no cargó desde CDN. Verifica conexión.', 'err')
+    }
+
+    var sb = null
+    try {
+      sb = supabaseLib.createClient(SUPABASE_URL, SUPABASE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false }
+      })
+      dlog('Supabase client creado OK', 'ok')
+    } catch(e) {
+      dlog('ERROR creando Supabase client: ' + e.message, 'err')
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  ESTADO DEL PLAYER
+    // ════════════════════════════════════════════════════════════
+
+    var screenData    = null
+    var isOnline      = true
+    var zoneStates    = {}
+    var lastPublishedAt = null
 
     function setConnStatus(online) {
       isOnline = online
       log(online ? '🟢 Conectado' : '🔴 Sin conexión')
+      dlog('Conexión: ' + (online ? 'ONLINE' : 'OFFLINE'), online ? 'ok' : 'warn')
     }
 
-    // ── Carga conteos persistentes desde Supabase ──
-    async function loadCounts() {
-      var res = await supabase
-        .from('screen_content_counts')
-        .select('content_id, total_plays, last_played_at')
-        .eq('screen_id', screenData.id)
-      var counts      = {}
-      var lastPlayed  = {}
-      if (res.data) {
-        res.data.forEach(function(row) {
-          counts[row.content_id]     = row.total_plays
-          lastPlayed[row.content_id] = row.last_played_at ? new Date(row.last_played_at).getTime() : 0
-        })
+    // ════════════════════════════════════════════════════════════
+    //  TOKEN
+    // ════════════════════════════════════════════════════════════
+
+    function getDeviceToken() {
+      // 1. URL param
+      try {
+        var params   = new URLSearchParams(window.location.search)
+        var urlToken = params.get('token')
+        if (urlToken) {
+          dlog('Token desde URL: ' + urlToken.slice(0,12) + '...', 'ok')
+          lsSet('device_token', urlToken)
+          return urlToken
+        }
+      } catch(e) {
+        dlog('Error leyendo URL params: ' + e.message, 'warn')
       }
-      return { counts: counts, lastPlayed: lastPlayed }
+
+      // 2. localStorage
+      try {
+        var saved = lsGet('device_token')
+        if (saved) {
+          dlog('Token desde localStorage: ' + saved.slice(0,12) + '...', 'ok')
+          return saved
+        }
+      } catch(e) {
+        dlog('Error leyendo localStorage: ' + e.message, 'warn')
+      }
+
+      // 3. Token hardcodeado (para dispositivos sin UI de configuración)
+      if (HARDCODED_TOKEN) {
+        dlog('Usando token hardcodeado: ' + HARDCODED_TOKEN.slice(0,12) + '...', 'warn')
+        return HARDCODED_TOKEN
+      }
+
+      dlog('Sin token disponible → mostrando pantalla de ingreso', 'warn')
+      return null
     }
 
-    // ── Algoritmo: elige el próximo item ──
+    // ════════════════════════════════════════════════════════════
+    //  DIAGNÓSTICO DE ENTORNO AL INICIO
+    // ════════════════════════════════════════════════════════════
+
+    function runEnvCheck() {
+      dlog('═══ DIAGNÓSTICO DE ENTORNO ═══', 'info')
+      dlog('UserAgent: ' + navigator.userAgent.slice(0, 120), 'info')
+      dlog('Online (navigator): ' + navigator.onLine, navigator.onLine ? 'ok' : 'err')
+      dlog('URL: ' + window.location.href.slice(0, 80), 'info')
+
+      // Test localStorage
+      try {
+        localStorage.setItem('_test', '1')
+        localStorage.removeItem('_test')
+        dlog('localStorage: OK', 'ok')
+      } catch(e) {
+        dlog('localStorage: FALLA (' + e.message + ') → usando memoria', 'warn')
+      }
+
+      // Test Supabase lib
+      dlog('window.supabase: ' + (window.supabase ? 'CARGADO' : 'NO DISPONIBLE'), window.supabase ? 'ok' : 'err')
+
+      dlog('SUPABASE_URL: ' + SUPABASE_URL, 'info')
+      dlog('SUPABASE_KEY (primeros 20): ' + SUPABASE_KEY.slice(0, 20) + '...', 'info')
+      dlog('HARDCODED_TOKEN: ' + (HARDCODED_TOKEN ? HARDCODED_TOKEN.slice(0,12) + '...' : '(vacío)'), 'info')
+      dlog('═══════════════════════════════', 'info')
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  CARGA DE DATOS
+    // ════════════════════════════════════════════════════════════
+
+    async function loadCounts() {
+      try {
+        var res = await sb.from('screen_content_counts')
+          .select('content_id, total_plays, last_played_at')
+          .eq('screen_id', screenData.id)
+        var counts     = {}
+        var lastPlayed = {}
+        if (res.error) {
+          dlog('loadCounts error: ' + res.error.message, 'warn')
+        } else if (res.data) {
+          res.data.forEach(function(row) {
+            counts[row.content_id]     = row.total_plays
+            lastPlayed[row.content_id] = row.last_played_at ? new Date(row.last_played_at).getTime() : 0
+          })
+          dlog('loadCounts OK: ' + res.data.length + ' registros', 'ok')
+        }
+        return { counts: counts, lastPlayed: lastPlayed }
+      } catch(e) {
+        dlog('loadCounts excepción: ' + e.message, 'err')
+        return { counts: {}, lastPlayed: {} }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  ALGORITMO DE PLAYLIST
+    // ════════════════════════════════════════════════════════════
+
     function getNextItem(zoneId) {
-      var state    = zoneStates[zoneId]
-      var entries  = state.entries
-      var opHours  = screenData.operating_hours || 20
-      var now      = Date.now()
-      var total    = entries.length
+      var state   = zoneStates[zoneId]
+      var entries = state.entries
+      var opHours = screenData.operating_hours || 20
+      var now     = Date.now()
+      var total   = entries.length
       if (total === 0) return null
 
       for (var attempt = 0; attempt < total; attempt++) {
@@ -147,7 +311,7 @@
         if (entry.kind === 'item') {
           var item = entry.item
           if (!item.is_unlimited && item.daily_frequency) {
-            var played     = state.dailyCounts[item.id] || 0
+            var played = state.dailyCounts[item.id] || 0
             if (played >= item.daily_frequency) continue
             var intervalMs = (opHours * 3600 * 1000) / item.daily_frequency
             var elapsed    = now - (state.lastPlayedAt[item.id] || 0)
@@ -160,7 +324,6 @@
           var sub      = entry.sub
           var subItems = entry.items
           if (!subItems || subItems.length === 0) continue
-
           if (!sub.is_unlimited && sub.daily_frequency) {
             var subPlayed   = state.dailyCounts['sub_' + sub.id] || 0
             if (subPlayed >= sub.daily_frequency) continue
@@ -168,7 +331,6 @@
             var subElapsed  = now - (state.lastPlayedAt['sub_' + sub.id] || 0)
             if (subElapsed < subInterval) continue
           }
-
           var subItem = subItems[entry.subIndex % subItems.length]
           entry.subIndex++
           return { item: subItem, subName: sub.name }
@@ -195,7 +357,7 @@
       if (!zoneEl) return
 
       var state = zoneStates[zoneId]
-      var url   = supabase.storage.from('media').getPublicUrl(item.storage_path).data.publicUrl
+      var url   = sb.storage.from('media').getPublicUrl(item.storage_path).data.publicUrl
 
       state.dailyCounts[item.id]  = (state.dailyCounts[item.id] || 0) + 1
       state.lastPlayedAt[item.id] = Date.now()
@@ -211,6 +373,7 @@
       var played = state.dailyCounts[item.id]
       var cuota  = item.daily_frequency ? item.daily_frequency : '∞'
       log('▶ ' + label + '\n' + played + '/' + cuota + ' reproducciones')
+      dlog('Reproduciendo: ' + item.name + ' tipo=' + item.type, 'ok')
 
       zoneEl.innerHTML = ''
       if (item.type === 'url') {
@@ -227,7 +390,10 @@
         var img     = document.createElement('img')
         img.src     = url
         img.onload  = function() { setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 10) * 1000) }
-        img.onerror = function() { setTimeout(function() { playNext(zoneId) }, 3000) }
+        img.onerror = function() {
+          dlog('Error cargando imagen: ' + url.slice(0, 60), 'err')
+          setTimeout(function() { playNext(zoneId) }, 3000)
+        }
         zoneEl.appendChild(img)
       } else {
         var video         = document.createElement('video')
@@ -235,22 +401,31 @@
         video.muted       = true
         video.autoplay    = true
         video.playsInline = true
-        video.onended     = function() { playNext(zoneId) }
-        video.onerror     = function() { setTimeout(function() { playNext(zoneId) }, 3000) }
+        video.setAttribute('webkit-playsinline', '')
+        video.onended = function() { playNext(zoneId) }
+        video.onerror = function() {
+          dlog('Error reproduciendo video: ' + url.slice(0, 60), 'err')
+          setTimeout(function() { playNext(zoneId) }, 3000)
+        }
         zoneEl.appendChild(video)
-        video.play().catch(function() {})
+        video.play().catch(function(e) {
+          dlog('video.play() rechazado: ' + e.message, 'warn')
+        })
       }
     }
 
     function logPlayback(zoneId, contentId) {
-      if (!isOnline) return
-      supabase.from('playback_events').insert({
+      if (!isOnline || !sb) return
+      sb.from('playback_events').insert({
         screen_id: screenData.id, zone_id: zoneId, content_id: contentId,
       }).then(function(res) {
-        if (res.error) console.error('[Playback error]', res.error.message, res.error.code)
-        else console.log('[Playback OK]', contentId.slice(0, 8))
+        if (res.error) dlog('Playback log error: ' + res.error.message, 'warn')
       })
     }
+
+    // ════════════════════════════════════════════════════════════
+    //  LAYOUT
+    // ════════════════════════════════════════════════════════════
 
     function buildLayout(program, zones) {
       screenEl.innerHTML = ''
@@ -269,7 +444,7 @@
         container.style.left      = '0px'
         container.style.top       = '0px'
         container.style.transform = 'none'
-        log('▶ Modo exacto ' + program.width + '×' + program.height + 'px')
+        dlog('Layout: modo exacto ' + program.width + '×' + program.height, 'ok')
       } else {
         var scale   = Math.min(window.innerWidth / program.width, window.innerHeight / program.height)
         var offsetX = (window.innerWidth  - program.width  * scale) / 2
@@ -278,7 +453,7 @@
         container.style.top             = offsetY + 'px'
         container.style.transformOrigin = 'top left'
         container.style.transform       = 'scale(' + scale + ')'
-        log('▶ Modo preview · escala ' + scale.toFixed(3))
+        dlog('Layout: escala ' + scale.toFixed(3) + ' (pantalla ' + screenW + '×' + screenH + ' vs ' + program.width + '×' + program.height + ')', 'ok')
       }
 
       for (var i = 0; i < zones.length; i++) {
@@ -294,46 +469,53 @@
         container.appendChild(div)
       }
       screenEl.appendChild(container)
+      dlog('Zonas creadas: ' + zones.length, 'ok')
     }
 
-    // ── Heartbeat cada 60s ──
+    // ════════════════════════════════════════════════════════════
+    //  HEARTBEAT
+    // ════════════════════════════════════════════════════════════
+
     function startHeartbeat() {
       function beat() {
-        supabase.from('screens')
+        if (!sb || !screenData) return
+        sb.from('screens')
           .update({ last_heartbeat: new Date().toISOString() })
           .eq('id', screenData.id)
           .then(function(res) {
-            if (res.error) console.error('[Heartbeat error]', res.error.message)
-            else console.log('[Heartbeat OK]', new Date().toLocaleTimeString())
+            if (res.error) dlog('Heartbeat error: ' + res.error.message, 'warn')
+            else dlog('Heartbeat OK', 'ok')
           })
       }
       beat()
       setInterval(beat, 30000)
     }
 
-    // ── Polling de respaldo: detecta cambios y reconexión ──
-    var lastPublishedAt = null
+    // ════════════════════════════════════════════════════════════
+    //  POLLING
+    // ════════════════════════════════════════════════════════════
+
     function startPolling() {
       setInterval(async function() {
-        // Verifica conexión
+        if (!sb || !screenData || !screenData.current_program_id) return
         try {
-          var res = await supabase
-            .from('programs')
+          var res = await sb.from('programs')
             .select('published_at, updated_at')
             .eq('id', screenData.current_program_id)
             .single()
 
+          if (res.error) throw new Error(res.error.message)
+
           if (!isOnline) {
             setConnStatus(true)
-            log('🔄 Reconectado · recargando conteos...')
-            // Recarga conteos desde Supabase al reconectar
+            dlog('Reconectado — recargando conteos...', 'ok')
             var saved = await loadCounts()
             Object.keys(zoneStates).forEach(function(zoneId) {
               Object.keys(saved.counts).forEach(function(contentId) {
                 var current = zoneStates[zoneId].dailyCounts[contentId] || 0
                 if (saved.counts[contentId] > current) {
-                  zoneStates[zoneId].dailyCounts[contentId] = saved.counts[contentId]
-                  zoneStates[zoneId].lastPlayedAt[contentId] = saved.lastPlayed[contentId] || 0
+                  zoneStates[zoneId].dailyCounts[contentId]    = saved.counts[contentId]
+                  zoneStates[zoneId].lastPlayedAt[contentId]   = saved.lastPlayed[contentId] || 0
                 }
               })
             })
@@ -343,64 +525,113 @@
             var latest = res.data.published_at
             if (lastPublishedAt === null) { lastPublishedAt = latest; return }
             if (latest && latest !== lastPublishedAt) {
+              dlog('Nueva publicación detectada → recargando', 'ok')
               log('🔄 Publicación detectada · recargando...')
               setTimeout(function() { window.location.reload() }, 1000)
             }
           }
-        } catch (e) {
+        } catch(e) {
           if (isOnline) {
             setConnStatus(false)
-            log('⚠ Sin conexión · esperando...')
+            dlog('Polling falló: ' + e.message, 'err')
           }
         }
       }, 30000)
     }
 
-    // ── Realtime ──
+    // ════════════════════════════════════════════════════════════
+    //  REALTIME (con fallback silencioso si falla)
+    // ════════════════════════════════════════════════════════════
+
     function subscribeToChanges() {
-      supabase.channel('player-' + screenData.id)
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'programs', filter: 'id=eq.' + screenData.current_program_id },
-          function() { log('🔄 Publicado · recargando...'); setTimeout(function() { window.location.reload() }, 2000) })
-        .subscribe()
+      try {
+        sb.channel('player-' + screenData.id)
+          .on('postgres_changes', {
+            event: 'UPDATE', schema: 'public', table: 'programs',
+            filter: 'id=eq.' + screenData.current_program_id
+          }, function() {
+            dlog('Realtime: cambio detectado → recargando', 'ok')
+            log('🔄 Publicado · recargando...')
+            setTimeout(function() { window.location.reload() }, 2000)
+          })
+          .subscribe(function(status) {
+            dlog('Realtime status: ' + status, status === 'SUBSCRIBED' ? 'ok' : 'warn')
+          })
+      } catch(e) {
+        dlog('Realtime no disponible: ' + e.message + ' (polling activo como respaldo)', 'warn')
+      }
     }
 
-    // ── Detector de conexión nativa del navegador ──
+    // ════════════════════════════════════════════════════════════
+    //  CONEXIÓN
+    // ════════════════════════════════════════════════════════════
+
     function watchConnection() {
-      window.addEventListener('online',  function() { setConnStatus(true);  log('🟢 Conexión restaurada') })
-      window.addEventListener('offline', function() { setConnStatus(false); log('🔴 Sin conexión') })
+      window.addEventListener('online',  function() { setConnStatus(true);  dlog('Evento: online', 'ok') })
+      window.addEventListener('offline', function() { setConnStatus(false); dlog('Evento: offline', 'err') })
       setConnStatus(navigator.onLine)
     }
 
-    async function loadProgram() {
-      if (!screenData.current_program_id) { log('⚠ Sin programa asignado'); return }
+    // ════════════════════════════════════════════════════════════
+    //  CARGA DE PROGRAMA
+    // ════════════════════════════════════════════════════════════
 
-      var progRes = await supabase.from('programs').select('*').eq('id', screenData.current_program_id).single()
+    async function loadProgram() {
+      if (!screenData.current_program_id) {
+        dlog('Sin programa asignado a esta pantalla', 'warn')
+        log('⚠ Sin programa asignado')
+        return
+      }
+
+      dlog('Cargando programa: ' + screenData.current_program_id.slice(0,8) + '...', 'info')
+      log('Cargando programa...')
+
+      var progRes = await sb.from('programs').select('*').eq('id', screenData.current_program_id).single()
+      if (progRes.error) {
+        dlog('Error cargando programa: ' + progRes.error.message + ' (code=' + progRes.error.code + ')', 'err')
+        log('❌ Error cargando programa')
+        return
+      }
       var program = progRes.data
-      if (!program) { log('⚠ Programa no encontrado'); return }
+      dlog('Programa OK: ' + program.name, 'ok')
 
       lastPublishedAt = program.published_at || program.updated_at
 
-      var zonesRes = await supabase.from('zones').select('*').eq('program_id', program.id).order('sort_order')
-      var zones    = zonesRes.data || []
-      if (!zones.length) { log('⚠ Sin zonas'); return }
+      var zonesRes = await sb.from('zones').select('*').eq('program_id', program.id).order('sort_order')
+      if (zonesRes.error) {
+        dlog('Error cargando zonas: ' + zonesRes.error.message, 'err')
+        log('❌ Error cargando zonas')
+        return
+      }
+      var zones = zonesRes.data || []
+      if (!zones.length) {
+        dlog('El programa no tiene zonas configuradas', 'warn')
+        log('⚠ Sin zonas')
+        return
+      }
+      dlog('Zonas cargadas: ' + zones.length, 'ok')
 
-      // Carga conteos persistentes desde Supabase
       log('Cargando historial de reproducciones...')
       var saved = await loadCounts()
 
       for (var i = 0; i < zones.length; i++) {
         var zone     = zones[i]
-        var itemsRes = await supabase.from('media_content').select('*')
+        var itemsRes = await sb.from('media_content').select('*')
           .eq('zone_id', zone.id).is('sub_playlist_id', null).order('sort_order')
-        var subsRes  = await supabase.from('sub_playlists').select('*')
+        var subsRes  = await sb.from('sub_playlists').select('*')
           .eq('zone_id', zone.id).order('sort_order')
-        var subs     = subsRes.data || []
 
+        if (itemsRes.error) dlog('Error cargando media zona ' + zone.id.slice(0,8) + ': ' + itemsRes.error.message, 'err')
+        if (subsRes.error)  dlog('Error cargando sub-playlists: ' + subsRes.error.message, 'err')
+
+        var subs       = subsRes.data || []
         var subEntries = []
+
         for (var j = 0; j < subs.length; j++) {
           var sub   = subs[j]
-          var siRes = await supabase.from('media_content').select('*')
+          var siRes = await sb.from('media_content').select('*')
             .eq('sub_playlist_id', sub.id).order('sort_order')
+          if (siRes.error) dlog('Error sub-playlist ' + sub.id.slice(0,8) + ': ' + siRes.error.message, 'err')
           subEntries.push({ kind: 'sub', sub: sub, items: siRes.data || [], subIndex: 0 })
         }
 
@@ -413,10 +644,12 @@
         var combined = directEntries.concat(subEntriesOrdered)
         combined.sort(function(a, b) { return a.sort_order - b.sort_order })
 
+        dlog('Zona ' + zone.id.slice(0,8) + ': ' + combined.length + ' entradas de contenido', 'ok')
+
         zoneStates[zone.id] = {
           entries:      combined,
-          dailyCounts:  Object.assign({}, saved.counts),   // conteos persistentes
-          lastPlayedAt: Object.assign({}, saved.lastPlayed), // tiempos persistentes
+          dailyCounts:  Object.assign({}, saved.counts),
+          lastPlayedAt: Object.assign({}, saved.lastPlayed),
           currentIndex: 0,
           startTime:    Date.now(),
         }
@@ -427,68 +660,45 @@
       for (var k = 0; k < zones.length; k++) {
         (function(zoneId, delay) {
           setTimeout(function() {
-            if (zoneStates[zoneId].entries.length > 0) playNext(zoneId)
+            if (zoneStates[zoneId].entries.length > 0) {
+              playNext(zoneId)
+            } else {
+              dlog('Zona ' + zoneId.slice(0,8) + ' sin contenido — sin reproducción', 'warn')
+            }
           }, delay)
         })(zones[k].id, k * 300)
       }
 
       log('▶ ' + program.name + ' · ' + zones.length + ' zona(s) · ' + (screenData.operating_hours || 20) + 'h/día')
+      dlog('Player iniciado: ' + program.name, 'ok')
     }
 
-    async function init() {
-      const saved = getDeviceToken()
-
-      if (!saved) {
-        // Muestra la pantalla de ingreso de token
-        document.getElementById('token-screen').style.display = 'flex'
-
-        document.getElementById('token-btn').addEventListener('click', async function() {
-          const input = document.getElementById('token-input').value.trim()
-          if (!input) return
-
-          document.getElementById('token-btn').textContent = 'Conectando...'
-          document.getElementById('token-error').style.display = 'none'
-
-          // Verifica que el token existe
-          const res = await supabase.from('screens').select('id, name').eq('device_token', input).single()
-
-          if (res.error || !res.data) {
-            document.getElementById('token-error').style.display = 'block'
-            document.getElementById('token-btn').textContent = 'Conectar pantalla'
-            return
-          }
-
-          // Token válido — guarda y arranca
-          localStorage.setItem('device_token', input)
-          document.getElementById('token-screen').style.display = 'none'
-          document.getElementById('screen').style.display = 'block'
-          await startPlayer(input)
-        })
-
-        // Permite presionar Enter
-        document.getElementById('token-input').addEventListener('keydown', function(e) {
-          if (e.key === 'Enter') document.getElementById('token-btn').click()
-        })
-        return
-      }
-
-      // Ya tiene token guardado — arranca directo
-      document.getElementById('token-screen').style.display = 'none'
-      document.getElementById('screen').style.display = 'block'
-      await startPlayer(saved)
-    }
+    // ════════════════════════════════════════════════════════════
+    //  INICIO DEL PLAYER
+    // ════════════════════════════════════════════════════════════
 
     async function startPlayer(token) {
       log('Identificando pantalla...')
-      var res = await supabase.from('screens').select('*').eq('device_token', token).single()
+      dlog('Buscando pantalla con token: ' + token.slice(0,12) + '...', 'info')
 
-      if (res.error || !res.data) {
-        localStorage.removeItem('device_token')
+      var res
+      try {
+        res = await sb.from('screens').select('*').eq('device_token', token).single()
+      } catch(e) {
+        dlog('Excepción en consulta screens: ' + e.message, 'err')
+        log('❌ Error de red consultando pantalla')
+        return
+      }
+
+      if (res.error) {
+        dlog('Error Supabase screens: ' + res.error.message + ' | code=' + res.error.code + ' | details=' + JSON.stringify(res.error.details), 'err')
         log('❌ Pantalla no encontrada · recarga la página')
+        lsDel('device_token')
         return
       }
 
       screenData = res.data
+      dlog('Pantalla identificada: ' + screenData.name + ' (id=' + screenData.id.slice(0,8) + ')', 'ok')
       log('✓ ' + screenData.name)
 
       watchConnection()
@@ -496,6 +706,67 @@
       startPolling()
       subscribeToChanges()
       await loadProgram()
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  ARRANQUE
+    // ════════════════════════════════════════════════════════════
+
+    async function init() {
+      runEnvCheck()
+
+      if (!sb) {
+        log('❌ Supabase no disponible')
+        dlog('No se puede continuar sin Supabase', 'err')
+        return
+      }
+
+      var token = getDeviceToken()
+
+      if (!token) {
+        document.getElementById('token-screen').style.display = 'flex'
+
+        document.getElementById('token-btn').addEventListener('click', async function() {
+          var input = document.getElementById('token-input').value.trim()
+          if (!input) return
+
+          document.getElementById('token-btn').textContent = 'Conectando...'
+          document.getElementById('token-error').style.display = 'none'
+          dlog('Verificando token ingresado: ' + input.slice(0,12) + '...', 'info')
+
+          var res
+          try {
+            res = await sb.from('screens').select('id, name').eq('device_token', input).single()
+          } catch(e) {
+            dlog('Error verificando token: ' + e.message, 'err')
+            document.getElementById('token-error').style.display = 'block'
+            document.getElementById('token-btn').textContent = 'Conectar pantalla'
+            return
+          }
+
+          if (res.error || !res.data) {
+            dlog('Token inválido: ' + (res.error ? res.error.message : 'sin datos'), 'err')
+            document.getElementById('token-error').style.display = 'block'
+            document.getElementById('token-btn').textContent = 'Conectar pantalla'
+            return
+          }
+
+          dlog('Token válido: ' + res.data.name, 'ok')
+          lsSet('device_token', input)
+          document.getElementById('token-screen').style.display = 'none'
+          document.getElementById('screen').style.display = 'block'
+          await startPlayer(input)
+        })
+
+        document.getElementById('token-input').addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') document.getElementById('token-btn').click()
+        })
+        return
+      }
+
+      document.getElementById('token-screen').style.display = 'none'
+      document.getElementById('screen').style.display = 'block'
+      await startPlayer(token)
     }
 
     init()
