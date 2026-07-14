@@ -43,6 +43,8 @@ export default function Campaigns() {
   const [fStartsAt, setFStartsAt]   = useState('')
   const [fEndsAt, setFEndsAt]       = useState('')
   const [fZones, setFZones]         = useState<ZoneSelection[]>([])
+  const [fZoneSearch, setFZoneSearch] = useState('')
+  const [fMediaSearch, setFMediaSearch] = useState('')
   const [saving, setSaving]         = useState(false)
   const [formError, setFormError]   = useState<string | null>(null)
 
@@ -90,7 +92,7 @@ export default function Campaigns() {
 
   function resetForm() {
     setFName(''); setFMediaId(''); setFStartsAt(''); setFEndsAt('')
-    setFZones([]); setFormError(null)
+    setFZones([]); setFZoneSearch(''); setFMediaSearch(''); setFormError(null)
   }
 
   async function handleCreate() {
@@ -223,26 +225,57 @@ export default function Campaigns() {
 
           {/* Media picker */}
           <div style={{ marginTop: '1.25rem' }}>
-            <label style={s.label}>Contenido (video o imagen)</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <label style={s.label}>Contenido (video o imagen)</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '7px', padding: '0.3rem 0.625rem' }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input
+                  style={{ border: 'none', outline: 'none', fontSize: '0.8rem', color: '#0F172A', background: 'transparent', width: '140px' }}
+                  placeholder="Buscar archivo..."
+                  value={fMediaSearch}
+                  onChange={e => setFMediaSearch(e.target.value)}
+                />
+              </div>
+            </div>
             <div style={s.mediaPicker}>
-              {media.length === 0
-                ? <p style={{ color: '#94A3B8', fontSize: '0.85rem' }}>No hay contenido en la biblioteca.</p>
-                : media.map(item => {
+              {media.length === 0 ? (
+                <p style={{ color: '#94A3B8', fontSize: '0.85rem' }}>No hay contenido en la biblioteca.</p>
+              ) : media.filter(m => m.name.toLowerCase().includes(fMediaSearch.toLowerCase())).length === 0 ? (
+                <p style={{ color: '#94A3B8', fontSize: '0.85rem' }}>Sin resultados.</p>
+              ) : (
+                media.filter(m => m.name.toLowerCase().includes(fMediaSearch.toLowerCase())).map(item => {
                   const url = getPublicUrl(item.storage_path)
                   const selected = fMediaId === item.id
                   return (
                     <div key={item.id} onClick={() => setFMediaId(item.id)}
                       style={{ ...s.mediaThumb, border: selected ? '2px solid #2563EB' : '2px solid #E2E8F0', background: selected ? '#EFF6FF' : '#fff' }}>
-                      <div style={{ width: '100%', height: '52px', borderRadius: '5px', overflow: 'hidden', background: '#F1F5F9', marginBottom: '0.4rem' }}>
-                        {item.type === 'image'
-                          ? <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                          : item.type === 'video'
-                            ? <video src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted onLoadedMetadata={e => { e.currentTarget.currentTime = 1 }} />
-                            : <div style={{ width: '100%', height: '100%', background: '#DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🌐</div>
-                        }
+                      <div style={{ width: '100%', height: '56px', borderRadius: '5px', overflow: 'hidden', background: '#0F172A', marginBottom: '0.4rem', position: 'relative' }}>
+                        {item.type === 'image' ? (
+                          <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        ) : item.type === 'video' ? (
+                          <>
+                            <video
+                              src={url + '#t=1'}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                              preload="metadata"
+                              muted
+                              playsInline
+                            />
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                              <div style={{ width: '20px', height: '20px', background: 'rgba(0,0,0,0.55)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <svg width="8" height="8" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ width: '100%', height: '100%', background: '#DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.25rem' }}>🌐</div>
+                        )}
                       </div>
-                      <p style={{ fontSize: '0.7rem', color: selected ? '#2563EB' : '#0F172A', fontWeight: selected ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <p style={{ fontSize: '0.68rem', color: selected ? '#2563EB' : '#0F172A', fontWeight: selected ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {item.name}
+                      </p>
+                      <p style={{ fontSize: '0.62rem', color: '#94A3B8', marginTop: '1px' }}>
+                        {item.type === 'video' ? '🎬 Video' : item.type === 'image' ? '🖼 Imagen' : '🌐 URL'}
                       </p>
                       {selected && (
                         <div style={{ position: 'absolute', top: '4px', right: '4px', width: '16px', height: '16px', background: '#2563EB', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -252,38 +285,61 @@ export default function Campaigns() {
                     </div>
                   )
                 })
-              }
+              )}
             </div>
           </div>
 
           {/* Zone selector */}
           <div style={{ marginTop: '1.25rem' }}>
-            <label style={s.label}>Zonas donde se publicará</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <label style={s.label}>Zonas donde se publicará {fZones.length > 0 && <span style={{ color: '#2563EB', fontWeight: 700 }}>({fZones.length} seleccionadas)</span>}</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '7px', padding: '0.3rem 0.625rem' }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input
+                  style={{ border: 'none', outline: 'none', fontSize: '0.8rem', color: '#0F172A', background: 'transparent', width: '140px' }}
+                  placeholder="Buscar zona..."
+                  value={fZoneSearch}
+                  onChange={e => setFZoneSearch(e.target.value)}
+                />
+              </div>
+            </div>
             <div style={s.zoneGrid}>
-              {zones.map(zone => {
-                const sel = fZones.find(z => z.zone_id === zone.id)
-                return (
-                  <div key={zone.id} style={{ ...s.zoneRow, background: sel ? '#EFF6FF' : '#FAFBFC', border: sel ? '1px solid #BFDBFE' : '1px solid #E2E8F0' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flex: 1, minWidth: 0 }}>
-                      <input type="checkbox" checked={!!sel} onChange={() => toggleZone(zone.id)}
-                        style={{ accentColor: '#2563EB', width: '15px', height: '15px', flexShrink: 0 }} />
-                      <span style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {zone.name}
-                      </span>
-                      <span style={{ fontSize: '0.72rem', color: '#94A3B8', flexShrink: 0 }}>· {zone.program_name}</span>
-                    </label>
-                    {sel && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
-                        <span style={{ fontSize: '0.72rem', color: '#64748B' }}>×</span>
-                        <input type="number" min={1} max={10} value={sel.frequency}
-                          onChange={e => setFrequency(zone.id, Math.max(1, +e.target.value))}
-                          style={{ ...s.input, width: '48px', padding: '0.2rem 0.4rem', fontSize: '0.8rem', textAlign: 'center' }} />
-                        <span style={{ fontSize: '0.72rem', color: '#64748B' }}>veces</span>
-                      </div>
-                    )}
-                  </div>
+              {zones
+                .filter(z =>
+                  z.name.toLowerCase().includes(fZoneSearch.toLowerCase()) ||
+                  z.program_name.toLowerCase().includes(fZoneSearch.toLowerCase())
                 )
-              })}
+                .map(zone => {
+                  const sel = fZones.find(z => z.zone_id === zone.id)
+                  return (
+                    <div key={zone.id} style={{ ...s.zoneRow, background: sel ? '#EFF6FF' : '#FAFBFC', border: sel ? '1px solid #BFDBFE' : '1px solid #E2E8F0' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flex: 1, minWidth: 0 }}>
+                        <input type="checkbox" checked={!!sel} onChange={() => toggleZone(zone.id)}
+                          style={{ accentColor: '#2563EB', width: '15px', height: '15px', flexShrink: 0 }} />
+                        <span style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {zone.name}
+                        </span>
+                        <span style={{ fontSize: '0.72rem', color: '#94A3B8', flexShrink: 0 }}>· {zone.program_name}</span>
+                      </label>
+                      {sel && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                          <span style={{ fontSize: '0.72rem', color: '#64748B' }}>×</span>
+                          <input type="number" min={1} max={10} value={sel.frequency}
+                            onChange={e => setFrequency(zone.id, Math.max(1, +e.target.value))}
+                            style={{ ...s.input, width: '48px', padding: '0.2rem 0.4rem', fontSize: '0.8rem', textAlign: 'center' }} />
+                          <span style={{ fontSize: '0.72rem', color: '#64748B' }}>veces</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              }
+              {zones.filter(z =>
+                z.name.toLowerCase().includes(fZoneSearch.toLowerCase()) ||
+                z.program_name.toLowerCase().includes(fZoneSearch.toLowerCase())
+              ).length === 0 && (
+                <p style={{ color: '#94A3B8', fontSize: '0.82rem', padding: '0.75rem', textAlign: 'center' }}>Sin zonas que coincidan.</p>
+              )}
             </div>
           </div>
 

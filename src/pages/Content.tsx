@@ -27,7 +27,7 @@ export default function Content() {
 
   async function load() {
     setLoading(true)
-    const { data: mediaData } = await supabase.from('media_content').select('*').order('created_at', { ascending: false })
+    const { data: mediaData } = await supabase.from('media_content').select('*').is('campaign_id', null).order('created_at', { ascending: false })
     const { data: zoneData } = await supabase.from('zones').select('id, name, programs(name)')
     if (mediaData) setItems(mediaData as MediaItem[])
     if (zoneData) setZones(zoneData.map((z: any) => ({ id: z.id, name: z.name, program_name: z.programs?.name ?? '' })))
