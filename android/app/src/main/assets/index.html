@@ -3,513 +3,403 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GestorPlayer · Reproductor</title>
+  <title>GestorPlayer</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-    #screen { width: 100vw; height: 100vh; position: relative; background: #000; display: none; }
-    .zone { position: absolute; overflow: hidden; background: #000; }
-    .zone img, .zone video { width: 100%; height: 100%; object-fit: fill; display: block; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body { width:100%; height:100%; overflow:hidden; background:#000; }
+    #screen { width:100vw; height:100vh; position:relative; background:#000; display:none; }
+    .zone { position:absolute; overflow:hidden; background:#000; }
+    .zone img, .zone video { width:100%; height:100%; object-fit:fill; display:block; }
     #status {
-      position: fixed; bottom: 8px; right: 12px;
-      font-family: monospace; font-size: 11px;
-      color: rgba(255,255,255,0.35); z-index: 9999;
-      pointer-events: none; text-align: right; line-height: 1.6;
+      position:fixed; bottom:8px; right:12px; font-family:monospace; font-size:11px;
+      color:rgba(255,255,255,0.4); z-index:9999; pointer-events:none;
+      text-align:right; line-height:1.6;
     }
-    #setup-screen {
-      position: fixed; inset: 0; background: #0F172A;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      z-index: 10000; font-family: system-ui, -apple-system, sans-serif; color: #fff;
-      padding: 2rem; text-align: center;
+    #setup {
+      position:fixed; inset:0; background:#0F172A;
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      font-family:system-ui,sans-serif; color:#fff; padding:2rem; text-align:center;
+      z-index:10000;
     }
-    .qr-container { background: #fff; padding: 1rem; border-radius: 12px; margin: 1.5rem 0; }
-    .error-box {
-      background: #7f1d1d; color: #fecaca; padding: 1rem; border-radius: 8px;
-      margin-top: 1rem; font-size: 0.9rem; max-width: 400px; display: none;
+    .spin {
+      border:3px solid rgba(255,255,255,0.1); border-top:3px solid #3B82F6;
+      border-radius:50%; width:32px; height:32px;
+      animation:spin 1s linear infinite; margin-bottom:1rem;
     }
-    .loader {
-      border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid #3B82F6;
-      border-radius: 50%; width: 30px; height: 30px;
-      animation: spin 1s linear infinite; margin-bottom: 1rem;
+    @keyframes spin { to { transform:rotate(360deg); } }
+    #dbg {
+      position:fixed; top:0; left:0; right:0; bottom:0;
+      background:rgba(0,0,0,0.95); color:#0f0; font-family:monospace;
+      font-size:12px; line-height:1.7; padding:10px;
+      overflow-y:auto; z-index:99999; word-break:break-all;
+      display:block;
     }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-    /* ── Panel de diagnóstico visible ── */
-    #debug-panel {
-      position: fixed; top: 0; left: 0; right: 0;
-      background: rgba(0,0,0,0.93); color: #00ff00;
-      font-family: monospace; font-size: 13px; line-height: 1.8;
-      padding: 12px; max-height: 65vh; overflow-y: auto;
-      z-index: 99998; word-break: break-all;
-      border-bottom: 2px solid #333; display: block;
-    }
-    #debug-panel.hidden { display: none; }
-    #debug-panel .log-err  { color: #ff4444; }
-    #debug-panel .log-warn { color: #ffaa00; }
-    #debug-panel .log-ok   { color: #44ff44; }
-    #debug-panel .log-info { color: #88ccff; }
-    #debug-toggle {
-      position: fixed; top: 8px; left: 8px;
-      background: rgba(255,255,0,0.85); color: #000;
-      font-family: monospace; font-size: 12px; font-weight: bold;
-      border: none; border-radius: 4px; padding: 5px 12px;
-      cursor: pointer; z-index: 99999;
+    #dbg .e { color:#f55; }
+    #dbg .w { color:#fa0; }
+    #dbg .o { color:#4f4; }
+    #dbg .i { color:#8cf; }
+    #dclose {
+      position:fixed; top:6px; right:10px; background:#f55; color:#fff;
+      border:none; border-radius:4px; font-size:13px; font-weight:bold;
+      padding:4px 12px; cursor:pointer; z-index:100000;
     }
   </style>
 </head>
 <body>
 
-  <button id="debug-toggle" onclick="toggleDebug()">🔍 DEBUG</button>
-  <div id="debug-panel"></div>
+  <!-- Panel debug visible al arrancar -->
+  <div id="dbg"></div>
+  <button id="dclose" onclick="document.getElementById('dbg').style.display='none';this.style.display='none'">✕ CERRAR</button>
 
-  <!-- Pantalla de carga / error -->
-  <div id="setup-screen">
-    <div id="loader" class="loader"></div>
-    <h2 id="setup-title" style="font-size:1.5rem; margin-bottom:0.5rem;">Conectando...</h2>
-    <p  id="setup-msg"   style="color:#94A3B8; font-size:1rem;">Iniciando GestorPlayer</p>
-    <div id="qr-area" style="display:none;">
-      <div class="qr-container">
-        <img id="qr-img" src="" alt="Código QR" style="width:200px; height:200px;">
-      </div>
-      <p style="font-size:0.9rem; color:#94A3B8; margin-bottom:1rem;">Escanea para vincular esta pantalla</p>
-      <code id="device-id-display" style="background:#1E293B; padding:0.5rem; border-radius:4px; font-size:0.8rem;">ID: ...</code>
-    </div>
-    <div id="error-display" class="error-box"></div>
+  <!-- Pantalla de carga -->
+  <div id="setup">
+    <div class="spin"></div>
+    <h2 id="st" style="font-size:1.4rem;margin-bottom:.5rem;">Conectando...</h2>
+    <p  id="sm" style="color:#94A3B8;font-size:.95rem;">Iniciando GestorPlayer</p>
+    <p  id="se" style="color:#fca5a5;font-size:.85rem;margin-top:.75rem;background:#7f1d1d;padding:.5rem .75rem;border-radius:6px;display:none;"></p>
   </div>
 
   <div id="screen"></div>
   <div id="status">Iniciando...</div>
 
-  <!-- ── Supabase UMD: sin ES modules, compatible con WebView Android ── -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-
   <script>
-    // ════════════════════════════════════════════════════════════
-    //  CONFIGURACIÓN
-    // ════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════
+    //  CONFIGURACIÓN  ─  sin librerías externas
+    // ═══════════════════════════════════════════════
+    var URL_SB  = 'https://pekjgxyllilzfwkdyzmm.supabase.co'
+    var KEY_SB  = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
+    var TOKEN   = 'c1c3991a-e306-4737-af94-016302d2b23a'
 
-    var SUPABASE_URL    = 'https://pekjgxyllilzfwkdyzmm.supabase.co'
-    var SUPABASE_KEY    = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
-    var DEFAULT_TOKEN   = 'c1c3991a-e306-4737-af94-016302d2b23a'
+    // ═══════════════════════════════════════════════
+    //  DEBUG
+    // ═══════════════════════════════════════════════
+    var dbgEl = document.getElementById('dbg')
+    var dbgLines = []
+    function dl(msg, t) {
+      var h = new Date().toLocaleTimeString('es',{hour12:false})
+      dbgLines.push('<div class="'+(t||'i')+'">['+h+'] '+esc(msg)+'</div>')
+      if (dbgLines.length > 120) dbgLines.shift()
+      dbgEl.innerHTML = dbgLines.join('')
+      dbgEl.scrollTop = dbgEl.scrollHeight
+      console.log(msg)
+    }
+    function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 
-    // ════════════════════════════════════════════════════════════
-    //  PANEL DE DIAGNÓSTICO
-    // ════════════════════════════════════════════════════════════
-
-    var debugPanel   = document.getElementById('debug-panel')
-    var debugLines   = []
-    var debugVisible = true
-
-    function toggleDebug() {
-      debugVisible = !debugVisible
-      debugPanel.className = debugVisible ? '' : 'hidden'
+    // ═══════════════════════════════════════════════
+    //  UI HELPERS
+    // ═══════════════════════════════════════════════
+    var screenEl = document.getElementById('screen')
+    var statusEl = document.getElementById('status')
+    var setupEl  = document.getElementById('setup')
+    function log(m)        { statusEl.textContent = m; dl(m) }
+    function setTitle(m)   { document.getElementById('st').textContent = m }
+    function setMsg(m)     { document.getElementById('sm').textContent = m }
+    function showErr(m) {
+      dl('ERROR: '+m,'e')
+      setTitle('Sin conexión')
+      setMsg('Reintentando en 5 segundos...')
+      var e = document.getElementById('se')
+      e.textContent = m; e.style.display='block'
+      setTimeout(function(){ e.style.display='none'; startPlayer() }, 5000)
     }
 
-    function hideDebug() {
-      debugVisible = false
-      debugPanel.className = 'hidden'
+    // ═══════════════════════════════════════════════
+    //  CLIENTE SUPABASE (fetch puro, sin librería)
+    // ═══════════════════════════════════════════════
+    var SB_HEADERS = {
+      'apikey':        KEY_SB,
+      'Authorization': 'Bearer ' + KEY_SB,
+      'Content-Type':  'application/json',
+      'Accept':        'application/json'
     }
 
-    function dlog(msg, type) {
-      var t   = new Date().toLocaleTimeString('es', { hour12: false })
-      var cls = 'log-' + (type || 'info')
-      debugLines.push('<div class="' + cls + '">[' + t + '] ' + escHtml(msg) + '</div>')
-      if (debugLines.length > 80) debugLines.shift()
-      debugPanel.innerHTML = debugLines.join('')
-      debugPanel.scrollTop = debugPanel.scrollHeight
-      console.log('[GP]', msg)
+    function sbUrl(table, params) {
+      var q = Object.keys(params).map(function(k){
+        return encodeURIComponent(k)+'='+encodeURIComponent(params[k])
+      }).join('&')
+      return URL_SB + '/rest/v1/' + table + (q ? '?'+q : '')
     }
 
-    function escHtml(s) {
-      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    }
-
-    // ════════════════════════════════════════════════════════════
-    //  HELPERS
-    // ════════════════════════════════════════════════════════════
-
-    var screenEl    = document.getElementById('screen')
-    var statusEl    = document.getElementById('status')
-    var setupScreen = document.getElementById('setup-screen')
-    var setupTitle  = document.getElementById('setup-title')
-    var setupMsg    = document.getElementById('setup-msg')
-    var errorBox    = document.getElementById('error-display')
-
-    function log(msg) {
-      statusEl.textContent = msg
-      dlog(msg, 'info')
-    }
-
-    // localStorage con fallback en memoria (falla en file:// restrictivo)
-    var _mem = {}
-    function lsGet(k)    { try { return localStorage.getItem(k)    } catch(e) { return _mem[k]||null } }
-    function lsSet(k, v) { try { localStorage.setItem(k, v)        } catch(e) { _mem[k] = v } }
-    function lsDel(k)    { try { localStorage.removeItem(k)        } catch(e) { delete _mem[k] } }
-
-    // ════════════════════════════════════════════════════════════
-    //  DIAGNÓSTICO DE ENTORNO
-    // ════════════════════════════════════════════════════════════
-
-    function runEnvCheck() {
-      dlog('═══ ENTORNO ═══', 'info')
-      dlog('UA: ' + navigator.userAgent.slice(0, 120), 'info')
-      dlog('Online: ' + navigator.onLine, navigator.onLine ? 'ok' : 'err')
-      dlog('URL: ' + window.location.href.slice(0, 80), 'info')
+    async function sbGet(table, params, single) {
+      var p = Object.assign({ select:'*' }, params)
+      if (single) p['limit'] = '1'
       try {
-        localStorage.setItem('_t','1'); localStorage.removeItem('_t')
-        dlog('localStorage: OK', 'ok')
+        var r = await withTimeout(fetch(sbUrl(table, p), { headers: SB_HEADERS }), 10000)
+        var j = await r.json()
+        if (!r.ok) { dl('sbGet '+table+' HTTP '+r.status+': '+JSON.stringify(j).slice(0,80),'e'); return { data:null, error:j } }
+        var data = single ? (Array.isArray(j) ? j[0]||null : j) : (Array.isArray(j)?j:[j])
+        dl('sbGet '+table+' → '+(single?'1 fila':data.length+' filas'),'o')
+        return { data:data, error:null }
       } catch(e) {
-        dlog('localStorage FALLA: ' + e.message + ' → usando RAM', 'warn')
-      }
-      dlog('window.supabase: ' + (window.supabase ? 'CARGADO' : 'NO DISPONIBLE'), window.supabase ? 'ok' : 'err')
-      dlog('Token: ' + DEFAULT_TOKEN.slice(0,12) + '...', 'info')
-      dlog('═══════════════', 'info')
-    }
-
-    // ════════════════════════════════════════════════════════════
-    //  INIT SUPABASE (UMD, no ES modules)
-    // ════════════════════════════════════════════════════════════
-
-    var sb = null
-    if (!window.supabase) {
-      dlog('ERROR: Supabase no cargó. Sin internet al inicio?', 'err')
-    } else {
-      try {
-        sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-          auth: { persistSession: false, autoRefreshToken: false }
-        })
-        dlog('Supabase client OK', 'ok')
-      } catch(e) {
-        dlog('Error creando client: ' + e.message, 'err')
+        dl('sbGet '+table+' excepcion: '+e.message,'e')
+        return { data:null, error:{ message:e.message } }
       }
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  ESTADO
-    // ════════════════════════════════════════════════════════════
+    async function sbInsert(table, row) {
+      try {
+        var r = await withTimeout(fetch(URL_SB+'/rest/v1/'+table, {
+          method:'POST', headers:SB_HEADERS, body:JSON.stringify(row)
+        }), 8000)
+        if (!r.ok) { var j=await r.json(); dl('sbInsert '+table+' error: '+JSON.stringify(j).slice(0,60),'w') }
+      } catch(e) { dl('sbInsert '+table+' excepcion: '+e.message,'w') }
+    }
 
+    async function sbUpdate(table, row, eqKey, eqVal) {
+      try {
+        var url = URL_SB+'/rest/v1/'+table+'?'+encodeURIComponent(eqKey)+'=eq.'+encodeURIComponent(eqVal)
+        var r   = await withTimeout(fetch(url, { method:'PATCH', headers:SB_HEADERS, body:JSON.stringify(row) }), 8000)
+        if (!r.ok) dl('sbUpdate '+table+' error HTTP '+r.status,'w')
+        else dl('sbUpdate '+table+' OK','o')
+      } catch(e) { dl('sbUpdate excepcion: '+e.message,'w') }
+    }
+
+    function storageUrl(path) {
+      return URL_SB + '/storage/v1/object/public/media/' + path
+    }
+
+    function withTimeout(promise, ms) {
+      return Promise.race([
+        promise,
+        new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('Timeout '+ms+'ms')) }, ms) })
+      ])
+    }
+
+    // ═══════════════════════════════════════════════
+    //  ESTADO DEL PLAYER
+    // ═══════════════════════════════════════════════
     var screenData = null
-    var isOnline   = true
     var zoneStates = {}
+    var isOnline   = true
 
-    // ════════════════════════════════════════════════════════════
-    //  PANTALLA DE ERROR / REINTENTO
-    // ════════════════════════════════════════════════════════════
-
-    var retryCount = 0
-
-    function showError(msg) {
-      retryCount++
-      dlog('ERROR (' + retryCount + '): ' + msg, 'err')
-      document.getElementById('loader').style.display = 'block'
-      setupTitle.textContent = 'Buscando conexión...'
-      setupMsg.textContent   = msg
-      errorBox.textContent   = 'Reintento #' + retryCount + ' en 5 segundos...'
-      errorBox.style.display = 'block'
-      setTimeout(function() {
-        errorBox.style.display = 'none'
-        var token = lsGet('device_token') || DEFAULT_TOKEN
-        startPlayer(token)
-      }, 5000)
+    // ═══════════════════════════════════════════════
+    //  DIAGNÓSTICO AL INICIO
+    // ═══════════════════════════════════════════════
+    function envCheck() {
+      dl('══ DIAGNÓSTICO ══','i')
+      dl('UA: '+navigator.userAgent.slice(0,100),'i')
+      dl('Online: '+navigator.onLine, navigator.onLine?'o':'e')
+      dl('URL: '+window.location.href,'i')
+      try { localStorage.setItem('_t','1'); localStorage.removeItem('_t'); dl('localStorage: OK','o') }
+      catch(e) { dl('localStorage FALLA: '+e.message,'w') }
+      dl('fetch: '+(typeof fetch!=='undefined'?'OK':'NO DISPONIBLE'),typeof fetch!=='undefined'?'o':'e')
+      dl('Token: '+TOKEN.slice(0,12)+'...','i')
+      dl('Supabase URL: '+URL_SB,'i')
+      dl('API Key (inicio): '+KEY_SB.slice(0,20)+'...','i')
+      dl('══════════════════','i')
     }
 
-    // ════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════
     //  CARGA DE CONTEOS
-    // ════════════════════════════════════════════════════════════
-
+    // ═══════════════════════════════════════════════
     async function loadCounts() {
-      try {
-        var res = await sb.from('screen_content_counts')
-          .select('content_id, total_plays, last_played_at')
-          .eq('screen_id', screenData.id)
-        var counts = {}, lastPlayed = {}
-        if (res.error) {
-          dlog('loadCounts error: ' + res.error.message, 'warn')
-        } else if (res.data) {
-          res.data.forEach(function(r) {
-            counts[r.content_id]     = r.total_plays
-            lastPlayed[r.content_id] = r.last_played_at ? new Date(r.last_played_at).getTime() : 0
-          })
-          dlog('Conteos cargados: ' + res.data.length + ' registros', 'ok')
-        }
-        return { counts: counts, lastPlayed: lastPlayed }
-      } catch(e) {
-        dlog('loadCounts excepción: ' + e.message, 'warn')
-        return { counts: {}, lastPlayed: {} }
+      var res = await sbGet('screen_content_counts',
+        { 'screen_id': 'eq.'+screenData.id }, false)
+      var counts={}, lastPlayed={}
+      if (res.data) {
+        res.data.forEach(function(r){
+          counts[r.content_id]     = r.total_plays
+          lastPlayed[r.content_id] = r.last_played_at ? new Date(r.last_played_at).getTime() : 0
+        })
       }
+      return { counts:counts, lastPlayed:lastPlayed }
     }
 
-    // ════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════
     //  ALGORITMO DE PLAYLIST
-    // ════════════════════════════════════════════════════════════
-
+    // ═══════════════════════════════════════════════
     function getNextItem(zoneId) {
-      var state   = zoneStates[zoneId]
-      var entries = state.entries
-      var opHours = screenData.operating_hours || 20
-      var now     = Date.now()
-      var total   = entries.length
-      if (total === 0) return null
-      for (var i = 0; i < total; i++) {
-        var entry = entries[state.currentIndex++ % total]
-        if (entry.kind === 'item') {
-          var item = entry.item
-          if (!item.is_unlimited && item.daily_frequency) {
-            if ((state.dailyCounts[item.id] || 0) >= item.daily_frequency) continue
-            if (now - (state.lastPlayedAt[item.id] || 0) < (opHours * 3600000 / item.daily_frequency)) continue
+      var state=zoneStates[zoneId], entries=state.entries
+      var opH=screenData.operating_hours||20, now=Date.now(), total=entries.length
+      if (!total) return null
+      for (var i=0; i<total; i++) {
+        var entry=entries[state.idx++%total]
+        if (entry.kind==='item') {
+          var it=entry.item
+          if (!it.is_unlimited && it.daily_frequency) {
+            if ((state.dc[it.id]||0)>=it.daily_frequency) continue
+            if (now-(state.lp[it.id]||0)<(opH*3600000/it.daily_frequency)) continue
           }
-          return { item: item, subName: null }
+          return { item:it, subName:null }
         }
-        if (entry.kind === 'sub' && entry.items && entry.items.length > 0) {
-          var sub = entry.sub
+        if (entry.kind==='sub' && entry.items && entry.items.length) {
+          var sub=entry.sub
           if (!sub.is_unlimited && sub.daily_frequency) {
-            if ((state.dailyCounts['sub_'+sub.id] || 0) >= sub.daily_frequency) continue
-            if (now - (state.lastPlayedAt['sub_'+sub.id] || 0) < (opHours * 3600000 / sub.daily_frequency)) continue
+            if ((state.dc['s'+sub.id]||0)>=sub.daily_frequency) continue
+            if (now-(state.lp['s'+sub.id]||0)<(opH*3600000/sub.daily_frequency)) continue
           }
-          var subItem = entry.items[entry.subIndex++ % entry.items.length]
-          return { item: subItem, subName: sub.name }
+          return { item:entry.items[entry.si++%entry.items.length], subName:sub.name }
         }
       }
       return null
     }
 
     function playNext(zoneId) {
-      var result = getNextItem(zoneId)
-      if (!result) { setTimeout(function() { playNext(zoneId) }, 5000); return }
-      renderItem(zoneId, result.item, result.subName)
+      var r=getNextItem(zoneId)
+      if (!r) { setTimeout(function(){ playNext(zoneId) },5000); return }
+      renderItem(zoneId, r.item, r.subName)
     }
 
     function renderItem(zoneId, item, subName) {
-      var zoneEl = document.getElementById('zone-' + zoneId)
-      if (!zoneEl) return
-      var state = zoneStates[zoneId]
-      var url   = sb.storage.from('media').getPublicUrl(item.storage_path).data.publicUrl
-
-      state.dailyCounts[item.id]  = (state.dailyCounts[item.id] || 0) + 1
-      state.lastPlayedAt[item.id] = Date.now()
-      if (subName) {
-        state.dailyCounts['sub_'+item.sub_playlist_id]  = (state.dailyCounts['sub_'+item.sub_playlist_id] || 0) + 1
-        state.lastPlayedAt['sub_'+item.sub_playlist_id] = Date.now()
-      }
-
-      dlog('▶ ' + item.name.slice(0,30) + ' [' + item.type + ']', 'ok')
-      log('▶ ' + item.name.slice(0,28))
-
-      sb.from('playback_events').insert({
-        screen_id: screenData.id, zone_id: zoneId, content_id: item.id
-      }).then(function(r) {
-        if (r.error) dlog('Playback log error: ' + r.error.message, 'warn')
-      })
-
-      zoneEl.innerHTML = ''
-      if (item.type === 'url') {
-        var iframe = document.createElement('iframe')
-        iframe.src = item.url || ''
-        iframe.style.cssText = 'width:100%;height:100%;border:none;'
-        iframe.allow = 'autoplay; fullscreen;'
-        iframe.setAttribute('allowfullscreen', '')
-        zoneEl.appendChild(iframe)
-        setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 30) * 1000)
-      } else if (item.type === 'image') {
-        var img = document.createElement('img')
-        img.src = url
-        img.onload  = function() { setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 10) * 1000) }
-        img.onerror = function() { dlog('Error imagen: ' + url.slice(0,50), 'err'); setTimeout(function() { playNext(zoneId) }, 3000) }
-        zoneEl.appendChild(img)
+      var zEl=document.getElementById('zone-'+zoneId); if (!zEl) return
+      var state=zoneStates[zoneId]
+      var url=storageUrl(item.storage_path)
+      state.dc[item.id]=(state.dc[item.id]||0)+1
+      state.lp[item.id]=Date.now()
+      if (subName) { state.dc['s'+item.sub_playlist_id]=(state.dc['s'+item.sub_playlist_id]||0)+1; state.lp['s'+item.sub_playlist_id]=Date.now() }
+      dl('▶ '+item.name.slice(0,30)+' ['+item.type+']','o')
+      log('▶ '+item.name.slice(0,28))
+      sbInsert('playback_events',{ screen_id:screenData.id, zone_id:zoneId, content_id:item.id })
+      zEl.innerHTML=''
+      if (item.type==='image') {
+        var img=document.createElement('img')
+        img.src=url
+        img.onload=function(){ setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||10)*1000) }
+        img.onerror=function(){ dl('Error img: '+url.slice(0,50),'e'); setTimeout(function(){ playNext(zoneId) },3000) }
+        zEl.appendChild(img)
+      } else if (item.type==='url') {
+        var ifr=document.createElement('iframe')
+        ifr.src=item.url||''; ifr.style.cssText='width:100%;height:100%;border:none;'
+        ifr.allow='autoplay; fullscreen;'; ifr.setAttribute('allowfullscreen','')
+        zEl.appendChild(ifr)
+        setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||30)*1000)
       } else {
-        var video = document.createElement('video')
-        video.src         = url
-        video.muted       = true
-        video.autoplay    = true
-        video.playsInline = true
-        video.setAttribute('webkit-playsinline', '')
-        video.preload     = 'auto'
-        video.poster      = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
-        video.onended  = function() { playNext(zoneId) }
-        video.onerror  = function() { dlog('Error video: ' + url.slice(0,50), 'err'); setTimeout(function() { playNext(zoneId) }, 3000) }
-        zoneEl.appendChild(video)
-        video.play().catch(function(e) { dlog('video.play() rechazado: ' + e.message, 'warn') })
+        var vid=document.createElement('video')
+        vid.src=url; vid.muted=true; vid.autoplay=true; vid.playsInline=true
+        vid.setAttribute('webkit-playsinline',''); vid.preload='auto'
+        vid.onended=function(){ playNext(zoneId) }
+        vid.onerror=function(){ dl('Error vid: '+url.slice(0,50),'e'); setTimeout(function(){ playNext(zoneId) },3000) }
+        zEl.appendChild(vid)
+        vid.play().catch(function(e){ dl('play() rechazado: '+e.message,'w') })
       }
     }
 
-    // ════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════
     //  LAYOUT
-    // ════════════════════════════════════════════════════════════
-
+    // ═══════════════════════════════════════════════
     function buildLayout(program, zones) {
-      screenEl.innerHTML = ''
-      var container = document.createElement('div')
-      container.id  = 'program-container'
-      container.style.cssText = 'position:absolute;background:#000;width:100vw;height:100vh;left:0;top:0;overflow:hidden;'
-      var scaleX = window.innerWidth  / program.width
-      var scaleY = window.innerHeight / program.height
-      dlog('Layout: ' + program.width + 'x' + program.height + ' → escala ' + scaleX.toFixed(2) + '/' + scaleY.toFixed(2), 'ok')
-      zones.forEach(function(z) {
-        var div = document.createElement('div')
-        div.className = 'zone'
-        div.id        = 'zone-' + z.id
-        div.style.cssText = 'left:' + (z.x*scaleX) + 'px;top:' + (z.y*scaleY) + 'px;width:' + (z.width*scaleX) + 'px;height:' + (z.height*scaleY) + 'px;background:' + (z.background_color||'#000') + ';'
-        container.appendChild(div)
+      screenEl.innerHTML=''
+      var c=document.createElement('div')
+      c.style.cssText='position:absolute;background:#000;width:100vw;height:100vh;left:0;top:0;overflow:hidden;'
+      var sx=window.innerWidth/program.width, sy=window.innerHeight/program.height
+      dl('Layout: prog '+program.width+'×'+program.height+' → escala x'+sx.toFixed(2)+' y'+sy.toFixed(2),'o')
+      zones.forEach(function(z){
+        var d=document.createElement('div')
+        d.className='zone'; d.id='zone-'+z.id
+        d.style.cssText='left:'+(z.x*sx)+'px;top:'+(z.y*sy)+'px;width:'+(z.width*sx)+'px;height:'+(z.height*sy)+'px;background:'+(z.background_color||'#000')+';'
+        c.appendChild(d)
       })
-      screenEl.appendChild(container)
-      dlog('Zonas creadas: ' + zones.length, 'ok')
+      screenEl.appendChild(c)
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  CARGA DE PROGRAMA
-    // ════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════
+    //  HEARTBEAT / POLLING
+    // ═══════════════════════════════════════════════
+    function startHeartbeat() {
+      setInterval(function(){
+        sbUpdate('screens',{ last_heartbeat:new Date().toISOString() },'id',screenData.id)
+      },30000)
+    }
 
+    var lastPub = null
+    function startPolling() {
+      setInterval(async function(){
+        if (!screenData.current_program_id) return
+        var r=await sbGet('programs',{'id':'eq.'+screenData.current_program_id},true)
+        if (r.error) { dl('Polling err: '+r.error.message,'w'); return }
+        if (!isOnline) { isOnline=true; dl('Reconectado','o') }
+        var pub=r.data && r.data.published_at
+        if (lastPub===null) { lastPub=pub; return }
+        if (pub && pub!==lastPub) { dl('Nueva publicación → recargando','o'); window.location.reload() }
+      },30000)
+    }
+
+    // ═══════════════════════════════════════════════
+    //  CARGA DEL PROGRAMA
+    // ═══════════════════════════════════════════════
     async function loadProgram() {
       if (!screenData.current_program_id) {
-        dlog('Sin programa asignado', 'warn')
-        setupTitle.textContent = '⚠ Sin programa'
-        setupMsg.textContent   = 'Asigna un programa en el dashboard'
-        return
+        dl('Sin programa asignado','w'); setTitle('⚠ Sin programa'); setMsg('Asigna un programa en el dashboard'); return
       }
-      dlog('Cargando programa: ' + screenData.current_program_id.slice(0,8), 'info')
+      dl('Cargando programa...','i')
+      var pr=await sbGet('programs',{'id':'eq.'+screenData.current_program_id},true)
+      if (pr.error||!pr.data) { showErr('Programa no encontrado: '+(pr.error?pr.error.message:'sin datos')); return }
+      dl('Programa: '+pr.data.name,'o')
+      lastPub = pr.data.published_at
 
-      var progRes = await sb.from('programs').select('*').eq('id', screenData.current_program_id).single()
-      if (progRes.error || !progRes.data) {
-        dlog('Error programa: ' + (progRes.error ? progRes.error.message : 'sin datos'), 'err')
-        showError('Programa no encontrado')
-        return
-      }
-      dlog('Programa OK: ' + progRes.data.name, 'ok')
+      var zr=await sbGet('zones',{'program_id':'eq.'+pr.data.id,'order':'sort_order'},false)
+      var zones=zr.data||[]
+      if (!zones.length) { dl('Sin zonas','w'); setTitle('⚠ Sin zonas'); return }
 
-      var zonesRes = await sb.from('zones').select('*').eq('program_id', progRes.data.id).order('sort_order')
-      var zones    = zonesRes.data || []
-      if (!zones.length) { dlog('Sin zonas', 'warn'); return }
-      dlog('Zonas: ' + zones.length, 'ok')
+      var saved=await loadCounts()
 
-      var saved = await loadCounts()
-
-      for (var i = 0; i < zones.length; i++) {
-        var zone    = zones[i]
-        var items   = await sb.from('media_content').select('*').eq('zone_id', zone.id).is('sub_playlist_id', null).order('sort_order')
-        var subsRes = await sb.from('sub_playlists').select('*').eq('zone_id', zone.id).order('sort_order')
-        var subEntries = []
-        var subs = subsRes.data || []
-        for (var j = 0; j < subs.length; j++) {
-          var si = await sb.from('media_content').select('*').eq('sub_playlist_id', subs[j].id).order('sort_order')
-          subEntries.push({ kind: 'sub', sub: subs[j], items: si.data || [], subIndex: 0, sort_order: subs[j].sort_order })
+      for (var i=0;i<zones.length;i++) {
+        var z=zones[i]
+        var ir=await sbGet('media_content',{'zone_id':'eq.'+z.id,'sub_playlist_id':'is.null','order':'sort_order'},false)
+        var sr=await sbGet('sub_playlists',{'zone_id':'eq.'+z.id,'order':'sort_order'},false)
+        var subs=sr.data||[], subEntries=[]
+        for (var j=0;j<subs.length;j++) {
+          var siR=await sbGet('media_content',{'sub_playlist_id':'eq.'+subs[j].id,'order':'sort_order'},false)
+          subEntries.push({ kind:'sub', sub:subs[j], items:siR.data||[], si:0, sort_order:subs[j].sort_order })
         }
-        var combined = (items.data || []).map(function(it) { return { kind: 'item', item: it, sort_order: it.sort_order } })
-          .concat(subEntries).sort(function(a,b) { return a.sort_order - b.sort_order })
-        zoneStates[zone.id] = { entries: combined, dailyCounts: Object.assign({}, saved.counts), lastPlayedAt: Object.assign({}, saved.lastPlayed), currentIndex: 0 }
-        dlog('Zona ' + zone.id.slice(0,8) + ': ' + combined.length + ' ítems', 'ok')
+        var combined=(ir.data||[]).map(function(it){ return { kind:'item', item:it, sort_order:it.sort_order } })
+          .concat(subEntries).sort(function(a,b){ return a.sort_order-b.sort_order })
+        zoneStates[z.id]={ entries:combined, dc:Object.assign({},saved.counts), lp:Object.assign({},saved.lastPlayed), idx:0 }
+        dl('Zona '+z.id.slice(0,8)+': '+combined.length+' ítems','o')
       }
 
-      buildLayout(progRes.data, zones)
+      buildLayout(pr.data, zones)
 
-      // Ocultar pantalla de carga, debug y mostrar reproductor
-      setupScreen.style.display = 'none'
-      screenEl.style.display    = 'block'
-      setTimeout(hideDebug, 3000)  // oculta debug 3s después de arrancar
+      // Arrancar reproducción y ocultar debug
+      setupEl.style.display='none'
+      screenEl.style.display='block'
+      setTimeout(function(){
+        dbgEl.style.display='none'
+        document.getElementById('dclose').style.display='none'
+      }, 4000)
 
-      zones.forEach(function(z, idx) {
-        setTimeout(function() {
-          if (zoneStates[z.id] && zoneStates[z.id].entries.length > 0) playNext(z.id)
-          else dlog('Zona ' + z.id.slice(0,8) + ' sin contenido', 'warn')
-        }, idx * 300)
+      zones.forEach(function(z,idx){
+        setTimeout(function(){
+          if (zoneStates[z.id].entries.length) playNext(z.id)
+          else dl('Zona '+z.id.slice(0,8)+' sin contenido','w')
+        }, idx*300)
       })
 
-      log('▶ ' + progRes.data.name + ' · ' + zones.length + ' zona(s)')
+      log('▶ '+pr.data.name+' · '+zones.length+' zona(s)')
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  HEARTBEAT / POLLING / REALTIME
-    // ════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════
+    //  INICIO
+    // ═══════════════════════════════════════════════
+    async function startPlayer() {
+      setTitle('Conectando...'); setMsg('Iniciando GestorPlayer')
+      dl('Buscando pantalla con token...','i')
 
-    function startHeartbeat() {
-      setInterval(function() {
-        sb.from('screens').update({ last_heartbeat: new Date().toISOString() }).eq('id', screenData.id)
-          .then(function(r) { if (r.error) dlog('Heartbeat err: ' + r.error.message, 'warn') else dlog('Heartbeat OK', 'ok') })
-      }, 30000)
-    }
-
-    function startPolling() {
-      setInterval(async function() {
-        try {
-          var res = await sb.from('programs').select('published_at').eq('id', screenData.current_program_id).single()
-          if (res.error) throw new Error(res.error.message)
-          if (!isOnline) { isOnline = true; dlog('Reconectado', 'ok') }
-          if (res.data && res.data.published_at) {
-            dlog('Polling: nueva publicación → recargando', 'ok')
-            window.location.reload()
-          }
-        } catch(e) {
-          if (isOnline) { isOnline = false; dlog('Polling falló: ' + e.message, 'err') }
-        }
-      }, 30000)
-    }
-
-    function subscribeToChanges() {
-      try {
-        sb.channel('player-' + screenData.id)
-          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'programs', filter: 'id=eq.' + screenData.current_program_id },
-            function() { dlog('Realtime: cambio → recargando', 'ok'); window.location.reload() })
-          .subscribe(function(status) { dlog('Realtime: ' + status, status === 'SUBSCRIBED' ? 'ok' : 'warn') })
-      } catch(e) {
-        dlog('Realtime no disponible: ' + e.message, 'warn')
-      }
-    }
-
-    // ════════════════════════════════════════════════════════════
-    //  INICIO DEL PLAYER
-    // ════════════════════════════════════════════════════════════
-
-    async function startPlayer(token) {
-      log('Identificando pantalla...')
-      dlog('Token: ' + token.slice(0,12) + '...', 'info')
-
-      if (!sb) {
-        showError('Supabase no disponible — verifica conexión a internet')
+      if (typeof fetch==='undefined') {
+        showErr('fetch() no disponible en este WebView — WebView demasiado antiguo')
         return
       }
 
-      var res
-      try {
-        var timeoutPromise = new Promise(function(_, reject) {
-          setTimeout(function() { reject(new Error('Timeout: Supabase no respondió en 8s') ) }, 8000)
-        })
-        res = await Promise.race([
-          sb.from('screens').select('*').eq('device_token', token).single(),
-          timeoutPromise
-        ])
-      } catch(e) {
-        dlog('Excepción de red: ' + e.message, 'err')
-        showError('Error de red: ' + e.message)
+      var res=await sbGet('screens',{'device_token':'eq.'+TOKEN},true)
+      if (res.error||!res.data) {
+        showErr(res.error ? res.error.message : 'Token no encontrado en Supabase')
         return
       }
 
-      if (res.error || !res.data) {
-        var errMsg = res.error ? res.error.message : 'Token no encontrado'
-        dlog('Error Supabase: ' + errMsg + (res.error ? ' [' + res.error.code + ']' : ''), 'err')
-        showError(errMsg)
-        return
-      }
+      screenData=res.data
+      dl('Pantalla: '+screenData.name,'o')
+      log('✓ '+screenData.name)
 
-      screenData = res.data
-      dlog('Pantalla OK: ' + screenData.name + ' (id=' + screenData.id.slice(0,8) + ')', 'ok')
-      log('✓ ' + screenData.name)
-
-      window.addEventListener('online',  function() { isOnline = true;  dlog('Evento: online',  'ok')  })
-      window.addEventListener('offline', function() { isOnline = false; dlog('Evento: offline', 'err') })
+      window.addEventListener('online',  function(){ isOnline=true;  dl('online','o') })
+      window.addEventListener('offline', function(){ isOnline=false; dl('offline','e') })
 
       startHeartbeat()
       startPolling()
-      subscribeToChanges()
       await loadProgram()
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  ARRANQUE
-    // ════════════════════════════════════════════════════════════
-
-    runEnvCheck()
-
-    var currentToken = lsGet('device_token') || DEFAULT_TOKEN
-    startPlayer(currentToken)
+    envCheck()
+    startPlayer()
   </script>
 </body>
 </html>
