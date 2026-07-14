@@ -48,6 +48,36 @@
       border:none; border-radius:4px; font-size:13px; font-weight:bold;
       padding:4px 12px; cursor:pointer; z-index:100000;
     }
+    #token-screen {
+      position:fixed; inset:0; background:#0F172A;
+      display:none; align-items:center; justify-content:center;
+      font-family:system-ui,sans-serif; z-index:10001;
+      padding:1.5rem; box-sizing:border-box; overflow-y:auto;
+    }
+    #token-screen .card {
+      background:#1E293B; border:1px solid #334155; border-radius:16px;
+      padding:2rem; width:100%; max-width:360px;
+      display:flex; flex-direction:column; align-items:center;
+    }
+    #token-screen input {
+      width:100%; padding:.6rem .85rem; border-radius:8px;
+      border:1px solid #334155; background:#0F172A; color:#F1F5F9;
+      font-size:.85rem; box-sizing:border-box; outline:none; font-family:monospace;
+    }
+    #token-screen button.connect-btn {
+      margin-top:.75rem; padding:.65rem; border-radius:8px; border:none;
+      background:#2563EB; color:#fff; font-weight:700; cursor:pointer;
+      font-size:.9rem; font-family:inherit; width:100%;
+    }
+    #token-screen .divider {
+      display:flex; align-items:center; gap:.75rem; width:100%; margin:1.25rem 0;
+    }
+    #token-screen .divider hr { flex:1; border:none; border-top:1px solid #334155; }
+    #token-screen .divider span { color:#475569; font-size:.75rem; white-space:nowrap; }
+    #tk-error {
+      color:#FCA5A5; font-size:.78rem; display:none; margin-top:.45rem;
+      background:#450a0a; border:1px solid #7f1d1d; border-radius:6px; padding:.45rem .7rem; width:100%;
+    }
   </style>
 </head>
 <body>
@@ -64,6 +94,46 @@
     <p  id="se" style="color:#fca5a5;font-size:.85rem;margin-top:.75rem;background:#7f1d1d;padding:.5rem .75rem;border-radius:6px;display:none;"></p>
   </div>
 
+  <!-- Pantalla de conexión (QR + token manual) -->
+  <div id="token-screen">
+    <div class="card">
+
+      <!-- Logo -->
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1.25rem;">
+        <div style="width:34px;height:34px;background:#2563EB;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
+        </div>
+        <span style="font-weight:800;font-size:1.15rem;color:#F1F5F9;">GestorPlayer</span>
+        <span style="font-size:.55rem;font-weight:700;background:#1e3a8a;color:#93C5FD;border:1px solid #1d4ed8;border-radius:4px;padding:2px 5px;">BETA</span>
+      </div>
+
+      <div style="height:1px;background:#334155;width:100%;margin-bottom:1.25rem;"></div>
+
+      <!-- QR -->
+      <p style="color:#F1F5F9;font-size:.9rem;font-weight:600;margin:0 0 .25rem;text-align:center;">Escanea con tu celular</p>
+      <p style="color:#64748B;font-size:.78rem;margin:0 0 1rem;text-align:center;">Selecciona la pantalla desde el dashboard</p>
+
+      <div id="qr-loading" style="color:#64748B;font-size:.82rem;padding:1.5rem 0;text-align:center;">Generando QR...</div>
+      <div id="qr-ready" style="display:none;text-align:center;width:100%;">
+        <img id="qr-img" src="" alt="QR" style="width:160px;height:160px;border-radius:10px;border:1px solid #334155;" />
+        <p id="qr-status" style="color:#64748B;font-size:.78rem;margin:.6rem 0 0;">Esperando conexión...</p>
+      </div>
+
+      <!-- Divisor -->
+      <div class="divider">
+        <hr /><span>o ingresa el token</span><hr />
+      </div>
+
+      <!-- Input manual -->
+      <div style="width:100%;">
+        <input id="tk-input" type="text" placeholder="Pega el token aquí..." />
+        <p id="tk-error">❌ Token inválido. Verifica e intenta de nuevo.</p>
+        <button class="connect-btn" id="tk-btn">Conectar pantalla</button>
+      </div>
+
+    </div>
+  </div>
+
   <div id="screen"></div>
   <div id="status">Iniciando...</div>
 
@@ -73,7 +143,7 @@
     // ═══════════════════════════════════════════════
     var URL_SB  = 'https://pekjgxyllilzfwkdyzmm.supabase.co'
     var KEY_SB  = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
-    var TOKEN   = 'c1c3991a-e306-4737-af94-016302d2b23a'
+    var TOKEN   = ''  // se obtiene de localStorage o pantalla de emparejamiento
 
     // ═══════════════════════════════════════════════
     //  DEBUG
@@ -105,7 +175,7 @@
       setMsg('Reintentando en 5 segundos...')
       var e = document.getElementById('se')
       e.textContent = m; e.style.display='block'
-      setTimeout(function(){ e.style.display='none'; startPlayer() }, 5000)
+      setTimeout(function(){ e.style.display='none'; startPlayer(activeToken) }, 5000)
     }
 
     // ═══════════════════════════════════════════════
@@ -150,6 +220,13 @@
       } catch(e) { dl('sbInsert '+table+' excepcion: '+e.message,'w') }
     }
 
+    async function sbDelete(table, eqKey, eqVal) {
+      try {
+        var url = URL_SB+'/rest/v1/'+table+'?'+encodeURIComponent(eqKey)+'=eq.'+encodeURIComponent(eqVal)
+        await withTimeout(fetch(url, { method:'DELETE', headers:SB_HEADERS }), 8000)
+      } catch(e) { dl('sbDelete excepcion: '+e.message,'w') }
+    }
+
     async function sbUpdate(table, row, eqKey, eqVal) {
       try {
         var url = URL_SB+'/rest/v1/'+table+'?'+encodeURIComponent(eqKey)+'=eq.'+encodeURIComponent(eqVal)
@@ -171,11 +248,20 @@
     }
 
     // ═══════════════════════════════════════════════
+    //  LOCALSTORAGE CON FALLBACK
+    // ═══════════════════════════════════════════════
+    var _mem = {}
+    function lsGet(k){ try{ return localStorage.getItem(k) }catch(e){ return _mem[k]||null } }
+    function lsSet(k,v){ try{ localStorage.setItem(k,v) }catch(e){ _mem[k]=v } }
+    function lsDel(k){ try{ localStorage.removeItem(k) }catch(e){ delete _mem[k] } }
+
+    // ═══════════════════════════════════════════════
     //  ESTADO DEL PLAYER
     // ═══════════════════════════════════════════════
-    var screenData = null
-    var zoneStates = {}
-    var isOnline   = true
+    var screenData  = null
+    var zoneStates  = {}
+    var isOnline    = true
+    var activeToken = null
 
     // ═══════════════════════════════════════════════
     //  DIAGNÓSTICO AL INICIO
@@ -188,7 +274,7 @@
       try { localStorage.setItem('_t','1'); localStorage.removeItem('_t'); dl('localStorage: OK','o') }
       catch(e) { dl('localStorage FALLA: '+e.message,'w') }
       dl('fetch: '+(typeof fetch!=='undefined'?'OK':'NO DISPONIBLE'),typeof fetch!=='undefined'?'o':'e')
-      dl('Token: '+TOKEN.slice(0,12)+'...','i')
+      dl('Token guardado: '+(lsGet('device_token')||'(ninguno)'),'i')
       dl('Supabase URL: '+URL_SB,'i')
       dl('API Key (inicio): '+KEY_SB.slice(0,20)+'...','i')
       dl('══════════════════','i')
@@ -468,16 +554,17 @@
     // ═══════════════════════════════════════════════
     //  INICIO
     // ═══════════════════════════════════════════════
-    async function startPlayer() {
+    async function startPlayer(token) {
+      activeToken = token
       setTitle('Conectando...'); setMsg('Iniciando GestorPlayer')
-      dl('Buscando pantalla con token...','i')
+      dl('Buscando pantalla con token: '+token.slice(0,12)+'...','i')
 
       if (typeof fetch==='undefined') {
         showErr('fetch() no disponible en este WebView — WebView demasiado antiguo')
         return
       }
 
-      var res=await sbGet('screens',{'device_token':'eq.'+TOKEN},true)
+      var res=await sbGet('screens',{'device_token':'eq.'+token},true)
       if (res.error||!res.data) {
         showErr(res.error ? res.error.message : 'Token no encontrado en Supabase')
         return
@@ -495,8 +582,91 @@
       await loadProgram()
     }
 
-    envCheck()
-    startPlayer()
+    // ═══════════════════════════════════════════════
+    //  EMPAREJAMIENTO POR QR
+    // ═══════════════════════════════════════════════
+    var qrCode     = null
+    var qrInterval = null
+
+    async function startQRPairing() {
+      qrCode = Math.random().toString(36).substring(2,8).toUpperCase()
+      try {
+        await sbInsert('device_pairings', { code: qrCode, token: null })
+      } catch(e) {
+        document.getElementById('qr-loading').textContent = 'Error creando código: '+e.message
+        return
+      }
+      var pairUrl = 'https://gestorplayer.vercel.app/pair?code=' + qrCode
+      dl('QR URL: '+pairUrl,'i')
+      document.getElementById('qr-img').src =
+        'https://api.qrserver.com/v1/create-qr-code/?size=160x160&ecc=M&data='+encodeURIComponent(pairUrl)
+      document.getElementById('qr-loading').style.display = 'none'
+      document.getElementById('qr-ready').style.display   = 'block'
+
+      qrInterval = setInterval(async function() {
+        var r = await sbGet('device_pairings', { 'code':'eq.'+qrCode, 'select':'token' }, true)
+        if (r.data && r.data.token) {
+          clearInterval(qrInterval)
+          var token = r.data.token
+          sbDelete('device_pairings', 'code', qrCode)
+          document.getElementById('qr-status').textContent = '✅ ¡Conectado! Arrancando...'
+          document.getElementById('qr-status').style.color = '#4ade80'
+          lsSet('device_token', token)
+          setTimeout(function() {
+            document.getElementById('token-screen').style.display = 'none'
+            setupEl.style.display = 'flex'
+            startPlayer(token)
+          }, 1200)
+        }
+      }, 2000)
+    }
+
+    // ═══════════════════════════════════════════════
+    //  ARRANQUE
+    // ═══════════════════════════════════════════════
+    async function init() {
+      envCheck()
+
+      // 1. localStorage
+      var saved = lsGet('device_token')
+      if (saved) { dl('Token desde localStorage: '+saved.slice(0,12)+'...','o'); startPlayer(saved); return }
+
+      // 2. Token hardcodeado (fallback para dispositivos sin UI)
+      if (TOKEN) { dl('Token hardcodeado','w'); startPlayer(TOKEN); return }
+
+      // 3. Mostrar pantalla de emparejamiento
+      dl('Sin token → mostrando pantalla de emparejamiento','w')
+      setupEl.style.display = 'none'
+      var ts = document.getElementById('token-screen')
+      ts.style.display = 'flex'
+      startQRPairing()
+
+      document.getElementById('tk-btn').addEventListener('click', async function() {
+        var input = document.getElementById('tk-input').value.trim()
+        if (!input) return
+        document.getElementById('tk-btn').textContent = 'Conectando...'
+        document.getElementById('tk-error').style.display = 'none'
+        var res = await sbGet('screens', { 'device_token':'eq.'+input, 'select':'id,name' }, true)
+        if (res.error || !res.data) {
+          dl('Token inválido','e')
+          document.getElementById('tk-error').style.display = 'block'
+          document.getElementById('tk-btn').textContent = 'Conectar pantalla'
+          return
+        }
+        dl('Token válido: '+res.data.name,'o')
+        lsSet('device_token', input)
+        if (qrInterval) { clearInterval(qrInterval); qrInterval = null }
+        ts.style.display = 'none'
+        setupEl.style.display = 'flex'
+        startPlayer(input)
+      })
+
+      document.getElementById('tk-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') document.getElementById('tk-btn').click()
+      })
+    }
+
+    init()
   </script>
 </body>
 </html>
