@@ -100,11 +100,11 @@ export default function DashboardHome({
       </div>
 
       {loading ? (
-        <div style={s.grid3}>
+        <div style={s.grid3} className="dashboard-grid">
           {[0, 1, 2].map(i => <div key={i} style={{ height: '500px', borderRadius: '14px' }} className="skeleton" />)}
         </div>
       ) : (
-        <div style={s.grid3}>
+        <div style={s.grid3} className="dashboard-grid">
 
           {/* Panel 1: Mis medios */}
           <div style={s.panel}>
@@ -254,7 +254,7 @@ const s: Record<string, React.CSSProperties> = {
   sub: { color: '#64748B', fontSize: '0.875rem', marginTop: '0.2rem' },
   statPill: { display: 'flex', alignItems: 'center', gap: '0.4rem', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '20px', padding: '0.35rem 0.875rem', color: '#64748B', fontSize: '0.8rem' },
   dot: { width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0 },
-  grid3: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.25rem', alignItems: 'start' },
+  grid3: { display: 'grid', gap: '1.25rem', alignItems: 'start' },
   panel: { background: '#fff', borderRadius: '14px', border: '1px solid #E2E8F0', boxShadow: '0 1px 6px rgba(0,0,0,0.04)', overflow: 'hidden', display: 'flex', flexDirection: 'column' },
   panelHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.25rem', borderBottom: '1px solid #F1F5F9' },
   panelIcon: { width: '28px', height: '28px', borderRadius: '7px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem' },

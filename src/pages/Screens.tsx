@@ -132,7 +132,7 @@ export default function Screens() {
 
   return (
     <div>
-      <div style={s.topbar}>
+      <div style={s.topbar} className="page-topbar">
         <div>
           <h1 style={s.title}>Pantallas</h1>
           <p style={s.sub}>Gestiona tus ubicaciones físicas · {screens.length} registradas</p>

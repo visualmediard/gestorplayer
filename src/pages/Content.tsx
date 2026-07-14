@@ -76,7 +76,7 @@ export default function Content() {
 
   return (
     <div>
-      <div style={s.topbar}>
+      <div style={s.topbar} className="page-topbar">
         <div>
           <h1 style={s.title}>Contenido</h1>
           <p style={s.sub}>Sube imágenes y videos a tus zonas · {items.length} archivos</p>
@@ -235,7 +235,7 @@ const s: Record<string, React.CSSProperties> = {
   label: { color: '#64748B', fontSize: '0.8rem', fontWeight: 500 },
   input: { padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', color: '#0F172A', fontSize: '0.875rem', outline: 'none' },
   emptyBox: { background: '#fff', border: '1px dashed #E2E8F0', borderRadius: '12px', padding: '4rem', textAlign: 'center' },
-  tableWrap: { background: '#fff', border: '1px solid #E2E8F0', borderRadius: '12px', overflow: 'auto', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' },
+  tableWrap: { background: '#fff', border: '1px solid #E2E8F0', borderRadius: '12px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { padding: '0.875rem 1.25rem', textAlign: 'left', color: '#94A3B8', fontSize: '0.75rem', fontWeight: 600, borderBottom: '1px solid #F1F5F9', background: '#FAFBFC', whiteSpace: 'nowrap', letterSpacing: '0.03em' },
   tr: { borderBottom: '1px solid #F8FAFC' },

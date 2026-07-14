@@ -34,6 +34,11 @@ input:focus, select:focus, textarea:focus {
 button:active { transform: scale(0.97); }
 
 /* Animations */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -152,4 +157,41 @@ button:active { transform: scale(0.97); }
 /* Ring animation for occupancy */
 circle.ring-fill {
   transition: stroke-dasharray 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Responsive grid ─────────────────────────────────── */
+.dashboard-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+@media (max-width: 1100px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Responsive table wrapper ────────────────────────── */
+.table-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Topbar stacks on small screens ─────────────────── */
+@media (max-width: 600px) {
+  .page-topbar {
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 0.75rem;
+  }
+  .page-topbar > div:last-child {
+    width: 100%;
+  }
+  .page-topbar input,
+  .page-topbar .search-wrap {
+    width: 100% !important;
+  }
 }

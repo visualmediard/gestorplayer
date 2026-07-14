@@ -338,7 +338,24 @@ export default function ZoneEditor({ programId, onBack }: Props) {
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           {published && <span style={{ color: '#10B981', fontSize: '0.85rem', fontWeight: 500 }}>✓ Publicado</span>}
           <button style={s.btnOutline} onClick={() => setShowZoneForm(!showZoneForm)}>{showZoneForm ? 'Cancelar' : '+ Nueva zona'}</button>
-          <button style={s.btnPublish} onClick={handlePublish} disabled={publishing}>{publishing ? 'Publicando...' : '🚀 Publicar'}</button>
+          <button style={s.btnPublish} onClick={handlePublish} disabled={publishing}>
+            {publishing ? (
+              <>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={{ animation: 'spin 0.8s linear infinite' }}>
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+                Publicando...
+              </>
+            ) : (
+              <>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"/>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+                &nbsp;&nbsp;Publicar
+              </>
+            )}
+          </button>
         </div>
       </div>
 
