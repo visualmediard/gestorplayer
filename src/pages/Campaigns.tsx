@@ -281,7 +281,7 @@ export default function Campaigns() {
       {/* Wizard modal */}
       {wizardOpen && createPortal(
         <div className="backdrop" style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setWizardOpen(false) }}>
-          <div style={s.modalCard}>
+          <div className="modal-pop" style={s.modalCard}>
             <div style={s.modalHeader}>
               <div>
                 <h3 style={{ fontWeight: 700, color: '#0F172A', fontSize: '1.1rem' }}>{editingId ? 'Editar campaña' : 'Nueva campaña'}</h3>

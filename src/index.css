@@ -145,8 +145,18 @@ button:active { transform: scale(0.97); }
 
 /* Modal/overlay backdrop */
 .backdrop {
-  animation: fadeIn 0.2s ease;
+  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   backdrop-filter: blur(4px);
+}
+
+/* Modal card entrance — smooth ease-out-expo pop */
+@keyframes modalPop {
+  from { opacity: 0; transform: translateY(16px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal-pop {
+  animation: modalPop 0.38s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
 }
 
 /* Progress bar animation */
