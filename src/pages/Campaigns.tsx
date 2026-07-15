@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
 import CampaignReport from './CampaignReport'
@@ -278,7 +279,7 @@ export default function Campaigns() {
       </div>
 
       {/* Wizard modal */}
-      {wizardOpen && (
+      {wizardOpen && createPortal(
         <div className="backdrop" style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setWizardOpen(false) }}>
           <div style={s.modalCard}>
             <div style={s.modalHeader}>
@@ -555,7 +556,8 @@ export default function Campaigns() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Campaign list */}
@@ -651,8 +653,8 @@ const s: Record<string, React.CSSProperties> = {
   btnGhost:   { padding: '0.55rem 1rem', borderRadius: '7px', border: 'none', background: 'transparent', color: '#64748B', fontWeight: 500, fontSize: '0.85rem', cursor: 'pointer' },
   btnPublish: { display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.6rem 1.25rem', borderRadius: '8px', border: 'none', background: '#059669', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', whiteSpace: 'nowrap' },
 
-  modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' },
-  modalCard:  { background: '#fff', borderRadius: '16px', width: '100%', maxWidth: '780px', maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' },
+  modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', zIndex: 500, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '4vh 1rem', overflowY: 'auto' },
+  modalCard:  { background: '#fff', borderRadius: '16px', width: '100%', maxWidth: '780px', maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.25)', margin: 'auto' },
   modalHeader:{ padding: '1.25rem 1.5rem 1rem', borderBottom: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
   modalBody:  { padding: '1.25rem 1.5rem', overflowY: 'auto', flex: 1, minHeight: 0 },
   modalFooter:{ padding: '1rem 1.5rem', borderTop: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' },
