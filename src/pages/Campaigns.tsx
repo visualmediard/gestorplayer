@@ -22,7 +22,10 @@ type ScreenNode = {
   program_id: string; program_name: string
   zones: { id: string; name: string }[]
 }
-type ZoneSelection = { zone_id: string; frequency: number }
+type FlatZone = { zone_id: string; zone_name: string; screen_name: string; program_name: string }
+type ZoneFreq = { zone_id: string; frequency: number }
+// One selected media + the zones it's assigned to
+type MediaAssign = { media_id: string; zones: ZoneFreq[] }
 
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Borrador', active: 'Activa', paused: 'Pausada', ended: 'Finalizada'
@@ -33,6 +36,7 @@ const STATUS_COLOR: Record<string, { bg: string; color: string; border: string }
   paused: { bg: '#FFF7ED', color: '#D97706', border: '#FDE68A' },
   ended:  { bg: '#FEF2F2', color: '#DC2626', border: '#FECACA' },
 }
+const DEFAULT_FREQ = 24
 
 export default function Campaigns() {
   const { profile } = useAuth()
@@ -46,12 +50,13 @@ export default function Campaigns() {
 
   // Wizard
   const [wizardOpen, setWizardOpen] = useState(false)
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
+  const [editingId, setEditingId]   = useState<string | null>(null)
+  const [step, setStep] = useState<1 | 2 | 3>(1)
   const [w1, setW1] = useState({ name: '', client: '', starts: '', ends: '', tStart: '08:00', tEnd: '22:00' })
-  const [w2, setW2] = useState<string>('')
-  const [w2Search, setW2Search] = useState('')
-  const [w3, setW3] = useState<ZoneSelection[]>([])
-  const [w3Expanded, setW3Expanded] = useState<Record<string, boolean>>({})
+  const [mediaSearch, setMediaSearch] = useState('')
+  const [assigns, setAssigns] = useState<MediaAssign[]>([])
+  // per-media zone search box
+  const [zoneSearch, setZoneSearch] = useState<Record<string, string>>({})
   const [publishing, setPublishing] = useState(false)
   const [wizardError, setWizardError] = useState<string | null>(null)
 
@@ -73,18 +78,15 @@ export default function Campaigns() {
     if (campData) setCampaigns(campData as Campaign[])
     if (statData) setStats(statData as CampaignStat[])
 
-    // Include library items (zone_id null) + any media_content that's from an org zone
+    // Library items (zone_id null) + org zone media, excluding campaign-injected
     const { data: allOrgMedia } = await supabase
       .from('media_content')
       .select('id, name, type, storage_path, duration_seconds, zone_id, campaign_id, zones!inner(program_id, programs!inner(organization_id))')
       .is('campaign_id', null)
     const orgMedia = (allOrgMedia ?? []).filter((m: any) => m.zones?.programs?.organization_id === orgId)
-    const libraryMedia = mediaData ?? []
-    const merged = [...libraryMedia, ...orgMedia.map((m: any) => ({ id: m.id, name: m.name, type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds }))]
-    // Deduplicate by id
+    const merged = [...(mediaData ?? []), ...orgMedia.map((m: any) => ({ id: m.id, name: m.name, type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds }))]
     const seen = new Set<string>()
-    const uniqueMedia = merged.filter(m => { if (seen.has(m.id)) return false; seen.add(m.id); return true })
-    setMedia(uniqueMedia as MediaItem[])
+    setMedia(merged.filter(m => { if (seen.has(m.id)) return false; seen.add(m.id); return true }) as MediaItem[])
 
     // Build screen → program → zones tree
     const nodes: ScreenNode[] = []
@@ -92,17 +94,22 @@ export default function Campaigns() {
       const prog = (progData ?? []).find((p: any) => p.id === sc.current_program_id)
       if (!prog) continue
       const zonesOfProg = (zoneData ?? []).filter((z: any) => z.program_id === prog.id).map((z: any) => ({ id: z.id, name: z.name }))
-      nodes.push({
-        screen_id: sc.id, screen_name: sc.name,
-        program_id: prog.id, program_name: prog.name,
-        zones: zonesOfProg,
-      })
+      nodes.push({ screen_id: sc.id, screen_name: sc.name, program_id: prog.id, program_name: prog.name, zones: zonesOfProg })
     }
     setTree(nodes)
     setLoading(false)
   }
 
   useEffect(() => { load() }, [])
+
+  // Flatten tree into a searchable zone list
+  const flatZones: FlatZone[] = tree.flatMap(node =>
+    node.zones.map(z => ({ zone_id: z.id, zone_name: z.name, screen_name: node.screen_name, program_name: node.program_name }))
+  )
+  function zoneLabel(zoneId: string): { screen: string; zone: string } {
+    const fz = flatZones.find(z => z.zone_id === zoneId)
+    return { screen: fz?.screen_name ?? '—', zone: fz?.zone_name ?? '—' }
+  }
 
   function getPublicUrl(path: string) {
     if (!path) return ''
@@ -111,12 +118,39 @@ export default function Campaigns() {
   function getStat(id: string) { return stats.find(s => s.campaign_id === id) }
   function getMedia(id: string | null) { return id ? media.find(m => m.id === id) : null }
 
-  function openWizard() {
+  function resetWizard() {
+    setEditingId(null)
     setStep(1)
     setW1({ name: '', client: '', starts: '', ends: '', tStart: '08:00', tEnd: '22:00' })
-    setW2(''); setW2Search('')
-    setW3([]); setW3Expanded({})
+    setMediaSearch(''); setAssigns([]); setZoneSearch({})
     setWizardError(null)
+  }
+
+  function openCreate() { resetWizard(); setWizardOpen(true) }
+
+  async function openEdit(camp: Campaign) {
+    resetWizard()
+    setEditingId(camp.id)
+    setW1({
+      name: camp.name,
+      client: camp.client_name ?? '',
+      starts: camp.starts_at ? camp.starts_at.slice(0, 10) : '',
+      ends: camp.ends_at ? camp.ends_at.slice(0, 10) : '',
+      tStart: camp.daily_start_time ? camp.daily_start_time.slice(0, 5) : '08:00',
+      tEnd: camp.daily_end_time ? camp.daily_end_time.slice(0, 5) : '22:00',
+    })
+    // Reconstruct assignments from injected media_content (match by storage_path)
+    const { data: rows } = await supabase.from('media_content')
+      .select('storage_path, zone_id, daily_frequency').eq('campaign_id', camp.id)
+    const map = new Map<string, ZoneFreq[]>()
+    for (const row of (rows ?? [])) {
+      const m = media.find(mm => mm.storage_path === row.storage_path)
+      if (!m || !row.zone_id) continue
+      const arr = map.get(m.id) ?? []
+      arr.push({ zone_id: row.zone_id, frequency: row.daily_frequency ?? DEFAULT_FREQ })
+      map.set(m.id, arr)
+    }
+    setAssigns(Array.from(map.entries()).map(([media_id, zones]) => ({ media_id, zones })))
     setWizardOpen(true)
   }
 
@@ -129,71 +163,88 @@ export default function Campaigns() {
       if (new Date(w1.ends) < new Date(w1.starts)) { setWizardError('La fecha fin debe ser posterior al inicio.'); return false }
       if (!w1.tStart || !w1.tEnd) { setWizardError('Los horarios son requeridos.'); return false }
     }
-    if (n === 2 && !w2)         { setWizardError('Selecciona un contenido.'); return false }
-    if (n === 3 && w3.length===0){ setWizardError('Selecciona al menos una zona.'); return false }
+    if (n === 2) {
+      if (assigns.length === 0) { setWizardError('Selecciona al menos un contenido.'); return false }
+      const empty = assigns.find(a => a.zones.length === 0)
+      if (empty) {
+        const m = getMedia(empty.media_id)
+        setWizardError(`"${m?.name ?? 'Un contenido'}" no tiene zonas asignadas.`); return false
+      }
+    }
     return true
   }
+  function next() { if (validateStep(step) && step < 3) setStep((step + 1) as 1|2|3) }
+  function back() { if (step > 1) setStep((step - 1) as 1|2|3) }
 
-  function next() { if (validateStep(step) && step < 4) setStep((step + 1) as 1|2|3|4) }
-  function back() { if (step > 1) setStep((step - 1) as 1|2|3|4) }
-
-  function toggleZone(zoneId: string) {
-    setW3(prev => prev.find(z => z.zone_id === zoneId)
-      ? prev.filter(z => z.zone_id !== zoneId)
-      : [...prev, { zone_id: zoneId, frequency: 24 }])
+  // ── Assignment helpers ──
+  function toggleMedia(mediaId: string) {
+    setAssigns(prev => prev.find(a => a.media_id === mediaId)
+      ? prev.filter(a => a.media_id !== mediaId)
+      : [...prev, { media_id: mediaId, zones: [] }])
   }
-  function setFreq(zoneId: string, f: number) {
-    setW3(prev => prev.map(z => z.zone_id === zoneId ? { ...z, frequency: Math.max(1, f) } : z))
+  function toggleZone(mediaId: string, zoneId: string) {
+    setAssigns(prev => prev.map(a => {
+      if (a.media_id !== mediaId) return a
+      const has = a.zones.find(z => z.zone_id === zoneId)
+      return { ...a, zones: has ? a.zones.filter(z => z.zone_id !== zoneId) : [...a.zones, { zone_id: zoneId, frequency: DEFAULT_FREQ }] }
+    }))
   }
+  function setFreq(mediaId: string, zoneId: string, freq: number) {
+    setAssigns(prev => prev.map(a => a.media_id !== mediaId ? a
+      : { ...a, zones: a.zones.map(z => z.zone_id === zoneId ? { ...z, frequency: Math.max(1, freq) } : z) }))
+  }
+  const totalPairs = assigns.reduce((sum, a) => sum + a.zones.length, 0)
 
   async function publish() {
     setPublishing(true); setWizardError(null)
     const { data: pd } = await supabase.from('profiles').select('organization_id').eq('id', profile?.id ?? '').single()
-    const mediaItem = media.find(m => m.id === w2)
-    if (!mediaItem) { setWizardError('Contenido no encontrado.'); setPublishing(false); return }
 
     const startsAt = `${w1.starts}T00:00:00`
     const endsAt   = `${w1.ends}T23:59:59`
+    const cover    = assigns[0]?.media_id ?? null
 
-    const { data: camp, error } = await supabase.from('campaigns').insert({
-      name: w1.name.trim(),
-      client_name: w1.client.trim(),
-      organization_id: pd?.organization_id,
-      media_content_id: w2,
-      starts_at: startsAt,
-      ends_at: endsAt,
-      daily_start_time: w1.tStart,
-      daily_end_time: w1.tEnd,
-      status: 'active',
-      created_by: profile?.id,
-    }).select().single()
-
-    if (error || !camp) { setWizardError(error?.message ?? 'Error al crear.'); setPublishing(false); return }
-
-    // Insert one media_content row per selected zone (reusing storage_path)
-    for (const z of w3) {
-      const { error: insErr } = await supabase.from('media_content').insert({
-        zone_id: z.zone_id,
-        name: w1.name.trim(),
-        type: mediaItem.type,
-        storage_path: mediaItem.storage_path,
-        duration_seconds: mediaItem.duration_seconds,
-        uploaded_by: profile?.id,
-        campaign_id: camp.id,
-        daily_frequency: z.frequency,
-        is_unlimited: false,
-        expires_at: endsAt,
-      })
-      if (insErr) { console.warn('Insert zone', z.zone_id, insErr) }
+    let campId = editingId
+    if (editingId) {
+      const { error } = await supabase.from('campaigns').update({
+        name: w1.name.trim(), client_name: w1.client.trim(),
+        media_content_id: cover, starts_at: startsAt, ends_at: endsAt,
+        daily_start_time: w1.tStart, daily_end_time: w1.tEnd,
+      }).eq('id', editingId)
+      if (error) { setWizardError(error.message); setPublishing(false); return }
+      // Remove previous injected media, we re-insert fresh
+      await supabase.from('media_content').delete().eq('campaign_id', editingId)
+    } else {
+      const { data: camp, error } = await supabase.from('campaigns').insert({
+        name: w1.name.trim(), client_name: w1.client.trim(),
+        organization_id: pd?.organization_id, media_content_id: cover,
+        starts_at: startsAt, ends_at: endsAt,
+        daily_start_time: w1.tStart, daily_end_time: w1.tEnd,
+        status: 'active', created_by: profile?.id,
+      }).select().single()
+      if (error || !camp) { setWizardError(error?.message ?? 'Error al crear.'); setPublishing(false); return }
+      campId = camp.id
     }
 
-    setPublishing(false)
-    setWizardOpen(false)
-    load()
+    // Insert one media_content row per (media, zone) pair
+    for (const a of assigns) {
+      const m = media.find(mm => mm.id === a.media_id)
+      if (!m) continue
+      for (const z of a.zones) {
+        const { error: insErr } = await supabase.from('media_content').insert({
+          zone_id: z.zone_id, name: w1.name.trim(), type: m.type,
+          storage_path: m.storage_path, duration_seconds: m.duration_seconds,
+          uploaded_by: profile?.id, campaign_id: campId,
+          daily_frequency: z.frequency, is_unlimited: false, expires_at: endsAt,
+        })
+        if (insErr) console.warn('Insert pair', a.media_id, z.zone_id, insErr)
+      }
+    }
+
+    setPublishing(false); setWizardOpen(false); load()
   }
 
   async function deleteCampaign(id: string, name: string) {
-    if (!confirm(`¿Eliminar la campaña "${name}"? Esto la marcará como eliminada y quitará su contenido de las zonas.`)) return
+    if (!confirm(`¿Eliminar la campaña "${name}"? Se quitará su contenido de las zonas.`)) return
     await supabase.from('campaigns').update({ deleted_at: new Date().toISOString(), status: 'ended' }).eq('id', id)
     await supabase.from('media_content').delete().eq('campaign_id', id)
     load()
@@ -219,7 +270,7 @@ export default function Campaigns() {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input style={s.searchInput} placeholder="Buscar por campaña o cliente..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <button style={s.btnPrimary} onClick={openWizard}>
+          <button style={s.btnPrimary} onClick={openCreate}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Nueva campaña
           </button>
@@ -232,8 +283,8 @@ export default function Campaigns() {
           <div style={s.modalCard}>
             <div style={s.modalHeader}>
               <div>
-                <h3 style={{ fontWeight: 700, color: '#0F172A', fontSize: '1.1rem' }}>Nueva campaña</h3>
-                <p style={{ color: '#94A3B8', fontSize: '0.8rem', marginTop: '2px' }}>Paso {step} de 4</p>
+                <h3 style={{ fontWeight: 700, color: '#0F172A', fontSize: '1.1rem' }}>{editingId ? 'Editar campaña' : 'Nueva campaña'}</h3>
+                <p style={{ color: '#94A3B8', fontSize: '0.8rem', marginTop: '2px' }}>Paso {step} de 3</p>
               </div>
               <button onClick={() => setWizardOpen(false)} style={s.closeBtn}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -242,14 +293,14 @@ export default function Campaigns() {
 
             {/* Stepper */}
             <div style={s.stepper}>
-              {[1,2,3,4].map(n => (
-                <div key={n} style={{ display: 'flex', alignItems: 'center', flex: n === 4 ? 0 : 1 }}>
+              {[1,2,3].map(n => (
+                <div key={n} style={{ display: 'flex', alignItems: 'center', flex: n === 3 ? 0 : 1 }}>
                   <div style={{ ...s.stepDot, background: n <= step ? '#2563EB' : '#E2E8F0', color: n <= step ? '#fff' : '#94A3B8' }}>
                     {n < step
                       ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
                       : n}
                   </div>
-                  {n < 4 && <div style={{ ...s.stepLine, background: n < step ? '#2563EB' : '#E2E8F0' }} />}
+                  {n < 3 && <div style={{ ...s.stepLine, background: n < step ? '#2563EB' : '#E2E8F0' }} />}
                 </div>
               ))}
             </div>
@@ -288,43 +339,49 @@ export default function Campaigns() {
                 </div>
               )}
 
-              {/* ─── PASO 2 ─── */}
+              {/* ─── PASO 2: Contenido + zonas ─── */}
               {step === 2 && (
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <h4 style={s.stepTitle}>Selecciona el contenido</h4>
+                    <h4 style={s.stepTitle}>Contenido y zonas</h4>
                     <div style={s.searchWrap}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                      <input style={{ ...s.searchInput, width: '180px' }} placeholder="Buscar archivo..." value={w2Search} onChange={e => setW2Search(e.target.value)} />
+                      <input style={{ ...s.searchInput, width: '170px' }} placeholder="Buscar archivo..." value={mediaSearch} onChange={e => setMediaSearch(e.target.value)} />
                     </div>
                   </div>
+                  <p style={{ fontSize: '0.8rem', color: '#94A3B8', marginBottom: '0.75rem' }}>
+                    Selecciona uno o varios contenidos, y a cada uno asígnale las zonas donde se mostrará.
+                  </p>
+
+                  {/* Media gallery (multi-select) */}
                   <div style={s.mediaGrid}>
                     {media.length === 0 ? (
                       <p style={s.emptyMsg}>No hay contenido en la biblioteca. Sube archivos primero en la sección Contenido.</p>
                     ) : (
-                      media.filter(m => m.name.toLowerCase().includes(w2Search.toLowerCase())).map(item => {
+                      media.filter(m => m.name.toLowerCase().includes(mediaSearch.toLowerCase())).map(item => {
                         const url = getPublicUrl(item.storage_path)
-                        const selected = w2 === item.id
+                        const a = assigns.find(x => x.media_id === item.id)
+                        const selected = !!a
                         return (
-                          <div key={item.id} onClick={() => setW2(item.id)}
+                          <div key={item.id} onClick={() => toggleMedia(item.id)}
                             style={{ ...s.mediaCard, border: selected ? '2px solid #2563EB' : '2px solid transparent', boxShadow: selected ? '0 0 0 3px rgba(37,99,235,0.15)' : 'none' }}>
                             <div style={s.mediaThumb}>
                               {item.type === 'image' && <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
                               {item.type === 'video' && (
                                 <>
                                   <video src={url + '#t=1'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted playsInline />
-                                  <div style={s.playOverlay}>
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
-                                  </div>
+                                  <div style={s.playOverlay}><svg width="14" height="14" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg></div>
                                 </>
                               )}
                               {item.type === 'url' && <div style={{ width: '100%', height: '100%', background: '#DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' }}>🌐</div>}
                             </div>
-                            <div style={{ padding: '0.5rem' }}>
-                              <p style={{ fontSize: '0.75rem', color: '#0F172A', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</p>
-                              <p style={{ fontSize: '0.65rem', color: '#94A3B8', marginTop: '2px' }}>
-                                {item.type === 'video' ? 'Video' : item.type === 'image' ? 'Imagen' : 'URL'}
-                              </p>
+                            <div style={{ padding: '0.45rem 0.5rem' }}>
+                              <p style={{ fontSize: '0.72rem', color: '#0F172A', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</p>
+                              {selected && (
+                                <p style={{ fontSize: '0.64rem', color: '#2563EB', fontWeight: 600, marginTop: '2px' }}>
+                                  {a!.zones.length} {a!.zones.length === 1 ? 'zona' : 'zonas'}
+                                </p>
+                              )}
                             </div>
                             {selected && (
                               <div style={s.selectedTick}>
@@ -336,133 +393,144 @@ export default function Campaigns() {
                       })
                     )}
                   </div>
+
+                  {/* Zone assignment per selected media */}
+                  {assigns.length > 0 && (
+                    <div style={{ marginTop: '1.25rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.625rem' }}>
+                        <div style={{ height: '1px', background: '#E2E8F0', flex: 1 }} />
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Asignar zonas · {totalPairs} {totalPairs === 1 ? 'destino' : 'destinos'}
+                        </span>
+                        <div style={{ height: '1px', background: '#E2E8F0', flex: 1 }} />
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {assigns.map(a => {
+                          const m = getMedia(a.media_id)
+                          if (!m) return null
+                          const q = (zoneSearch[a.media_id] ?? '').toLowerCase()
+                          const visibleZones = flatZones.filter(z =>
+                            z.zone_name.toLowerCase().includes(q) ||
+                            z.screen_name.toLowerCase().includes(q) ||
+                            z.program_name.toLowerCase().includes(q)
+                          )
+                          return (
+                            <div key={a.media_id} style={s.assignCard}>
+                              <div style={s.assignHeader}>
+                                <div style={s.assignThumb}>
+                                  {m.type === 'video'
+                                    ? <video src={getPublicUrl(m.storage_path) + '#t=1'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted />
+                                    : m.type === 'image'
+                                      ? <img src={getPublicUrl(m.storage_path)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                      : <div style={{ width: '100%', height: '100%', background: '#DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🌐</div>
+                                  }
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</p>
+                                  <p style={{ fontSize: '0.72rem', color: a.zones.length ? '#059669' : '#DC2626', fontWeight: 600 }}>
+                                    {a.zones.length ? `${a.zones.length} ${a.zones.length === 1 ? 'zona asignada' : 'zonas asignadas'}` : 'Sin zonas — asigna al menos una'}
+                                  </p>
+                                </div>
+                                <button onClick={() => toggleMedia(a.media_id)} style={s.assignRemove} title="Quitar contenido">
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                </button>
+                              </div>
+
+                              {/* zone search */}
+                              <div style={{ ...s.searchWrap, margin: '0.625rem 0', width: '100%' }}>
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                <input style={{ ...s.searchInput, width: '100%' }} placeholder="Buscar zona por nombre, pantalla o programa..."
+                                  value={zoneSearch[a.media_id] ?? ''}
+                                  onChange={e => setZoneSearch({ ...zoneSearch, [a.media_id]: e.target.value })} />
+                              </div>
+
+                              {/* zone list */}
+                              <div style={s.zonePickList}>
+                                {visibleZones.length === 0
+                                  ? <p style={{ fontSize: '0.78rem', color: '#94A3B8', padding: '0.5rem', textAlign: 'center' }}>Sin zonas que coincidan.</p>
+                                  : visibleZones.map(z => {
+                                    const zf = a.zones.find(x => x.zone_id === z.zone_id)
+                                    return (
+                                      <div key={z.zone_id} style={{ ...s.zonePickRow, background: zf ? '#EFF6FF' : 'transparent' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flex: 1, minWidth: 0 }}>
+                                          <input type="checkbox" checked={!!zf} onChange={() => toggleZone(a.media_id, z.zone_id)} style={{ accentColor: '#2563EB', width: '15px', height: '15px', flexShrink: 0 }} />
+                                          <span style={{ fontSize: '1rem', flexShrink: 0 }}>📺</span>
+                                          <span style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: zf ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                            {z.screen_name} <span style={{ color: '#CBD5E1' }}>→</span> {z.zone_name}
+                                          </span>
+                                        </label>
+                                        {zf && (
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                                            <input type="number" min={1} max={999} value={zf.frequency}
+                                              onChange={e => setFreq(a.media_id, z.zone_id, +e.target.value)} style={s.freqInput} />
+                                            <span style={{ fontSize: '0.7rem', color: '#64748B' }}>/día</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
+                                  })
+                                }
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* ─── PASO 3 ─── */}
+              {/* ─── PASO 3: Resumen ─── */}
               {step === 3 && (
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    <h4 style={s.stepTitle}>Asigna zonas</h4>
-                    {w3.length > 0 && (
-                      <span style={{ fontSize: '0.8rem', color: '#2563EB', fontWeight: 600, background: '#EFF6FF', padding: '0.3rem 0.75rem', borderRadius: '20px' }}>
-                        {w3.length} {w3.length === 1 ? 'zona seleccionada' : 'zonas seleccionadas'}
-                      </span>
-                    )}
+                  <h4 style={s.stepTitle}>Revisa y publica</h4>
+                  <div style={s.summaryInfo}>
+                    <div><p style={s.summaryLabel}>Campaña</p><p style={s.summaryValue}>{w1.name}</p></div>
+                    <div><p style={s.summaryLabel}>Cliente</p><p style={s.summaryValue}>{w1.client}</p></div>
+                    <div><p style={s.summaryLabel}>Período</p><p style={s.summarySub}>{new Date(w1.starts).toLocaleDateString('es-DO')} → {new Date(w1.ends).toLocaleDateString('es-DO')}</p></div>
+                    <div><p style={s.summaryLabel}>Horario</p><p style={s.summarySub}>{w1.tStart} – {w1.tEnd}</p></div>
                   </div>
 
-                  <div style={s.tree}>
-                    {tree.length === 0 && <p style={s.emptyMsg}>No hay pantallas con programa asignado.</p>}
-                    {tree.map(node => {
-                      const key = node.screen_id + '|' + node.program_id
-                      const isOpen = w3Expanded[key] ?? true
+                  <p style={{ ...s.summaryLabel, marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+                    Contenidos y destinos ({assigns.length} {assigns.length === 1 ? 'contenido' : 'contenidos'} · {totalPairs} {totalPairs === 1 ? 'zona' : 'zonas'})
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                    {assigns.map(a => {
+                      const m = getMedia(a.media_id)
+                      if (!m) return null
                       return (
-                        <div key={key} style={s.treeNode}>
-                          <button onClick={() => setW3Expanded({ ...w3Expanded, [key]: !isOpen })} style={s.treeScreen}>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2" style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
-                              <polyline points="9 18 15 12 9 6"/>
-                            </svg>
-                            <span style={{ fontSize: '1rem' }}>📺</span>
-                            <span style={s.treeScreenName}>{node.screen_name}</span>
-                            <span style={s.treeProgTag}>{node.program_name}</span>
-                          </button>
-                          {isOpen && (
-                            <div style={s.treeZones}>
-                              {node.zones.length === 0
-                                ? <p style={{ fontSize: '0.78rem', color: '#94A3B8', padding: '0.5rem 0 0.5rem 2rem' }}>Sin zonas.</p>
-                                : node.zones.map(zone => {
-                                  const sel = w3.find(z => z.zone_id === zone.id)
-                                  return (
-                                    <div key={zone.id} style={{ ...s.treeZone, background: sel ? '#EFF6FF' : 'transparent' }}>
-                                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flex: 1, minWidth: 0 }}>
-                                        <input type="checkbox" checked={!!sel} onChange={() => toggleZone(zone.id)}
-                                          style={{ accentColor: '#2563EB', width: '15px', height: '15px' }} />
-                                        <span style={{ fontSize: '0.85rem', color: '#0F172A', fontWeight: sel ? 600 : 400 }}>{zone.name}</span>
-                                      </label>
-                                      {sel && (
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                          <input type="number" min={1} max={999} value={sel.frequency}
-                                            onChange={e => setFreq(zone.id, +e.target.value)}
-                                            style={s.freqInput} />
-                                          <span style={{ fontSize: '0.72rem', color: '#64748B' }}>reps/día</span>
-                                        </div>
-                                      )}
-                                    </div>
-                                  )
-                                })
-                              }
+                        <div key={a.media_id} style={s.summaryMediaCard}>
+                          <div style={s.assignThumb}>
+                            {m.type === 'video'
+                              ? <video src={getPublicUrl(m.storage_path) + '#t=1'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted />
+                              : m.type === 'image'
+                                ? <img src={getPublicUrl(m.storage_path)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                : <div style={{ width: '100%', height: '100%', background: '#DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🌐</div>
+                            }
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0F172A', marginBottom: '0.35rem' }}>{m.name}</p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                              {a.zones.map(z => {
+                                const lbl = zoneLabel(z.zone_id)
+                                return (
+                                  <span key={z.zone_id} style={s.zoneChip}>
+                                    {lbl.screen} → {lbl.zone}
+                                    <span style={{ background: '#2563EB', color: '#fff', fontWeight: 700, fontSize: '0.65rem', padding: '1px 6px', borderRadius: '10px', marginLeft: '4px' }}>{z.frequency}×</span>
+                                  </span>
+                                )
+                              })}
                             </div>
-                          )}
+                          </div>
                         </div>
                       )
                     })}
                   </div>
                 </div>
               )}
-
-              {/* ─── PASO 4 ─── */}
-              {step === 4 && (() => {
-                const mediaItem = media.find(m => m.id === w2)
-                const url = mediaItem ? getPublicUrl(mediaItem.storage_path) : ''
-                return (
-                  <div>
-                    <h4 style={s.stepTitle}>Revisa y publica</h4>
-                    <div style={s.summaryGrid}>
-                      <div style={s.summaryPreview}>
-                        {mediaItem?.type === 'video'
-                          ? <video src={url + '#t=1'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted />
-                          : mediaItem?.type === 'image'
-                            ? <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            : <div style={{ background: 'linear-gradient(135deg, #1E3A5F, #2563EB)', width: '100%', height: '100%' }} />
-                        }
-                      </div>
-                      <div>
-                        <p style={s.summaryLabel}>Campaña</p>
-                        <p style={s.summaryValue}>{w1.name}</p>
-                        <p style={{ ...s.summaryLabel, marginTop: '0.75rem' }}>Cliente</p>
-                        <p style={s.summaryValue}>{w1.client}</p>
-                        <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-                          <div>
-                            <p style={s.summaryLabel}>Período</p>
-                            <p style={s.summarySub}>{new Date(w1.starts).toLocaleDateString('es-DO')} → {new Date(w1.ends).toLocaleDateString('es-DO')}</p>
-                          </div>
-                          <div>
-                            <p style={s.summaryLabel}>Horario</p>
-                            <p style={s.summarySub}>{w1.tStart} – {w1.tEnd}</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: '1.25rem' }}>
-                      <p style={s.summaryLabel}>Zonas ({w3.length})</p>
-                      <div style={s.zoneListSummary}>
-                        {w3.map(z => {
-                          let screenName = '', zoneName = ''
-                          for (const node of tree) {
-                            const found = node.zones.find(zn => zn.id === z.zone_id)
-                            if (found) { screenName = node.screen_name; zoneName = found.name; break }
-                          }
-                          return (
-                            <div key={z.zone_id} style={s.zoneListItem}>
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-                              <span style={{ fontWeight: 500, color: '#0F172A' }}>{screenName}</span>
-                              <span style={{ color: '#94A3B8' }}>→</span>
-                              <span style={{ color: '#64748B' }}>{zoneName}</span>
-                              <span style={{ marginLeft: 'auto', background: '#EFF6FF', color: '#2563EB', fontWeight: 700, fontSize: '0.75rem', padding: '2px 8px', borderRadius: '20px' }}>
-                                {z.frequency}×/día
-                              </span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })()}
             </div>
 
-            {/* Error */}
             {wizardError && (
               <div style={s.errorBox}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -470,27 +538,17 @@ export default function Campaigns() {
               </div>
             )}
 
-            {/* Footer */}
             <div style={s.modalFooter}>
               <button onClick={() => setWizardOpen(false)} style={s.btnOutline}>Cancelar</button>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {step > 1 && <button onClick={back} style={s.btnGhost}>← Atrás</button>}
-                {step < 4
+                {step < 3
                   ? <button onClick={next} style={s.btnPrimary}>Siguiente →</button>
                   : <button onClick={publish} disabled={publishing} style={{ ...s.btnPublish, opacity: publishing ? 0.7 : 1 }}>
                       {publishing ? (
-                        <>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={{ animation: 'spin 0.8s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                          Publicando...
-                        </>
+                        <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={{ animation: 'spin 0.8s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>{editingId ? 'Guardando...' : 'Publicando...'}</>
                       ) : (
-                        <>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="22" y1="2" x2="11" y2="13"/>
-                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                          </svg>
-                          &nbsp;Publicar campaña
-                        </>
+                        <><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>&nbsp;{editingId ? 'Guardar cambios' : 'Publicar campaña'}</>
                       )}
                     </button>
                 }
@@ -519,12 +577,10 @@ export default function Campaigns() {
             const mediaItem = getMedia(camp.media_content_id)
             const startTs = new Date(camp.starts_at).getTime()
             const endTs = new Date(camp.ends_at).getTime()
-            const now = Date.now()
-            const progress = Math.max(0, Math.min(100, ((now - startTs) / Math.max(1, endTs - startTs)) * 100))
+            const progress = Math.max(0, Math.min(100, ((Date.now() - startTs) / Math.max(1, endTs - startTs)) * 100))
 
             return (
               <div key={camp.id} style={s.campCard} className="card-hover">
-                {/* Thumb */}
                 <div style={s.campThumb}>
                   {mediaItem?.type === 'video'
                     ? <video src={getPublicUrl(mediaItem.storage_path) + '#t=1'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted />
@@ -546,7 +602,6 @@ export default function Campaigns() {
                   <p style={s.campName}>{camp.name}</p>
                   <p style={s.campClient}>{camp.client_name ?? '—'}</p>
 
-                  {/* Progress */}
                   <div style={{ marginTop: '0.75rem' }}>
                     <div style={{ height: '5px', background: '#F1F5F9', borderRadius: '999px', overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg, #3B82F6, #2563EB)', transition: 'width 0.3s' }} />
@@ -557,22 +612,19 @@ export default function Campaigns() {
                     </div>
                   </div>
 
-                  {/* Stats */}
                   <div style={s.campStats}>
-                    <div style={s.campStat}>
-                      <span style={s.campStatVal}>{stat?.zone_count ?? 0}</span>
-                      <span style={s.campStatLbl}>Zonas</span>
-                    </div>
-                    <div style={s.campStat}>
-                      <span style={s.campStatVal}>{(stat?.total_plays ?? 0).toLocaleString()}</span>
-                      <span style={s.campStatLbl}>Reproducciones</span>
-                    </div>
+                    <div style={s.campStat}><span style={s.campStatVal}>{stat?.zone_count ?? 0}</span><span style={s.campStatLbl}>Zonas</span></div>
+                    <div style={s.campStat}><span style={s.campStatVal}>{(stat?.total_plays ?? 0).toLocaleString()}</span><span style={s.campStatLbl}>Reproducciones</span></div>
                   </div>
 
                   <div style={s.campActions}>
                     <button onClick={() => setReportId(camp.id)} style={s.btnAct}>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                      Ver reporte
+                      Reporte
+                    </button>
+                    <button onClick={() => openEdit(camp)} style={s.btnAct}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                      Editar
                     </button>
                     <button onClick={() => deleteCampaign(camp.id, camp.name)} style={s.btnDel}>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
@@ -599,56 +651,47 @@ const s: Record<string, React.CSSProperties> = {
   btnGhost:   { padding: '0.55rem 1rem', borderRadius: '7px', border: 'none', background: 'transparent', color: '#64748B', fontWeight: 500, fontSize: '0.85rem', cursor: 'pointer' },
   btnPublish: { display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.6rem 1.25rem', borderRadius: '8px', border: 'none', background: '#059669', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', whiteSpace: 'nowrap' },
 
-  // Modal
   modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' },
-  modalCard:  { background: '#fff', borderRadius: '16px', width: '100%', maxWidth: '760px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' },
+  modalCard:  { background: '#fff', borderRadius: '16px', width: '100%', maxWidth: '780px', maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' },
   modalHeader:{ padding: '1.25rem 1.5rem 1rem', borderBottom: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
   modalBody:  { padding: '1.25rem 1.5rem', overflowY: 'auto', flex: 1, minHeight: 0 },
   modalFooter:{ padding: '1rem 1.5rem', borderTop: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' },
   closeBtn:   { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '7px', cursor: 'pointer', color: '#94A3B8' },
 
-  // Stepper
   stepper:    { display: 'flex', alignItems: 'center', padding: '0 1.5rem 1rem', gap: '0.25rem' },
   stepDot:    { width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.82rem', flexShrink: 0, transition: 'all 0.2s' },
   stepLine:   { flex: 1, height: '2px', transition: 'background 0.2s' },
-  stepTitle:  { fontWeight: 700, color: '#0F172A', fontSize: '1rem', marginBottom: '1rem' },
+  stepTitle:  { fontWeight: 700, color: '#0F172A', fontSize: '1rem' },
 
-  // Form
   formGrid:   { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.875rem' },
   formGroup:  { display: 'flex', flexDirection: 'column', gap: '0.35rem' },
   label:      { color: '#374151', fontSize: '0.8rem', fontWeight: 600 },
   input:      { padding: '0.6rem 0.75rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#0F172A', fontSize: '0.875rem', outline: 'none' },
 
-  // Media picker
-  mediaGrid:  { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '0.75rem' },
+  mediaGrid:  { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.625rem' },
   mediaCard:  { position: 'relative', background: '#fff', borderRadius: '10px', cursor: 'pointer', overflow: 'hidden', border: '2px solid transparent', transition: 'all 0.15s' },
   mediaThumb: { position: 'relative', width: '100%', aspectRatio: '16/9', background: '#0F172A', overflow: 'hidden' },
   playOverlay:{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' },
-  selectedTick:{ position: 'absolute', top: '8px', right: '8px', width: '22px', height: '22px', background: '#2563EB', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 6px rgba(37,99,235,0.5)' },
+  selectedTick:{ position: 'absolute', top: '6px', right: '6px', width: '20px', height: '20px', background: '#2563EB', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 6px rgba(37,99,235,0.5)' },
 
-  // Tree
-  tree:       { display: 'flex', flexDirection: 'column', gap: '0.5rem' },
-  treeNode:   { background: '#FAFBFC', border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'hidden' },
-  treeScreen: { display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.7rem 0.875rem', width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' },
-  treeScreenName: { fontSize: '0.9rem', fontWeight: 700, color: '#0F172A' },
-  treeProgTag:{ fontSize: '0.7rem', color: '#64748B', background: '#F1F5F9', padding: '2px 8px', borderRadius: '10px', marginLeft: 'auto' },
-  treeZones:  { padding: '0 0.5rem 0.5rem 2.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' },
-  treeZone:   { display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '7px', transition: 'background 0.15s' },
-  freqInput:  { padding: '0.25rem 0.4rem', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', color: '#0F172A', fontSize: '0.8rem', outline: 'none', width: '54px', textAlign: 'center' },
+  assignCard: { background: '#FAFBFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '0.875rem' },
+  assignHeader:{ display: 'flex', alignItems: 'center', gap: '0.75rem' },
+  assignThumb:{ width: '52px', height: '36px', borderRadius: '6px', overflow: 'hidden', background: '#0F172A', flexShrink: 0 },
+  assignRemove:{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '26px', borderRadius: '6px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', flexShrink: 0 },
+  zonePickList:{ display: 'flex', flexDirection: 'column', gap: '0.2rem', maxHeight: '200px', overflowY: 'auto', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.375rem' },
+  zonePickRow:{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.5rem', borderRadius: '6px', transition: 'background 0.15s' },
+  freqInput:  { padding: '0.2rem 0.35rem', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', color: '#0F172A', fontSize: '0.8rem', outline: 'none', width: '50px', textAlign: 'center' },
 
-  // Summary
-  summaryGrid:{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: '1.25rem', alignItems: 'flex-start' },
-  summaryPreview:{ width: '100%', aspectRatio: '16/9', borderRadius: '10px', overflow: 'hidden', background: '#0F172A' },
+  summaryInfo:{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem', background: '#F8FAFC', border: '1px solid #F1F5F9', borderRadius: '12px', padding: '1rem 1.25rem' },
   summaryLabel:{ fontSize: '0.7rem', color: '#94A3B8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
-  summaryValue:{ fontSize: '1rem', fontWeight: 700, color: '#0F172A', marginTop: '2px' },
+  summaryValue:{ fontSize: '0.95rem', fontWeight: 700, color: '#0F172A', marginTop: '2px' },
   summarySub: { fontSize: '0.85rem', color: '#64748B', marginTop: '2px' },
-  zoneListSummary:{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.5rem', maxHeight: '220px', overflowY: 'auto' },
-  zoneListItem:{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', background: '#F8FAFC', borderRadius: '7px', fontSize: '0.85rem' },
+  summaryMediaCard:{ display: 'flex', gap: '0.75rem', background: '#FAFBFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.75rem' },
+  zoneChip:   { display: 'inline-flex', alignItems: 'center', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '20px', padding: '2px 4px 2px 9px', fontSize: '0.72rem', color: '#475569', fontWeight: 500 },
 
   emptyMsg:   { color: '#94A3B8', fontSize: '0.9rem', padding: '2rem', textAlign: 'center' as const, gridColumn: '1 / -1' },
   errorBox:   { display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0 1.5rem', padding: '0.7rem 0.875rem', background: '#FFF5F5', border: '1px solid #FECACA', borderRadius: '8px', color: '#EF4444', fontSize: '0.82rem' },
 
-  // Campaign cards
   campCard:   { background: '#fff', border: '1px solid #E2E8F0', borderRadius: '14px', overflow: 'hidden', display: 'flex', flexDirection: 'column' },
   campThumb:  { position: 'relative', width: '100%', aspectRatio: '16/9', background: '#0F172A', overflow: 'hidden' },
   campName:   { fontSize: '1rem', fontWeight: 700, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -660,7 +703,7 @@ const s: Record<string, React.CSSProperties> = {
   campStatVal:{ fontSize: '1.15rem', fontWeight: 700, color: '#0F172A' },
   campStatLbl:{ fontSize: '0.68rem', color: '#94A3B8', fontWeight: 500 },
   campActions:{ display: 'flex', gap: '0.5rem', marginTop: '0.875rem' },
-  btnAct:     { display: 'flex', alignItems: 'center', gap: '0.35rem', flex: 1, justifyContent: 'center', padding: '0.5rem 0.75rem', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#2563EB', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer' },
+  btnAct:     { display: 'flex', alignItems: 'center', gap: '0.3rem', flex: 1, justifyContent: 'center', padding: '0.5rem 0.5rem', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#2563EB', fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer' },
   btnDel:     { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', flexShrink: 0 },
 
   emptyBox:   { background: '#fff', border: '1px dashed #E2E8F0', borderRadius: '14px', padding: '4rem', textAlign: 'center' },
