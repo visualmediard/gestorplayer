@@ -96,12 +96,12 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   }
 
   async function loadEntries(zoneId: string) {
-    const { data: items } = await supabase.from('media_content').select('*').eq('zone_id', zoneId).is('sub_playlist_id', null).order('sort_order')
+    const { data: items } = await supabase.from('media_content').select('*').eq('zone_id', zoneId).is('sub_playlist_id', null).is('archived_at', null).order('sort_order')
     const { data: subs } = await supabase.from('sub_playlists').select('*').eq('zone_id', zoneId).order('sort_order')
     const subItems: Record<string, MediaItem[]> = {}
     if (subs) {
       for (const sub of subs) {
-        const { data: si } = await supabase.from('media_content').select('*').eq('sub_playlist_id', sub.id).order('sort_order')
+        const { data: si } = await supabase.from('media_content').select('*').eq('sub_playlist_id', sub.id).is('archived_at', null).order('sort_order')
         subItems[sub.id] = (si ?? []) as MediaItem[]
       }
     }
@@ -123,7 +123,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
 
   async function loadLibrary() {
     setLibraryLoading(true)
-    const { data } = await supabase.from('media_content').select('*').order('created_at', { ascending: false })
+    const { data } = await supabase.from('media_content').select('*').is('archived_at', null).order('created_at', { ascending: false })
     if (data) setLibrary(data as MediaItem[])
     setLibraryLoading(false)
   }

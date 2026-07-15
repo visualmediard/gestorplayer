@@ -70,7 +70,7 @@ export default function Campaigns() {
     const [{ data: campData }, { data: statData }, { data: mediaData }, { data: screenData }, { data: progData }, { data: zoneData }] = await Promise.all([
       supabase.from('campaigns').select('*').eq('organization_id', orgId).is('deleted_at', null).order('created_at', { ascending: false }),
       supabase.from('campaign_stats').select('*').eq('organization_id', orgId),
-      supabase.from('media_content').select('id, name, type, storage_path, duration_seconds').is('campaign_id', null).is('zone_id', null).order('created_at', { ascending: false }),
+      supabase.from('media_content').select('id, name, type, storage_path, duration_seconds').is('campaign_id', null).is('zone_id', null).is('archived_at', null).order('created_at', { ascending: false }),
       supabase.from('screens').select('id, name, current_program_id').eq('organization_id', orgId),
       supabase.from('programs').select('id, name').eq('organization_id', orgId),
       supabase.from('zones').select('id, name, program_id'),
@@ -84,6 +84,7 @@ export default function Campaigns() {
       .from('media_content')
       .select('id, name, type, storage_path, duration_seconds, zone_id, campaign_id, zones!inner(program_id, programs!inner(organization_id))')
       .is('campaign_id', null)
+      .is('archived_at', null)
     const orgMedia = (allOrgMedia ?? []).filter((m: any) => m.zones?.programs?.organization_id === orgId)
     const merged = [...(mediaData ?? []), ...orgMedia.map((m: any) => ({ id: m.id, name: m.name, type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds }))]
     const seen = new Set<string>()
@@ -245,9 +246,10 @@ export default function Campaigns() {
   }
 
   async function deleteCampaign(id: string, name: string) {
-    if (!confirm(`¿Eliminar la campaña "${name}"? Se quitará su contenido de las zonas.`)) return
+    if (!confirm(`¿Eliminar la campaña "${name}"?\n\nSe quitará su contenido de las zonas, pero sus reproducciones permanecerán en Estadísticas hasta que las elimines definitivamente desde allí.`)) return
     await supabase.from('campaigns').update({ deleted_at: new Date().toISOString(), status: 'ended' }).eq('id', id)
-    await supabase.from('media_content').delete().eq('campaign_id', id)
+    // Soft delete the injected media so campaign stats survive in Estadísticas.
+    await supabase.from('media_content').update({ archived_at: new Date().toISOString() }).eq('campaign_id', id)
     load()
   }
 

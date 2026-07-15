@@ -27,7 +27,7 @@ export default function Content() {
 
   async function load() {
     setLoading(true)
-    const { data: mediaData } = await supabase.from('media_content').select('*').is('campaign_id', null).order('created_at', { ascending: false })
+    const { data: mediaData } = await supabase.from('media_content').select('*').is('campaign_id', null).is('archived_at', null).order('created_at', { ascending: false })
     const { data: zoneData } = await supabase.from('zones').select('id, name, programs(name)')
     if (mediaData) setItems(mediaData as MediaItem[])
     if (zoneData) setZones(zoneData.map((z: any) => ({ id: z.id, name: z.name, program_name: z.programs?.name ?? '' })))
@@ -64,9 +64,9 @@ export default function Content() {
   }
 
   async function handleDelete(item: MediaItem) {
-    if (!confirm(`¿Eliminar "${item.name}"?`)) return
-    if (item.storage_path) await supabase.storage.from('media').remove([item.storage_path])
-    await supabase.from('media_content').delete().eq('id', item.id)
+    if (!confirm(`¿Eliminar "${item.name}" de la biblioteca?\n\nPermanecerá en Estadísticas hasta que lo elimines definitivamente desde allí.`)) return
+    // Soft delete: keep the row so its statistics survive; only hide it here.
+    await supabase.from('media_content').update({ archived_at: new Date().toISOString() }).eq('id', item.id)
     load()
   }
 

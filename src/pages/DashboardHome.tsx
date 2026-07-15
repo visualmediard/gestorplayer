@@ -39,7 +39,7 @@ export default function DashboardHome({
     const orgId = profileData?.organization_id
 
     const [{ data: mediaData }, { data: progData }, { data: screenData }] = await Promise.all([
-      supabase.from('media_content').select('id, name, type, storage_path, created_at').order('created_at', { ascending: false }).limit(8),
+      supabase.from('media_content').select('id, name, type, storage_path, created_at').is('archived_at', null).order('created_at', { ascending: false }).limit(8),
       supabase.from('programs').select('id, name, thumbnail_url, published_at').eq('organization_id', orgId ?? '').order('created_at', { ascending: false }).limit(8),
       supabase.from('screens').select('id, name, last_heartbeat, current_program_id, is_active').eq('organization_id', orgId ?? '').order('name'),
     ])

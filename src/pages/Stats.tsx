@@ -14,6 +14,7 @@ export default function Stats() {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [liveCount, setLiveCount] = useState(0)
   const [search, setSearch] = useState('')
+  const [deleting, setDeleting] = useState<string | null>(null)
   const channelRef = useRef<any>(null)
 
   async function load(silent = false) {
@@ -43,6 +44,20 @@ export default function Stats() {
     } catch {
       return null
     }
+  }
+
+  async function handleDeleteStat(row: Stat) {
+    if (!confirm(`¿Eliminar definitivamente "${row.name}" de las estadísticas?\n\nSe borrará su registro de reproducciones. Esta acción no se puede deshacer.`)) return
+    setDeleting(row.content_id)
+    // Hard delete the media_content row (removes it from the stats view)
+    await supabase.from('media_content').delete().eq('id', row.content_id)
+    // Remove the file only if no other content still references it (campaigns reuse paths)
+    if (row.storage_path) {
+      const { data: others } = await supabase.from('media_content').select('id').eq('storage_path', row.storage_path).limit(1)
+      if (!others || others.length === 0) await supabase.storage.from('media').remove([row.storage_path])
+    }
+    setDeleting(null)
+    load()
   }
 
   const filtered = stats.filter(r =>
@@ -92,8 +107,8 @@ export default function Stats() {
           <table style={s.table}>
             <thead>
               <tr>
-                {['Contenido', 'Tipo', 'Programa → Zona', 'Hoy', 'Total acumulado', 'Última reproducción'].map(h => (
-                  <th key={h} style={s.th}>{h}</th>
+                {['Contenido', 'Tipo', 'Programa → Zona', 'Hoy', 'Total acumulado', 'Última reproducción', ''].map((h, i) => (
+                  <th key={i} style={s.th}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -133,6 +148,15 @@ export default function Stats() {
                     <td style={{ ...s.td, color: '#10B981', fontWeight: 700, fontSize: '1rem' }}>{row.total_reproductions.toLocaleString()}</td>
                     <td style={{ ...s.td, color: '#94A3B8', fontSize: '0.8rem' }}>
                       {row.last_reproduction ? new Date(row.last_reproduction).toLocaleString('es-DO') : '—'}
+                    </td>
+                    <td style={{ ...s.td, textAlign: 'right' }}>
+                      <button
+                        onClick={() => handleDeleteStat(row)}
+                        disabled={deleting === row.content_id}
+                        title="Eliminar de estadísticas"
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', opacity: deleting === row.content_id ? 0.5 : 1 }}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                      </button>
                     </td>
                   </tr>
                 )
