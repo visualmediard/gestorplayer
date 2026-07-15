@@ -231,7 +231,7 @@ export default function Campaigns() {
       if (!m) continue
       for (const z of a.zones) {
         const { error: insErr } = await supabase.from('media_content').insert({
-          zone_id: z.zone_id, name: w1.name.trim(), type: m.type,
+          zone_id: z.zone_id, name: `Campaña ${w1.name.trim()}`, type: m.type,
           storage_path: m.storage_path, duration_seconds: m.duration_seconds,
           uploaded_by: profile?.id, campaign_id: campId,
           daily_frequency: z.frequency, is_unlimited: false, expires_at: endsAt,

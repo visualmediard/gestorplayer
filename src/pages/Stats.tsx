@@ -112,7 +112,15 @@ export default function Stats() {
                             : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/></svg>
                           }
                         </div>
-                        <span style={{ color: '#0F172A', fontWeight: 500, fontSize: '0.875rem' }}>{row.name}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                          <span style={{ color: '#0F172A', fontWeight: 500, fontSize: '0.875rem' }}>{row.name}</span>
+                          {row.name.startsWith('Campaña ') && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: '#EFF6FF', color: '#2563EB', fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', border: '1px solid #BFDBFE', flexShrink: 0 }}>
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+                              Campaña
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td style={s.td}>
