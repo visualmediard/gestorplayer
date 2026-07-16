@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
+import ScreenStage from '../components/ScreenStage'
 
 type Screen = {
   id: string; name: string; location: string | null
@@ -63,6 +65,7 @@ export default function Screens() {
   const [editingHours, setEditingHours] = useState<string | null>(null)
   const [hoursValue, setHoursValue] = useState(20)
   const [copied, setCopied] = useState<string | null>(null)
+  const [preview, setPreview] = useState<Screen | null>(null)
   const [search, setSearch] = useState('')
 
   async function load() {
@@ -106,9 +109,6 @@ export default function Screens() {
     setShowForm(false); load()
   }
 
-  async function handleToggle(id: string, current: boolean) {
-    await supabase.from('screens').update({ is_active: !current }).eq('id', id); load()
-  }
 
   async function handleDelete(id: string) {
     if (!confirm('¿Eliminar esta pantalla?')) return
@@ -264,7 +264,12 @@ export default function Screens() {
 
                 <div style={s.cardActions}>
                   <button style={s.btnAct} onClick={() => { setAssigningScreen(sc.id); setSelectedProgram(sc.current_program_id ?? '') }}>Asignar programa</button>
-                  <button style={s.btnAct} onClick={() => handleToggle(sc.id, sc.is_active)}>{sc.is_active ? 'Desactivar' : 'Activar'}</button>
+                  <button style={s.btnAct} onClick={() => setPreview(sc)} title="Ver una captura de lo que se está reproduciendo">
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                      Captura
+                    </span>
+                  </button>
                   <button style={s.btnDel} onClick={() => handleDelete(sc.id)}>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                     Eliminar
@@ -274,6 +279,37 @@ export default function Screens() {
             )
           })}
         </div>
+      )}
+
+      {/* Capture / live preview modal */}
+      {preview && createPortal(
+        <div className="backdrop" style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setPreview(null) }}>
+          <div className="modal-pop" style={s.modalCard}>
+            <div style={s.modalHeader}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: getStatus(preview.last_heartbeat, preview.current_program_id).dot, flexShrink: 0 }} />
+                <span style={{ fontWeight: 700, color: '#0F172A', fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preview.name}</span>
+                <span style={{ color: '#94A3B8', fontSize: '0.78rem', flexShrink: 0 }}>· {preview.width}×{preview.height}</span>
+              </div>
+              <button onClick={() => setPreview(null)} style={s.modalClose} aria-label="Cerrar">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div style={{ position: 'relative', width: '100%', aspectRatio: `${preview.width} / ${preview.height}`, background: '#000', maxHeight: '70vh' }}>
+              {preview.current_program_id
+                ? <ScreenStage client={supabase} programId={preview.current_program_id} />
+                : <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', color: 'rgba(255,255,255,0.6)' }}>
+                    <div style={{ fontSize: '2rem' }}>📺</div>
+                    <span style={{ fontSize: '0.85rem' }}>Sin programa asignado</span>
+                  </div>
+              }
+            </div>
+            <div style={{ padding: '0.6rem 1rem', color: '#94A3B8', fontSize: '0.72rem', textAlign: 'center' }}>
+              Vista de lo que se está reproduciendo · muestra el contenido asignado a esta pantalla
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   )
@@ -285,6 +321,10 @@ const s: Record<string, React.CSSProperties> = {
   sub: { color: '#64748B', fontSize: '0.875rem', marginTop: '0.2rem' },
   btnPrimary: { display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.1rem', borderRadius: '8px', border: 'none', background: '#3B82F6', color: '#fff', fontWeight: 600, fontSize: '0.875rem', whiteSpace: 'nowrap', cursor: 'pointer' },
   btnOutline: { padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontWeight: 500, fontSize: '0.875rem', cursor: 'pointer' },
+  modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' },
+  modalCard: { background: '#fff', borderRadius: '14px', width: '100%', maxWidth: '640px', overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' },
+  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '0.75rem 1rem', borderBottom: '1px solid #F1F5F9' },
+  modalClose: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#64748B', cursor: 'pointer', flexShrink: 0 },
   formCard: { background: '#fff', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '1.5rem', marginBottom: '1.75rem', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' },
   formTitle: { fontWeight: 700, color: '#0F172A', marginBottom: '1rem', fontSize: '1rem' },
   formRow: { display: 'flex', gap: '1.25rem', flexWrap: 'wrap', marginBottom: '1rem' },
