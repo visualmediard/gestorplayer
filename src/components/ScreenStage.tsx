@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 // Reusable playback engine: loads a program's zones + playlists and renders
-// them scaled to fit its parent (letterboxed), cycling each zone's content.
-// Used both by the full-screen Player and by the "Captura" preview modal.
+// them filling the whole surface, with each zone placed by percentage of the
+// program canvas — so the program's (0,0) is the top-left corner and every
+// zone lands exactly where it was designed (same as the Android player).
 
 type Program = { id: string; name: string; width: number; height: number }
 type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string }
@@ -31,8 +32,8 @@ function UrlTimer({ ms, onDone }: { ms: number; onDone: () => void }) {
   return null
 }
 
-function ZonePlayer({ z, scale, pub, onPlay }: {
-  z: ZoneData; scale: number
+function ZonePlayer({ z, program, pub, onPlay }: {
+  z: ZoneData; program: Program
   pub: (p: string) => string
   onPlay?: (contentId: string, zoneId: string) => void
 }) {
@@ -40,15 +41,21 @@ function ZonePlayer({ z, scale, pub, onPlay }: {
   const subPtr = useRef<Record<number, number>>({})
   const { zone, entries } = z
 
+  // Position by percentage of the program canvas → (0,0) is the top-left
+  // corner and zones fill their exact designed area.
   const style: React.CSSProperties = {
-    position: 'absolute', left: zone.x * scale, top: zone.y * scale,
-    width: zone.width * scale, height: zone.height * scale,
-    background: zone.background_color || '#000', overflow: 'hidden', boxSizing: 'border-box',
+    position: 'absolute',
+    left: `${(zone.x / program.width) * 100}%`,
+    top: `${(zone.y / program.height) * 100}%`,
+    width: `${(zone.width / program.width) * 100}%`,
+    height: `${(zone.height / program.height) * 100}%`,
+    background: zone.background_color || '#000',
+    overflow: 'hidden', boxSizing: 'border-box',
   }
 
   if (entries.length === 0) {
     return <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: `${Math.max(9, 13 * scale)}px` }}>{zone.name}</span>
+      <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.9rem' }}>{zone.name}</span>
     </div>
   }
 
@@ -92,12 +99,9 @@ export default function ScreenStage({ client, programId, onPlay, onEmpty }: {
 }) {
   const [program, setProgram] = useState<Program | null>(null)
   const [zones, setZones] = useState<ZoneData[]>([])
-  const [box, setBox] = useState({ w: 0, h: 0 })
-  const ref = useRef<HTMLDivElement>(null)
 
   const pub = (path: string) => path ? client.storage.from('media').getPublicUrl(path).data.publicUrl : ''
 
-  // Load program + zones + playlists
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -140,24 +144,11 @@ export default function ScreenStage({ client, programId, onPlay, onEmpty }: {
     return () => { cancelled = true }
   }, [programId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Measure container for scaling
-  useEffect(() => {
-    const measure = () => { if (ref.current) setBox({ w: ref.current.clientWidth, h: ref.current.clientHeight }) }
-    measure()
-    const ro = new ResizeObserver(measure)
-    if (ref.current) ro.observe(ref.current)
-    return () => ro.disconnect()
-  }, [])
-
-  const scale = program && box.w && box.h ? Math.min(box.w / program.width, box.h / program.height) : 0
-
+  // The program canvas fills the whole surface (edge to edge); (0,0) is the
+  // top-left corner. Areas not covered by a zone stay black.
   return (
-    <div ref={ref} style={{ position: 'absolute', inset: 0, background: '#000', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      {program && scale > 0 && (
-        <div style={{ position: 'relative', width: program.width * scale, height: program.height * scale, background: '#000' }}>
-          {zones.map(z => <ZonePlayer key={z.zone.id} z={z} scale={scale} pub={pub} onPlay={onPlay} />)}
-        </div>
-      )}
+    <div style={{ position: 'absolute', inset: 0, background: '#000', overflow: 'hidden' }}>
+      {program && zones.map(z => <ZonePlayer key={z.zone.id} z={z} program={program} pub={pub} onPlay={onPlay} />)}
     </div>
   )
 }
