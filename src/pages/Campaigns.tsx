@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
+import { uploadWithProgress } from '../lib/uploadWithProgress'
 import { useAuth } from '../auth/AuthContext'
 import CampaignReport from './CampaignReport'
 
@@ -162,10 +163,7 @@ export default function Campaigns() {
     const ext = uploadFile.name.split('.').pop()
     const path = `library/${Date.now()}.${ext}`
     const isVideo = uploadFile.type.startsWith('video/')
-    const { error: storageError } = await supabase.storage.from('media').upload(path, uploadFile, {
-      upsert: false,
-      onUploadProgress: (p: any) => setUploadProgress(Math.round((p.loaded / p.total) * 100)),
-    } as any)
+    const { error: storageError } = await uploadWithProgress('media', path, uploadFile, setUploadProgress)
     if (storageError) { setWizardError('Error al subir: ' + storageError.message); setUploading(false); return }
     const { data: inserted, error: insertError } = await supabase.from('media_content').insert({
       zone_id: null, name: uploadFile.name, type: isVideo ? 'video' : 'image',
@@ -205,10 +203,7 @@ export default function Campaigns() {
     const ext = file.name.split('.').pop()
     const path = `library/${Date.now()}_replace.${ext}`
     const isVideo = file.type.startsWith('video/')
-    const { error: storageError } = await supabase.storage.from('media').upload(path, file, {
-      upsert: false,
-      onUploadProgress: (p: any) => setReplaceProgress(Math.round((p.loaded / p.total) * 100)),
-    } as any)
+    const { error: storageError } = await uploadWithProgress('media', path, file, setReplaceProgress)
     if (storageError) { alert('Error: ' + storageError.message); setReplaceUploading(false); return }
     if (m.storage_path) await supabase.storage.from('media').remove([m.storage_path])
     await supabase.from('media_content').update({

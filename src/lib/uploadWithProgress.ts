@@ -1,46 +1,56 @@
 import { supabase } from './supabase'
 
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+/**
+ * Uploads a file to Supabase Storage using XMLHttpRequest so the real upload
+ * progress can be reported. The supabase-js client uses fetch under the hood,
+ * which does NOT emit upload progress events, so its `onUploadProgress` option
+ * never fires and the bar stays at 0% until completion.
+ *
+ * Returns an object shaped like the supabase-js result ({ error }) so callers
+ * can swap it in with minimal changes.
+ */
 export async function uploadWithProgress(
+  bucket: string,
   path: string,
   file: File,
-  onProgress: (pct: number) => void,
+  onProgress?: (percent: number) => void,
+  opts?: { upsert?: boolean },
 ): Promise<{ error: { message: string } | null }> {
-  const { data: { session } } = await supabase.auth.getSession()
-  const token = session?.access_token
-  if (!token) return { error: { message: 'Sesión no válida' } }
-
-  const baseUrl = import.meta.env.VITE_SUPABASE_URL
-  const apiKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-  const url = `${baseUrl}/storage/v1/object/media/${path}`
+  const { data: sessionData } = await supabase.auth.getSession()
+  const token = sessionData.session?.access_token ?? SUPABASE_ANON_KEY
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/')
+  const url = `${SUPABASE_URL}/storage/v1/object/${bucket}/${encodedPath}`
 
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest()
-    xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) {
-        onProgress(Math.round((event.loaded / event.total) * 100))
+    xhr.open('POST', url, true)
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.setRequestHeader('apikey', SUPABASE_ANON_KEY)
+    xhr.setRequestHeader('x-upsert', opts?.upsert ? 'true' : 'false')
+    if (file.type) xhr.setRequestHeader('Content-Type', file.type)
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100))
       }
-    })
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve({ error: null })
-      else {
-        let message = 'Error subiendo archivo'
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(100)
+        resolve({ error: null })
+      } else {
+        let message = `Error ${xhr.status} al subir`
         try {
-          const body = JSON.parse(xhr.responseText)
-          message = body.message ?? body.error ?? message
+          const j = JSON.parse(xhr.responseText)
+          message = j.message || j.error || message
         } catch { /* keep default */ }
         resolve({ error: { message } })
       }
-    })
-    xhr.addEventListener('error', () => resolve({ error: { message: 'Error de red al subir archivo' } }))
-
-    xhr.open('POST', url)
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-    xhr.setRequestHeader('apikey', apiKey)
-    xhr.setRequestHeader('x-upsert', 'false')
-
-    const formData = new FormData()
-    formData.append('cacheControl', '3600')
-    formData.append('', file)
-    xhr.send(formData)
+    }
+    xhr.onerror = () => resolve({ error: { message: 'Error de red al subir el archivo' } })
+    xhr.send(file)
   })
 }

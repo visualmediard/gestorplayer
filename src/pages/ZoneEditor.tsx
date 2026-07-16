@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { uploadWithProgress } from '../lib/uploadWithProgress'
 import { useAuth } from '../auth/AuthContext'
 
 type Program = { id: string; name: string; width: number; height: number }
@@ -260,10 +261,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     const ext = file.name.split('.').pop()
     const path = `${selectedZone}/${Date.now()}_replace.${ext}`
     const isVideo = file.type.startsWith('video/')
-    const { error: storageError } = await supabase.storage.from('media').upload(path, file, {
-      upsert: false,
-      onUploadProgress: (p: any) => setReplaceProgress(Math.round((p.loaded / p.total) * 100)),
-    } as any)
+    const { error: storageError } = await uploadWithProgress('media', path, file, setReplaceProgress)
     if (storageError) { alert('Error: ' + storageError.message); setReplacing(false); return }
     if (replacingItem.storage_path) await supabase.storage.from('media').remove([replacingItem.storage_path])
     await supabase.from('media_content').update({
@@ -283,7 +281,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     const folder = uploadTarget.type === 'zone' ? uploadTarget.id : `sub_${uploadTarget.id}`
     const path = `${folder}/${Date.now()}.${ext}`
     const isVideo = file.type.startsWith('video/')
-    const { error: storageError } = await supabase.storage.from('media').upload(path, file, { upsert: false, onUploadProgress: (p: any) => setProgress(Math.round((p.loaded / p.total) * 100)) } as any)
+    const { error: storageError } = await uploadWithProgress('media', path, file, setProgress)
     if (storageError) { setError('Error: ' + storageError.message); setUploading(false); return }
     const insertData: any = { name: file.name, type: isVideo ? 'video' : 'image', storage_path: path, duration_seconds: isVideo ? null : duration, uploaded_by: profile?.id, is_unlimited: true, daily_frequency: null }
     if (uploadTarget.type === 'zone') { insertData.zone_id = selectedZone; insertData.sort_order = entries.length; insertData.sub_playlist_id = null }

@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { uploadWithProgress } from '../lib/uploadWithProgress'
 import { useAuth } from '../auth/AuthContext'
 
 type MediaItem = {
@@ -62,10 +63,7 @@ export default function Content() {
     const folder = selectedZone || 'library'
     const path = `${folder}/${Date.now()}.${ext}`
     const isVideo = file.type.startsWith('video/')
-    const { error: storageError } = await supabase.storage.from('media').upload(path, file, {
-      upsert: false,
-      onUploadProgress: (p: any) => setProgress(Math.round((p.loaded / p.total) * 100)),
-    } as any)
+    const { error: storageError } = await uploadWithProgress('media', path, file, setProgress)
     if (storageError) { setError('Error al subir: ' + storageError.message); setUploading(false); return }
     const { error: insertError } = await supabase.from('media_content').insert({
       zone_id: selectedZone || null,
