@@ -10,6 +10,7 @@ import Stats from './pages/Stats'
 import Campaigns from './pages/Campaigns'
 import Sidebar from './components/Sidebar'
 import Pair from './pages/Pair'
+import Player from './pages/Player'
 
 type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns'
 
@@ -220,7 +221,8 @@ const avatarStyle: React.CSSProperties = {
 }
 
 export default function App() {
-  // Ruta pública de emparejamiento — no requiere auth
+  // Rutas públicas — no requieren auth
+  if (window.location.pathname === '/play') return <Player />
   if (window.location.pathname === '/pair') return <Pair />
   return <AuthProvider><Gate /></AuthProvider>
 }
