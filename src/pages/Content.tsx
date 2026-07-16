@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { uploadWithProgress } from '../lib/uploadWithProgress'
+import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { useAuth } from '../auth/AuthContext'
 
 type MediaItem = {
@@ -58,6 +59,8 @@ export default function Content() {
 
   async function handleUpload() {
     if (!file) { setError('Selecciona un archivo.'); return }
+    const tooBig = fileTooLargeMessage(file)
+    if (tooBig) { setError(tooBig); return }
     setUploading(true); setError(null)
     const ext = file.name.split('.').pop()
     const folder = selectedZone || 'library'
@@ -126,8 +129,13 @@ export default function Content() {
               </select>
             </div>
             <div style={s.formGroup}>
-              <label style={s.label}>Archivo (imagen o video)</label>
-              <input ref={fileRef} type="file" accept="image/*,video/*" style={s.input} onChange={e => setFile(e.target.files?.[0] ?? null)} />
+              <label style={s.label}>Archivo (imagen o video) <span style={{ color: '#94A3B8', fontWeight: 400 }}>(máx. {MAX_FILE_MB} MB)</span></label>
+              <input ref={fileRef} type="file" accept="image/*,video/*" style={s.input} onChange={e => {
+                const f = e.target.files?.[0] ?? null
+                const tooBig = f && fileTooLargeMessage(f)
+                if (tooBig) { setError(tooBig); setFile(null); if (fileRef.current) fileRef.current.value = ''; return }
+                setError(null); setFile(f)
+              }} />
             </div>
             {file && !file.type.startsWith('video/') && (
               <div style={s.formGroup}>

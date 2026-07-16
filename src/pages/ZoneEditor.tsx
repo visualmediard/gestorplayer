@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { uploadWithProgress } from '../lib/uploadWithProgress'
+import { fileTooLargeMessage } from '../lib/fileLimit'
 import { useAuth } from '../auth/AuthContext'
 
 type Program = { id: string; name: string; width: number; height: number }
@@ -325,7 +326,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     <div style={{ background: '#F8FAFC', minHeight: '100%' }}>
       {/* Input oculto para reemplazo desde archivo */}
       <input ref={replaceRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
-        onChange={e => { const f = e.target.files?.[0]; if (f && replacingItem) handleReplaceFromFile(f); e.target.value = '' }} />
+        onChange={e => { const f = e.target.files?.[0]; const tooBig = f && fileTooLargeMessage(f); if (tooBig) { alert(tooBig); e.target.value = ''; return } if (f && replacingItem) handleReplaceFromFile(f); e.target.value = '' }} />
 
       <div style={s.topbar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -576,7 +577,12 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                     <button style={{ ...s.btnSm, color: '#2563EB', borderColor: '#BFDBFE' }} onClick={() => { setShowLibrary(true); loadLibrary() }}>📁 Elegir de biblioteca</button>
                   </div>
                   <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                    <input ref={fileRef} type="file" accept="image/*,video/*" style={s.input} onChange={e => setFile(e.target.files?.[0] ?? null)} />
+                    <input ref={fileRef} type="file" accept="image/*,video/*" style={s.input} onChange={e => {
+                      const f = e.target.files?.[0] ?? null
+                      const tooBig = f && fileTooLargeMessage(f)
+                      if (tooBig) { setError(tooBig); setFile(null); e.target.value = ''; return }
+                      setError(null); setFile(f)
+                    }} />
                     {file && !file.type.startsWith('video/') && <input style={{ ...s.input, width: '80px' }} type="number" min={1} max={60} value={duration} onChange={e => setDuration(+e.target.value)} placeholder="seg" />}
                     <button style={{ ...s.btnPrimary, opacity: uploading || !file ? 0.6 : 1 }} onClick={handleUpload} disabled={uploading || !file}>{uploading ? `${progress}%` : 'Subir'}</button>
                     <button style={s.btnOutline} onClick={() => { setUploadTarget(null); setFile(null) }}>✕</button>

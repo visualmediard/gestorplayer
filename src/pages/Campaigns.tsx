@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { uploadWithProgress } from '../lib/uploadWithProgress'
+import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { useAuth } from '../auth/AuthContext'
 import CampaignReport from './CampaignReport'
 
@@ -525,9 +526,9 @@ export default function Campaigns() {
                 <div>
                   {/* Hidden file inputs */}
                   <input ref={uploadRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
-                    onChange={e => { const f = e.target.files?.[0]; if (f) setUploadFile(f); }} />
+                    onChange={e => { const f = e.target.files?.[0]; const tooBig = f && fileTooLargeMessage(f); if (tooBig) { setWizardError(tooBig); e.target.value = ''; return } if (f) { setWizardError(null); setUploadFile(f) } }} />
                   <input ref={replaceRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
-                    onChange={e => { const f = e.target.files?.[0]; if (f) handleWizardReplace(f); e.target.value = '' }} />
+                    onChange={e => { const f = e.target.files?.[0]; const tooBig = f && fileTooLargeMessage(f); if (tooBig) { setWizardError(tooBig); e.target.value = ''; return } if (f) handleWizardReplace(f); e.target.value = '' }} />
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <h4 style={s.stepTitle}>Contenido y zonas</h4>
@@ -545,7 +546,7 @@ export default function Campaigns() {
                   {/* Upload form */}
                   {showUploadForm && (
                     <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.875rem', marginBottom: '0.75rem' }}>
-                      <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0F172A', marginBottom: '0.5rem', display: 'block' }}>Subir nuevo archivo</label>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0F172A', marginBottom: '0.5rem', display: 'block' }}>Subir nuevo archivo <span style={{ color: '#94A3B8', fontWeight: 400 }}>(máx. {MAX_FILE_MB} MB)</span></label>
                       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
                         <button style={s.btnSm} onClick={() => uploadRef.current?.click()}>
                           {uploadFile ? uploadFile.name : 'Seleccionar archivo...'}
