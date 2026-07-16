@@ -106,8 +106,13 @@ export default function Campaigns() {
       .is('archived_at', null)
     const orgMedia = (allOrgMedia ?? []).filter((m: any) => m.zones?.programs?.organization_id === orgId)
     const merged = [...(mediaData ?? []), ...orgMedia.map((m: any) => ({ id: m.id, name: m.name, type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds }))]
+    // Dedup by file: the same video placed in several zones yields several rows
+    // but should appear once in the picker. URLs stay unique per row.
     const seen = new Set<string>()
-    setMedia(merged.filter(m => { if (seen.has(m.id)) return false; seen.add(m.id); return true }) as MediaItem[])
+    setMedia(merged.filter(m => {
+      const key = m.type === 'url' ? `url:${m.id}` : (m.storage_path ? `path:${m.storage_path}` : `id:${m.id}`)
+      if (seen.has(key)) return false; seen.add(key); return true
+    }) as MediaItem[])
 
     // Build screen → program → zones tree
     const nodes: ScreenNode[] = []

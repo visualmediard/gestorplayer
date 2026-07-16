@@ -25,11 +25,30 @@ export default function Content() {
   const [search, setSearch] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // A file can be placed in several zones (each placement is its own row).
+  // The library view shows each unique file once, so identical placements
+  // don't look like duplicates. URLs are unique per row.
+  function dedupKey(m: MediaItem) {
+    if (m.type === 'url') return `url:${m.id}`
+    return m.storage_path ? `path:${m.storage_path}` : `id:${m.id}`
+  }
+
   async function load() {
     setLoading(true)
     const { data: mediaData } = await supabase.from('media_content').select('*').is('campaign_id', null).is('archived_at', null).order('created_at', { ascending: false })
     const { data: zoneData } = await supabase.from('zones').select('id, name, programs(name)')
-    if (mediaData) setItems(mediaData as MediaItem[])
+    if (mediaData) {
+      // Collapse rows that point to the same file into one entry, preferring
+      // the library master (zone_id null) as the representative.
+      const byKey = new Map<string, MediaItem>()
+      for (const row of (mediaData as MediaItem[])) {
+        const key = dedupKey(row)
+        const existing = byKey.get(key)
+        if (!existing) { byKey.set(key, row); continue }
+        if (!row.zone_id && existing.zone_id) byKey.set(key, row) // prefer library master
+      }
+      setItems(Array.from(byKey.values()))
+    }
     if (zoneData) setZones(zoneData.map((z: any) => ({ id: z.id, name: z.name, program_name: z.programs?.name ?? '' })))
     setLoading(false)
   }
@@ -64,9 +83,13 @@ export default function Content() {
   }
 
   async function handleDelete(item: MediaItem) {
-    if (!confirm(`¿Eliminar "${item.name}" de la biblioteca?\n\nPermanecerá en Estadísticas hasta que lo elimines definitivamente desde allí.`)) return
-    // Soft delete: keep the row so its statistics survive; only hide it here.
-    await supabase.from('media_content').update({ archived_at: new Date().toISOString() }).eq('id', item.id)
+    if (!confirm(`¿Eliminar "${item.name}" de la biblioteca?\n\nSe quitará de la biblioteca y de las zonas donde esté, pero permanecerá en Estadísticas hasta que lo elimines definitivamente desde allí.`)) return
+    // Soft delete every placement of this file (rows share the same storage_path)
+    // so it fully disappears from the deduped library; stats survive via archived_at.
+    const now = new Date().toISOString()
+    const q = supabase.from('media_content').update({ archived_at: now }).is('campaign_id', null)
+    if (item.type !== 'url' && item.storage_path) await q.eq('storage_path', item.storage_path)
+    else await q.eq('id', item.id)
     load()
   }
 
