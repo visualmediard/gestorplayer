@@ -231,9 +231,9 @@ export default function Campaigns() {
     })
     // Reconstruct assignments from injected media_content (match by storage_path)
     const { data: rows } = await supabase.from('media_content')
-      .select('storage_path, zone_id, daily_frequency, is_unlimited, sub_playlist_id').eq('campaign_id', camp.id)
+      .select('storage_path, zone_id, daily_frequency, is_unlimited, sub_playlist_id').eq('campaign_id', camp.id).is('archived_at', null)
     const { data: subRows } = await supabase.from('sub_playlists')
-      .select('id, zone_id, name, daily_frequency, is_unlimited').eq('campaign_id', camp.id)
+      .select('id, zone_id, name, daily_frequency, is_unlimited').eq('campaign_id', camp.id).is('archived_at', null)
 
     // Individual media (sub_playlist_id null), grouped by media
     const map = new Map<string, { zones: string[]; frequency: number }>()
@@ -356,10 +356,12 @@ export default function Campaigns() {
         daily_start_time: w1.tStart, daily_end_time: w1.tEnd,
       }).eq('id', editingId)
       if (error) { setWizardError(error.message); setPublishing(false); return }
-      // Remove previous injected media + groups, we re-insert fresh.
-      // media_content first (FK references sub_playlists), then sub_playlists.
-      await supabase.from('media_content').delete().eq('campaign_id', editingId)
-      await supabase.from('sub_playlists').delete().eq('campaign_id', editingId)
+      // Archive the previous placements instead of deleting them, so their
+      // statistics survive; then insert the new set fresh. media_content and
+      // sub_playlists are filtered by archived_at everywhere they're read.
+      const archivedAt = new Date().toISOString()
+      await supabase.from('media_content').update({ archived_at: archivedAt }).eq('campaign_id', editingId).is('archived_at', null)
+      await supabase.from('sub_playlists').update({ archived_at: archivedAt }).eq('campaign_id', editingId).is('archived_at', null)
     } else {
       const { data: camp, error } = await supabase.from('campaigns').insert({
         name: w1.name.trim(), client_name: w1.client.trim(),

@@ -292,9 +292,11 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   }
 
   async function handleDeleteItem(item: MediaItem) {
-    if (!confirm(`¿Quitar "${item.name}"?`)) return
-    if (item.storage_path) await supabase.storage.from('media').remove([item.storage_path])
-    await supabase.from('media_content').delete().eq('id', item.id); loadEntries(selectedZone!)
+    if (!confirm(`¿Quitar "${item.name}" de esta zona?\n\nSeguirá en Estadísticas hasta que lo elimines definitivamente desde allí.`)) return
+    // Soft delete: keep the row (and its file) so statistics survive. The zone
+    // editor and player already filter out archived_at rows.
+    await supabase.from('media_content').update({ archived_at: new Date().toISOString() }).eq('id', item.id)
+    loadEntries(selectedZone!)
   }
 
   async function handleSaveFreq(targetId: string, table: 'media_content' | 'sub_playlists') {
