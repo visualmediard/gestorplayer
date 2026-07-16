@@ -25,6 +25,8 @@ export default function Content() {
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // Real video durations read from each file's metadata (not stored in DB).
+  const [durations, setDurations] = useState<Record<string, number>>({})
   const fileRef = useRef<HTMLInputElement>(null)
 
   // A file can be placed in several zones (each placement is its own row).
@@ -197,7 +199,7 @@ export default function Content() {
                           {item.type === 'image'
                             ? <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                             : item.type === 'video'
-                              ? <video src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted onLoadedMetadata={e => { e.currentTarget.currentTime = 1 }} />
+                              ? <video src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted onLoadedMetadata={e => { const d = e.currentTarget.duration; if (isFinite(d)) setDurations(prev => prev[item.id] === Math.round(d) ? prev : { ...prev, [item.id]: Math.round(d) }); e.currentTarget.currentTime = 1 }} />
                               : <div style={{ width: '100%', height: '100%', background: '#DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>🌐</div>
                           }
                         </div>
@@ -222,7 +224,11 @@ export default function Content() {
                       {zone ? `${zone.program_name} → ${zone.name}` : '—'}
                     </td>
                     <td style={{ ...s.td, color: '#64748B' }}>
-                      {item.type === 'video' ? 'Completo' : item.duration_seconds ? `${item.duration_seconds}s` : '—'}
+                      {item.type === 'video'
+                        ? (durations[item.id] != null ? `${durations[item.id]} seg` : '…')
+                        : item.type === 'image'
+                          ? (item.duration_seconds ? `${item.duration_seconds} seg` : '—')
+                          : '—'}
                     </td>
                     <td style={s.td}>
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
