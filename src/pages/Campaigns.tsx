@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
@@ -24,9 +24,12 @@ type ScreenNode = {
   zones: { id: string; name: string }[]
 }
 type FlatZone = { zone_id: string; zone_name: string; screen_name: string; program_name: string }
-type ZoneFreq = { zone_id: string; frequency: number }
-// One selected media + the zones it's assigned to
-type MediaAssign = { media_id: string; zones: ZoneFreq[] }
+// One selected media + the zones it's assigned to. Frequency is per-media
+// (0 = unlimited), applied to every zone the media is injected into.
+type MediaAssign = { media_id: string; zones: string[]; frequency: number }
+// A named round-robin group: its media rotate one-per-cycle in every zone it's
+// assigned to. Frequency (0 = unlimited) is the group's rotation rate.
+type SubAssign = { uid: string; name: string; media_ids: string[]; zones: string[]; frequency: number }
 
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Borrador', active: 'Activa', paused: 'Pausada', ended: 'Finalizada'
@@ -37,7 +40,7 @@ const STATUS_COLOR: Record<string, { bg: string; color: string; border: string }
   paused: { bg: '#FFF7ED', color: '#D97706', border: '#FDE68A' },
   ended:  { bg: '#FEF2F2', color: '#DC2626', border: '#FECACA' },
 }
-const DEFAULT_FREQ = 24
+const DEFAULT_FREQ = 0 // 0 = ∞ Ilimitado (matches zone editor default)
 
 export default function Campaigns() {
   const { profile } = useAuth()
@@ -56,10 +59,26 @@ export default function Campaigns() {
   const [w1, setW1] = useState({ name: '', client: '', starts: '', ends: '', tStart: '08:00', tEnd: '22:00' })
   const [mediaSearch, setMediaSearch] = useState('')
   const [assigns, setAssigns] = useState<MediaAssign[]>([])
-  // per-media zone search box
+  const [subs, setSubs] = useState<SubAssign[]>([])
+  // zone search box keyed by media_id or sub uid
   const [zoneSearch, setZoneSearch] = useState<Record<string, string>>({})
   const [publishing, setPublishing] = useState(false)
   const [wizardError, setWizardError] = useState<string | null>(null)
+
+  // Upload / URL / Replace in wizard step 2
+  const [showUploadForm, setShowUploadForm] = useState(false)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const uploadRef = useRef<HTMLInputElement>(null)
+  const [showUrlForm, setShowUrlForm] = useState(false)
+  const [urlValue, setUrlValue] = useState('')
+  const [urlName, setUrlName] = useState('')
+  const [urlDuration, setUrlDuration] = useState(30)
+  const [replacingMediaId, setReplacingMediaId] = useState<string | null>(null)
+  const [replaceUploading, setReplaceUploading] = useState(false)
+  const [replaceProgress, setReplaceProgress] = useState(0)
+  const replaceRef = useRef<HTMLInputElement>(null)
 
   async function load() {
     setLoading(true)
@@ -124,8 +143,77 @@ export default function Campaigns() {
     setEditingId(null)
     setStep(1)
     setW1({ name: '', client: '', starts: '', ends: '', tStart: '08:00', tEnd: '22:00' })
-    setMediaSearch(''); setAssigns([]); setZoneSearch({})
+    setMediaSearch(''); setAssigns([]); setSubs([]); setZoneSearch({})
     setWizardError(null)
+    setShowUploadForm(false); setShowUrlForm(false); setUploadFile(null)
+    setUploading(false); setUploadProgress(0)
+    setUrlValue(''); setUrlName(''); setUrlDuration(30)
+    setReplacingMediaId(null); setReplaceUploading(false); setReplaceProgress(0)
+  }
+
+  async function handleWizardUpload() {
+    if (!uploadFile) return
+    setUploading(true); setWizardError(null)
+    const ext = uploadFile.name.split('.').pop()
+    const path = `library/${Date.now()}.${ext}`
+    const isVideo = uploadFile.type.startsWith('video/')
+    const { error: storageError } = await supabase.storage.from('media').upload(path, uploadFile, {
+      upsert: false,
+      onUploadProgress: (p: any) => setUploadProgress(Math.round((p.loaded / p.total) * 100)),
+    } as any)
+    if (storageError) { setWizardError('Error al subir: ' + storageError.message); setUploading(false); return }
+    const { data: inserted, error: insertError } = await supabase.from('media_content').insert({
+      zone_id: null, name: uploadFile.name, type: isVideo ? 'video' : 'image',
+      storage_path: path, duration_seconds: isVideo ? null : 10,
+      uploaded_by: profile?.id,
+    }).select('id, name, type, storage_path, duration_seconds').single()
+    if (insertError) { setWizardError('Error al guardar: ' + insertError.message); setUploading(false); return }
+    if (inserted) {
+      setMedia(prev => [inserted as MediaItem, ...prev])
+      setAssigns(prev => [...prev, { media_id: inserted.id, zones: [] }])
+    }
+    setUploadFile(null); setUploadProgress(0); setUploading(false); setShowUploadForm(false)
+    if (uploadRef.current) uploadRef.current.value = ''
+  }
+
+  async function handleWizardAddUrl() {
+    if (!urlValue.trim()) return
+    setWizardError(null)
+    const { data: inserted, error } = await supabase.from('media_content').insert({
+      zone_id: null, name: urlName.trim() || urlValue.trim(), type: 'url',
+      storage_path: '', url: urlValue.trim(), duration_seconds: urlDuration,
+      uploaded_by: profile?.id,
+    }).select('id, name, type, storage_path, duration_seconds').single()
+    if (error) { setWizardError('Error: ' + error.message); return }
+    if (inserted) {
+      setMedia(prev => [inserted as MediaItem, ...prev])
+      setAssigns(prev => [...prev, { media_id: inserted.id, zones: [] }])
+    }
+    setUrlValue(''); setUrlName(''); setUrlDuration(30); setShowUrlForm(false)
+  }
+
+  async function handleWizardReplace(file: File) {
+    if (!replacingMediaId) return
+    const m = media.find(mm => mm.id === replacingMediaId)
+    if (!m) return
+    setReplaceUploading(true)
+    const ext = file.name.split('.').pop()
+    const path = `library/${Date.now()}_replace.${ext}`
+    const isVideo = file.type.startsWith('video/')
+    const { error: storageError } = await supabase.storage.from('media').upload(path, file, {
+      upsert: false,
+      onUploadProgress: (p: any) => setReplaceProgress(Math.round((p.loaded / p.total) * 100)),
+    } as any)
+    if (storageError) { alert('Error: ' + storageError.message); setReplaceUploading(false); return }
+    if (m.storage_path) await supabase.storage.from('media').remove([m.storage_path])
+    await supabase.from('media_content').update({
+      name: file.name, type: isVideo ? 'video' : 'image',
+      storage_path: path, duration_seconds: isVideo ? null : (m.duration_seconds ?? 10),
+    }).eq('id', replacingMediaId)
+    setMedia(prev => prev.map(mm => mm.id === replacingMediaId
+      ? { ...mm, name: file.name, type: isVideo ? 'video' : 'image', storage_path: path } : mm))
+    setReplaceUploading(false); setReplaceProgress(0); setReplacingMediaId(null)
+    if (replaceRef.current) replaceRef.current.value = ''
   }
 
   function openCreate() { resetWizard(); setWizardOpen(true) }
@@ -143,16 +231,42 @@ export default function Campaigns() {
     })
     // Reconstruct assignments from injected media_content (match by storage_path)
     const { data: rows } = await supabase.from('media_content')
-      .select('storage_path, zone_id, daily_frequency').eq('campaign_id', camp.id)
-    const map = new Map<string, ZoneFreq[]>()
+      .select('storage_path, zone_id, daily_frequency, is_unlimited, sub_playlist_id').eq('campaign_id', camp.id)
+    const { data: subRows } = await supabase.from('sub_playlists')
+      .select('id, zone_id, name, daily_frequency, is_unlimited').eq('campaign_id', camp.id)
+
+    // Individual media (sub_playlist_id null), grouped by media
+    const map = new Map<string, { zones: string[]; frequency: number }>()
     for (const row of (rows ?? [])) {
+      if (row.sub_playlist_id) continue
       const m = media.find(mm => mm.storage_path === row.storage_path)
       if (!m || !row.zone_id) continue
-      const arr = map.get(m.id) ?? []
-      arr.push({ zone_id: row.zone_id, frequency: row.daily_frequency ?? DEFAULT_FREQ })
-      map.set(m.id, arr)
+      const entry = map.get(m.id) ?? { zones: [], frequency: row.is_unlimited ? 0 : (row.daily_frequency ?? DEFAULT_FREQ) }
+      if (!entry.zones.includes(row.zone_id)) entry.zones.push(row.zone_id)
+      map.set(m.id, entry)
     }
-    setAssigns(Array.from(map.entries()).map(([media_id, zones]) => ({ media_id, zones })))
+    setAssigns(Array.from(map.entries()).map(([media_id, v]) => ({ media_id, zones: v.zones, frequency: v.frequency })))
+
+    // Sub-playlists: one sub_playlists row per (group, zone) sharing a name.
+    // Group them back by name to rebuild a single SubAssign spanning zones.
+    const subById = new Map<string, { name: string; zone_id: string; frequency: number }>()
+    for (const sr of (subRows ?? [])) {
+      subById.set(sr.id, { name: sr.name ?? '', zone_id: sr.zone_id, frequency: sr.is_unlimited ? 0 : (sr.daily_frequency ?? 0) })
+    }
+    const groups = new Map<string, SubAssign>()
+    for (const [subId, meta] of subById.entries()) {
+      const key = meta.name
+      const g = groups.get(key) ?? { uid: `sub_${key}_${Date.now()}`, name: meta.name, media_ids: [], zones: [], frequency: meta.frequency }
+      if (!g.zones.includes(meta.zone_id)) g.zones.push(meta.zone_id)
+      // media in this sub_playlists row
+      for (const row of (rows ?? [])) {
+        if (row.sub_playlist_id !== subId) continue
+        const m = media.find(mm => mm.storage_path === row.storage_path)
+        if (m && !g.media_ids.includes(m.id)) g.media_ids.push(m.id)
+      }
+      groups.set(key, g)
+    }
+    setSubs(Array.from(groups.values()))
     setWizardOpen(true)
   }
 
@@ -166,11 +280,15 @@ export default function Campaigns() {
       if (!w1.tStart || !w1.tEnd) { setWizardError('Los horarios son requeridos.'); return false }
     }
     if (n === 2) {
-      if (assigns.length === 0) { setWizardError('Selecciona al menos un contenido.'); return false }
+      if (assigns.length === 0 && subs.length === 0) { setWizardError('Selecciona al menos un contenido o crea un grupo.'); return false }
       const empty = assigns.find(a => a.zones.length === 0)
       if (empty) {
         const m = getMedia(empty.media_id)
         setWizardError(`"${m?.name ?? 'Un contenido'}" no tiene zonas asignadas.`); return false
+      }
+      const badSub = subs.find(sub => sub.media_ids.length === 0 || sub.zones.length === 0 || !sub.name.trim())
+      if (badSub) {
+        setWizardError(`El grupo "${badSub.name || 'sin nombre'}" necesita un nombre, al menos un contenido y una zona.`); return false
       }
     }
     return true
@@ -182,20 +300,45 @@ export default function Campaigns() {
   function toggleMedia(mediaId: string) {
     setAssigns(prev => prev.find(a => a.media_id === mediaId)
       ? prev.filter(a => a.media_id !== mediaId)
-      : [...prev, { media_id: mediaId, zones: [] }])
+      : [...prev, { media_id: mediaId, zones: [], frequency: DEFAULT_FREQ }])
   }
   function toggleZone(mediaId: string, zoneId: string) {
     setAssigns(prev => prev.map(a => {
       if (a.media_id !== mediaId) return a
-      const has = a.zones.find(z => z.zone_id === zoneId)
-      return { ...a, zones: has ? a.zones.filter(z => z.zone_id !== zoneId) : [...a.zones, { zone_id: zoneId, frequency: DEFAULT_FREQ }] }
+      const has = a.zones.includes(zoneId)
+      return { ...a, zones: has ? a.zones.filter(z => z !== zoneId) : [...a.zones, zoneId] }
     }))
   }
-  function setFreq(mediaId: string, zoneId: string, freq: number) {
+  function setFreq(mediaId: string, freq: number) {
     setAssigns(prev => prev.map(a => a.media_id !== mediaId ? a
-      : { ...a, zones: a.zones.map(z => z.zone_id === zoneId ? { ...z, frequency: Math.max(1, freq) } : z) }))
+      : { ...a, frequency: Math.max(0, freq) }))
   }
+
+  // ── Sub-playlist (round-robin group) helpers ──
+  function addSub() {
+    const uid = `sub_${Date.now()}`
+    setSubs(prev => [...prev, { uid, name: `Grupo ${prev.length + 1}`, media_ids: [], zones: [], frequency: 0 }])
+  }
+  function removeSub(uid: string) { setSubs(prev => prev.filter(s => s.uid !== uid)) }
+  function setSubName(uid: string, name: string) { setSubs(prev => prev.map(s => s.uid === uid ? { ...s, name } : s)) }
+  function setSubFreq(uid: string, freq: number) { setSubs(prev => prev.map(s => s.uid === uid ? { ...s, frequency: Math.max(0, freq) } : s)) }
+  function toggleSubMedia(uid: string, mediaId: string) {
+    setSubs(prev => prev.map(s => {
+      if (s.uid !== uid) return s
+      const has = s.media_ids.includes(mediaId)
+      return { ...s, media_ids: has ? s.media_ids.filter(m => m !== mediaId) : [...s.media_ids, mediaId] }
+    }))
+  }
+  function toggleSubZone(uid: string, zoneId: string) {
+    setSubs(prev => prev.map(s => {
+      if (s.uid !== uid) return s
+      const has = s.zones.includes(zoneId)
+      return { ...s, zones: has ? s.zones.filter(z => z !== zoneId) : [...s.zones, zoneId] }
+    }))
+  }
+
   const totalPairs = assigns.reduce((sum, a) => sum + a.zones.length, 0)
+  const subPairs = subs.reduce((sum, s) => sum + s.zones.length, 0)
 
   async function publish() {
     setPublishing(true); setWizardError(null)
@@ -203,7 +346,7 @@ export default function Campaigns() {
 
     const startsAt = `${w1.starts}T00:00:00`
     const endsAt   = `${w1.ends}T23:59:59`
-    const cover    = assigns[0]?.media_id ?? null
+    const cover    = assigns[0]?.media_id ?? subs.find(s => s.media_ids.length > 0)?.media_ids[0] ?? null
 
     let campId = editingId
     if (editingId) {
@@ -213,8 +356,10 @@ export default function Campaigns() {
         daily_start_time: w1.tStart, daily_end_time: w1.tEnd,
       }).eq('id', editingId)
       if (error) { setWizardError(error.message); setPublishing(false); return }
-      // Remove previous injected media, we re-insert fresh
+      // Remove previous injected media + groups, we re-insert fresh.
+      // media_content first (FK references sub_playlists), then sub_playlists.
       await supabase.from('media_content').delete().eq('campaign_id', editingId)
+      await supabase.from('sub_playlists').delete().eq('campaign_id', editingId)
     } else {
       const { data: camp, error } = await supabase.from('campaigns').insert({
         name: w1.name.trim(), client_name: w1.client.trim(),
@@ -227,18 +372,46 @@ export default function Campaigns() {
       campId = camp.id
     }
 
-    // Insert one media_content row per (media, zone) pair
+    // Insert one media_content row per (media, zone) pair.
+    // Frequency is per-media and applies to every zone it's shown in.
     for (const a of assigns) {
       const m = media.find(mm => mm.id === a.media_id)
       if (!m) continue
-      for (const z of a.zones) {
+      for (const zoneId of a.zones) {
         const { error: insErr } = await supabase.from('media_content').insert({
-          zone_id: z.zone_id, name: `Campaña ${w1.name.trim()}`, type: m.type,
+          zone_id: zoneId, name: `Campaña ${w1.name.trim()}`, type: m.type,
           storage_path: m.storage_path, duration_seconds: m.duration_seconds,
           uploaded_by: profile?.id, campaign_id: campId,
-          daily_frequency: z.frequency, is_unlimited: false, expires_at: endsAt,
+          daily_frequency: a.frequency === 0 ? null : a.frequency,
+          is_unlimited: a.frequency === 0, expires_at: endsAt,
         })
-        if (insErr) console.warn('Insert pair', a.media_id, z.zone_id, insErr)
+        if (insErr) console.warn('Insert pair', a.media_id, zoneId, insErr)
+      }
+    }
+
+    // Sub-playlists (round-robin groups): one sub_playlists row per (group, zone),
+    // then inject the group's media into that sub_playlist (round-robin).
+    for (const sub of subs) {
+      for (const zoneId of sub.zones) {
+        const { data: spRow, error: spErr } = await supabase.from('sub_playlists').insert({
+          zone_id: zoneId, name: sub.name.trim(), sort_order: 0,
+          is_unlimited: sub.frequency === 0,
+          daily_frequency: sub.frequency === 0 ? null : sub.frequency,
+          campaign_id: campId,
+        }).select('id').single()
+        if (spErr || !spRow) { console.warn('Insert sub_playlist', sub.uid, zoneId, spErr); continue }
+        let order = 0
+        for (const mediaId of sub.media_ids) {
+          const m = media.find(mm => mm.id === mediaId)
+          if (!m) continue
+          const { error: insErr } = await supabase.from('media_content').insert({
+            zone_id: zoneId, sub_playlist_id: spRow.id, name: `Campaña ${w1.name.trim()}`,
+            type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds,
+            uploaded_by: profile?.id, campaign_id: campId,
+            is_unlimited: true, daily_frequency: null, sort_order: order++, expires_at: endsAt,
+          })
+          if (insErr) console.warn('Insert sub item', mediaId, zoneId, insErr)
+        }
       }
     }
 
@@ -247,9 +420,12 @@ export default function Campaigns() {
 
   async function deleteCampaign(id: string, name: string) {
     if (!confirm(`¿Eliminar la campaña "${name}"?\n\nSe quitará su contenido de las zonas, pero sus reproducciones permanecerán en Estadísticas hasta que las elimines definitivamente desde allí.`)) return
-    await supabase.from('campaigns').update({ deleted_at: new Date().toISOString(), status: 'ended' }).eq('id', id)
+    const now = new Date().toISOString()
+    await supabase.from('campaigns').update({ deleted_at: now, status: 'ended' }).eq('id', id)
     // Soft delete the injected media so campaign stats survive in Estadísticas.
-    await supabase.from('media_content').update({ archived_at: new Date().toISOString() }).eq('campaign_id', id)
+    await supabase.from('media_content').update({ archived_at: now }).eq('campaign_id', id)
+    // Hide the round-robin groups from the zone editor too.
+    await supabase.from('sub_playlists').update({ archived_at: now }).eq('campaign_id', id)
     load()
   }
 
@@ -345,13 +521,66 @@ export default function Campaigns() {
               {/* ─── PASO 2: Contenido + zonas ─── */}
               {step === 2 && (
                 <div>
+                  {/* Hidden file inputs */}
+                  <input ref={uploadRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) setUploadFile(f); }} />
+                  <input ref={replaceRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleWizardReplace(f); e.target.value = '' }} />
+
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <h4 style={s.stepTitle}>Contenido y zonas</h4>
-                    <div style={s.searchWrap}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                      <input style={{ ...s.searchInput, width: '170px' }} placeholder="Buscar archivo..." value={mediaSearch} onChange={e => setMediaSearch(e.target.value)} />
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button style={s.btnSm} onClick={() => { setShowUploadForm(!showUploadForm); setShowUrlForm(false) }}>+ Video/Imagen</button>
+                      <button style={{ ...s.btnSm, color: '#2563EB', borderColor: '#BFDBFE' }} onClick={() => { setShowUrlForm(!showUrlForm); setShowUploadForm(false) }}>🌐 URL</button>
+                      <button style={{ ...s.btnSm, color: '#D97706', borderColor: '#FDE68A' }} onClick={addSub}>+ Sub-Playlist</button>
+                      <div style={s.searchWrap}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input style={{ ...s.searchInput, width: '140px' }} placeholder="Buscar archivo..." value={mediaSearch} onChange={e => setMediaSearch(e.target.value)} />
+                      </div>
                     </div>
                   </div>
+
+                  {/* Upload form */}
+                  {showUploadForm && (
+                    <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.875rem', marginBottom: '0.75rem' }}>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0F172A', marginBottom: '0.5rem', display: 'block' }}>Subir nuevo archivo</label>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <button style={s.btnSm} onClick={() => uploadRef.current?.click()}>
+                          {uploadFile ? uploadFile.name : 'Seleccionar archivo...'}
+                        </button>
+                        <button style={{ ...s.btnPrimary, padding: '0.35rem 0.75rem', fontSize: '0.8rem', opacity: uploading || !uploadFile ? 0.6 : 1 }}
+                          onClick={handleWizardUpload} disabled={uploading || !uploadFile}>
+                          {uploading ? `${uploadProgress}%` : 'Subir'}
+                        </button>
+                        <button style={{ ...s.btnOutline, padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                          onClick={() => { setShowUploadForm(false); setUploadFile(null) }}>✕</button>
+                      </div>
+                      {uploading && (
+                        <div style={{ marginTop: '0.5rem', height: '4px', background: '#E2E8F0', borderRadius: '999px', overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${uploadProgress}%`, background: '#3B82F6', borderRadius: '999px', transition: 'width 0.2s' }} />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* URL form */}
+                  {showUrlForm && (
+                    <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '10px', padding: '0.875rem', marginBottom: '0.75rem' }}>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#2563EB', marginBottom: '0.5rem', display: 'block' }}>🌐 Agregar URL / Stream</label>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <input style={{ ...s.input, flex: 1, minWidth: '140px', padding: '0.4rem 0.6rem', fontSize: '0.82rem' }} value={urlName} onChange={e => setUrlName(e.target.value)} placeholder="Nombre" />
+                        <input style={{ ...s.input, flex: 2, minWidth: '180px', padding: '0.4rem 0.6rem', fontSize: '0.82rem' }} value={urlValue} onChange={e => setUrlValue(e.target.value)} placeholder="https://..." />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <input type="number" min={5} value={urlDuration} onChange={e => setUrlDuration(+e.target.value)}
+                            style={{ ...s.input, width: '60px', padding: '0.4rem 0.4rem', fontSize: '0.82rem', textAlign: 'center' }} />
+                          <span style={{ fontSize: '0.72rem', color: '#64748B' }}>seg</span>
+                        </div>
+                        <button style={{ ...s.btnPrimary, padding: '0.4rem 0.75rem', fontSize: '0.8rem' }} onClick={handleWizardAddUrl}>Agregar</button>
+                        <button style={{ ...s.btnOutline, padding: '0.4rem 0.6rem', fontSize: '0.8rem' }} onClick={() => setShowUrlForm(false)}>✕</button>
+                      </div>
+                    </div>
+                  )}
+
                   <p style={{ fontSize: '0.8rem', color: '#94A3B8', marginBottom: '0.75rem' }}>
                     Selecciona uno o varios contenidos, y a cada uno asígnale las zonas donde se mostrará.
                   </p>
@@ -359,16 +588,15 @@ export default function Campaigns() {
                   {/* Media gallery (multi-select) */}
                   <div style={s.mediaGrid}>
                     {media.length === 0 ? (
-                      <p style={s.emptyMsg}>No hay contenido en la biblioteca. Sube archivos primero en la sección Contenido.</p>
+                      <p style={s.emptyMsg}>No hay contenido en la biblioteca. Sube archivos con el botón "+ Video/Imagen".</p>
                     ) : (
                       media.filter(m => m.name.toLowerCase().includes(mediaSearch.toLowerCase())).map(item => {
                         const url = getPublicUrl(item.storage_path)
                         const a = assigns.find(x => x.media_id === item.id)
                         const selected = !!a
                         return (
-                          <div key={item.id} onClick={() => toggleMedia(item.id)}
-                            style={{ ...s.mediaCard, border: selected ? '2px solid #2563EB' : '2px solid transparent', boxShadow: selected ? '0 0 0 3px rgba(37,99,235,0.15)' : 'none' }}>
-                            <div style={s.mediaThumb}>
+                          <div key={item.id} style={{ ...s.mediaCard, border: selected ? '2px solid #2563EB' : '2px solid transparent', boxShadow: selected ? '0 0 0 3px rgba(37,99,235,0.15)' : 'none' }}>
+                            <div style={s.mediaThumb} onClick={() => toggleMedia(item.id)}>
                               {item.type === 'image' && <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
                               {item.type === 'video' && (
                                 <>
@@ -378,7 +606,7 @@ export default function Campaigns() {
                               )}
                               {item.type === 'url' && <div style={{ width: '100%', height: '100%', background: '#DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' }}>🌐</div>}
                             </div>
-                            <div style={{ padding: '0.45rem 0.5rem' }}>
+                            <div style={{ padding: '0.45rem 0.5rem' }} onClick={() => toggleMedia(item.id)}>
                               <p style={{ fontSize: '0.72rem', color: '#0F172A', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</p>
                               {selected && (
                                 <p style={{ fontSize: '0.64rem', color: '#2563EB', fontWeight: 600, marginTop: '2px' }}>
@@ -390,6 +618,12 @@ export default function Campaigns() {
                               <div style={s.selectedTick}>
                                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><polyline points="20 6 9 17 4 12"/></svg>
                               </div>
+                            )}
+                            {selected && item.type !== 'url' && (
+                              <button onClick={e => { e.stopPropagation(); setReplacingMediaId(item.id); replaceRef.current?.click() }}
+                                style={{ position: 'absolute', bottom: '4px', right: '4px', background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '4px', color: '#059669', fontSize: '0.6rem', padding: '1px 5px', cursor: 'pointer', zIndex: 2 }}>
+                                {replaceUploading && replacingMediaId === item.id ? `${replaceProgress}%` : '🔄'}
+                              </button>
                             )}
                           </div>
                         )
@@ -430,8 +664,25 @@ export default function Campaigns() {
                                   }
                                 </div>
                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                  <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.name}</p>
-                                  <p style={{ fontSize: '0.72rem', color: a.zones.length ? '#059669' : '#DC2626', fontWeight: 600 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                    <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>{m.name}</p>
+                                    {m.type !== 'url' && (
+                                      <button onClick={() => { setReplacingMediaId(m.id); replaceRef.current?.click() }}
+                                        style={{ background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '4px', color: '#059669', fontSize: '0.65rem', padding: '1px 5px', cursor: 'pointer', flexShrink: 0 }}>
+                                        {replaceUploading && replacingMediaId === m.id ? `${replaceProgress}%` : '🔄 Reemplazar'}
+                                      </button>
+                                    )}
+                                  </div>
+                                  {/* Per-media frequency (0 = ∞ Ilimitado) */}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginTop: '0.3rem', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 500 }}>Repeticiones:</span>
+                                    <input type="number" min={0} max={999} value={a.frequency}
+                                      onChange={e => setFreq(a.media_id, +e.target.value)} style={s.freqInput} title="0 = ∞ Ilimitado" />
+                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, color: a.frequency === 0 ? '#3B82F6' : '#64748B' }}>
+                                      {a.frequency === 0 ? '∞ Ilimitado' : 'veces/día'}
+                                    </span>
+                                  </div>
+                                  <p style={{ fontSize: '0.72rem', color: a.zones.length ? '#059669' : '#DC2626', fontWeight: 600, marginTop: '0.2rem' }}>
                                     {a.zones.length ? `${a.zones.length} ${a.zones.length === 1 ? 'zona asignada' : 'zonas asignadas'}` : 'Sin zonas — asigna al menos una'}
                                   </p>
                                 </div>
@@ -453,23 +704,121 @@ export default function Campaigns() {
                                 {visibleZones.length === 0
                                   ? <p style={{ fontSize: '0.78rem', color: '#94A3B8', padding: '0.5rem', textAlign: 'center' }}>Sin zonas que coincidan.</p>
                                   : visibleZones.map(z => {
-                                    const zf = a.zones.find(x => x.zone_id === z.zone_id)
+                                    const checked = a.zones.includes(z.zone_id)
                                     return (
-                                      <div key={z.zone_id} style={{ ...s.zonePickRow, background: zf ? '#EFF6FF' : 'transparent' }}>
+                                      <div key={z.zone_id} style={{ ...s.zonePickRow, background: checked ? '#EFF6FF' : 'transparent' }}>
                                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flex: 1, minWidth: 0 }}>
-                                          <input type="checkbox" checked={!!zf} onChange={() => toggleZone(a.media_id, z.zone_id)} style={{ accentColor: '#2563EB', width: '15px', height: '15px', flexShrink: 0 }} />
+                                          <input type="checkbox" checked={checked} onChange={() => toggleZone(a.media_id, z.zone_id)} style={{ accentColor: '#2563EB', width: '15px', height: '15px', flexShrink: 0 }} />
                                           <span style={{ fontSize: '1rem', flexShrink: 0 }}>📺</span>
-                                          <span style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: zf ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          <span style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: checked ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                             {z.screen_name} <span style={{ color: '#CBD5E1' }}>→</span> {z.zone_name}
                                           </span>
                                         </label>
-                                        {zf && (
-                                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
-                                            <input type="number" min={1} max={999} value={zf.frequency}
-                                              onChange={e => setFreq(a.media_id, z.zone_id, +e.target.value)} style={s.freqInput} />
-                                            <span style={{ fontSize: '0.7rem', color: '#64748B' }}>/día</span>
+                                      </div>
+                                    )
+                                  })
+                                }
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Sub-playlist (round-robin) groups */}
+                  {subs.length > 0 && (
+                    <div style={{ marginTop: '1.25rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.625rem' }}>
+                        <div style={{ height: '1px', background: '#FDE68A', flex: 1 }} />
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#D97706', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Grupos rotativos · {subPairs} {subPairs === 1 ? 'destino' : 'destinos'}
+                        </span>
+                        <div style={{ height: '1px', background: '#FDE68A', flex: 1 }} />
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {subs.map(sub => {
+                          const q = (zoneSearch[sub.uid] ?? '').toLowerCase()
+                          const visibleZones = flatZones.filter(z =>
+                            z.zone_name.toLowerCase().includes(q) ||
+                            z.screen_name.toLowerCase().includes(q) ||
+                            z.program_name.toLowerCase().includes(q)
+                          )
+                          return (
+                            <div key={sub.uid} style={s.subCard}>
+                              {/* header */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem' }}>
+                                <span style={{ background: '#D97706', color: '#fff', fontSize: '0.62rem', padding: '2px 7px', borderRadius: '4px', fontWeight: 700, flexShrink: 0 }}>SUB</span>
+                                <input value={sub.name} onChange={e => setSubName(sub.uid, e.target.value)} placeholder="Nombre del grupo"
+                                  style={{ flex: 1, minWidth: 0, padding: '0.35rem 0.5rem', borderRadius: '6px', border: '1px solid #FDE68A', background: '#fff', color: '#92400E', fontSize: '0.85rem', fontWeight: 700, outline: 'none' }} />
+                                <button onClick={() => removeSub(sub.uid)} style={s.assignRemove} title="Quitar grupo">
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                </button>
+                              </div>
+
+                              {/* group frequency */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.7rem', color: '#92400E', fontWeight: 500 }}>Repeticiones del grupo:</span>
+                                <input type="number" min={0} max={999} value={sub.frequency}
+                                  onChange={e => setSubFreq(sub.uid, +e.target.value)} style={s.freqInput} title="0 = ∞ Ilimitado" />
+                                <span style={{ fontSize: '0.7rem', fontWeight: 600, color: sub.frequency === 0 ? '#D97706' : '#92400E' }}>
+                                  {sub.frequency === 0 ? '∞ Ilimitado' : 'veces/día'}
+                                </span>
+                              </div>
+
+                              {/* group content picker */}
+                              <p style={{ fontSize: '0.7rem', color: '#92400E', fontWeight: 600, marginBottom: '0.35rem' }}>
+                                Contenido del grupo ({sub.media_ids.length}) — se reproducen en rotación
+                              </p>
+                              <div style={{ display: 'flex', gap: '0.4rem', overflowX: 'auto', paddingBottom: '0.35rem', marginBottom: '0.6rem' }}>
+                                {media.length === 0
+                                  ? <p style={{ fontSize: '0.75rem', color: '#94A3B8' }}>Sin contenido en la biblioteca.</p>
+                                  : media.map(item => {
+                                    const inGroup = sub.media_ids.includes(item.id)
+                                    const url = getPublicUrl(item.storage_path)
+                                    return (
+                                      <div key={item.id} onClick={() => toggleSubMedia(sub.uid, item.id)} title={item.name}
+                                        style={{ position: 'relative', flexShrink: 0, width: '64px', cursor: 'pointer' }}>
+                                        <div style={{ width: '64px', height: '40px', borderRadius: '6px', overflow: 'hidden', background: '#0F172A', border: inGroup ? '2px solid #D97706' : '2px solid transparent', boxShadow: inGroup ? '0 0 0 2px rgba(217,119,6,0.2)' : 'none' }}>
+                                          {item.type === 'image' && <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                                          {item.type === 'video' && <video src={url + '#t=1'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted />}
+                                          {item.type === 'url' && <div style={{ width: '100%', height: '100%', background: '#DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🌐</div>}
+                                        </div>
+                                        {inGroup && (
+                                          <div style={{ position: 'absolute', top: '-5px', right: '-5px', width: '16px', height: '16px', background: '#D97706', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                            <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4"><polyline points="20 6 9 17 4 12"/></svg>
                                           </div>
                                         )}
+                                      </div>
+                                    )
+                                  })
+                                }
+                              </div>
+
+                              {/* zone search */}
+                              <div style={{ ...s.searchWrap, marginBottom: '0.5rem', width: '100%' }}>
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                <input style={{ ...s.searchInput, width: '100%' }} placeholder="Buscar zona por nombre, pantalla o programa..."
+                                  value={zoneSearch[sub.uid] ?? ''}
+                                  onChange={e => setZoneSearch({ ...zoneSearch, [sub.uid]: e.target.value })} />
+                              </div>
+
+                              {/* zone list */}
+                              <div style={s.zonePickList}>
+                                {visibleZones.length === 0
+                                  ? <p style={{ fontSize: '0.78rem', color: '#94A3B8', padding: '0.5rem', textAlign: 'center' }}>Sin zonas que coincidan.</p>
+                                  : visibleZones.map(z => {
+                                    const checked = sub.zones.includes(z.zone_id)
+                                    return (
+                                      <div key={z.zone_id} style={{ ...s.zonePickRow, background: checked ? '#FFFBEB' : 'transparent' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flex: 1, minWidth: 0 }}>
+                                          <input type="checkbox" checked={checked} onChange={() => toggleSubZone(sub.uid, z.zone_id)} style={{ accentColor: '#D97706', width: '15px', height: '15px', flexShrink: 0 }} />
+                                          <span style={{ fontSize: '1rem', flexShrink: 0 }}>📺</span>
+                                          <span style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: checked ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                            {z.screen_name} <span style={{ color: '#CBD5E1' }}>→</span> {z.zone_name}
+                                          </span>
+                                        </label>
                                       </div>
                                     )
                                   })
@@ -495,9 +844,9 @@ export default function Campaigns() {
                     <div><p style={s.summaryLabel}>Horario</p><p style={s.summarySub}>{w1.tStart} – {w1.tEnd}</p></div>
                   </div>
 
-                  <p style={{ ...s.summaryLabel, marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+                  {assigns.length > 0 && <p style={{ ...s.summaryLabel, marginTop: '1.25rem', marginBottom: '0.5rem' }}>
                     Contenidos y destinos ({assigns.length} {assigns.length === 1 ? 'contenido' : 'contenidos'} · {totalPairs} {totalPairs === 1 ? 'zona' : 'zonas'})
-                  </p>
+                  </p>}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                     {assigns.map(a => {
                       const m = getMedia(a.media_id)
@@ -513,14 +862,18 @@ export default function Campaigns() {
                             }
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0F172A', marginBottom: '0.35rem' }}>{m.name}</p>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                              <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0F172A' }}>{m.name}</p>
+                              <span style={{ background: a.frequency === 0 ? '#EFF6FF' : '#F1F5F9', color: a.frequency === 0 ? '#2563EB' : '#475569', fontWeight: 700, fontSize: '0.65rem', padding: '2px 8px', borderRadius: '10px' }}>
+                                {a.frequency === 0 ? '∞ Ilimitado' : `${a.frequency}×/día`}
+                              </span>
+                            </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-                              {a.zones.map(z => {
-                                const lbl = zoneLabel(z.zone_id)
+                              {a.zones.map(zoneId => {
+                                const lbl = zoneLabel(zoneId)
                                 return (
-                                  <span key={z.zone_id} style={s.zoneChip}>
+                                  <span key={zoneId} style={s.zoneChip}>
                                     {lbl.screen} → {lbl.zone}
-                                    <span style={{ background: '#2563EB', color: '#fff', fontWeight: 700, fontSize: '0.65rem', padding: '1px 6px', borderRadius: '10px', marginLeft: '4px' }}>{z.frequency}×</span>
                                   </span>
                                 )
                               })}
@@ -530,6 +883,37 @@ export default function Campaigns() {
                       )
                     })}
                   </div>
+
+                  {/* Sub-playlist groups summary */}
+                  {subs.length > 0 && (
+                    <>
+                      <p style={{ ...s.summaryLabel, marginTop: '1.25rem', marginBottom: '0.5rem', color: '#D97706' }}>
+                        Grupos rotativos ({subs.length} {subs.length === 1 ? 'grupo' : 'grupos'} · {subPairs} {subPairs === 1 ? 'zona' : 'zonas'})
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                        {subs.map(sub => (
+                          <div key={sub.uid} style={{ ...s.summaryMediaCard, background: '#FFFBEB', border: '1px solid #FDE68A' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                                <span style={{ background: '#D97706', color: '#fff', fontSize: '0.6rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>SUB</span>
+                                <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#92400E' }}>{sub.name}</p>
+                                <span style={{ background: '#FEF3C7', color: '#92400E', fontWeight: 700, fontSize: '0.65rem', padding: '2px 8px', borderRadius: '10px' }}>
+                                  {sub.frequency === 0 ? '∞ Ilimitado' : `${sub.frequency}×/día`}
+                                </span>
+                                <span style={{ fontSize: '0.68rem', color: '#B45309' }}>{sub.media_ids.length} en rotación</span>
+                              </div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                {sub.zones.map(zoneId => {
+                                  const lbl = zoneLabel(zoneId)
+                                  return <span key={zoneId} style={{ ...s.zoneChip, background: '#FFFBEB', borderColor: '#FDE68A' }}>{lbl.screen} → {lbl.zone}</span>
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -654,6 +1038,7 @@ const s: Record<string, React.CSSProperties> = {
   btnOutline: { padding: '0.55rem 1rem', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontWeight: 500, fontSize: '0.85rem', cursor: 'pointer' },
   btnGhost:   { padding: '0.55rem 1rem', borderRadius: '7px', border: 'none', background: 'transparent', color: '#64748B', fontWeight: 500, fontSize: '0.85rem', cursor: 'pointer' },
   btnPublish: { display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.6rem 1.25rem', borderRadius: '8px', border: 'none', background: '#059669', color: '#fff', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', whiteSpace: 'nowrap' },
+  btnSm:      { padding: '0.3rem 0.7rem', borderRadius: '6px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: '0.78rem', fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' },
 
   modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', zIndex: 500, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '4vh 1rem', overflowY: 'auto' },
   modalCard:  { background: '#fff', borderRadius: '16px', width: '100%', maxWidth: '780px', maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.25)', margin: 'auto' },
@@ -679,6 +1064,7 @@ const s: Record<string, React.CSSProperties> = {
   selectedTick:{ position: 'absolute', top: '6px', right: '6px', width: '20px', height: '20px', background: '#2563EB', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 6px rgba(37,99,235,0.5)' },
 
   assignCard: { background: '#FAFBFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '0.875rem' },
+  subCard:    { background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '12px', padding: '0.875rem' },
   assignHeader:{ display: 'flex', alignItems: 'center', gap: '0.75rem' },
   assignThumb:{ width: '52px', height: '36px', borderRadius: '6px', overflow: 'hidden', background: '#0F172A', flexShrink: 0 },
   assignRemove:{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '26px', borderRadius: '6px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', flexShrink: 0 },
@@ -691,7 +1077,7 @@ const s: Record<string, React.CSSProperties> = {
   summaryValue:{ fontSize: '0.95rem', fontWeight: 700, color: '#0F172A', marginTop: '2px' },
   summarySub: { fontSize: '0.85rem', color: '#64748B', marginTop: '2px' },
   summaryMediaCard:{ display: 'flex', gap: '0.75rem', background: '#FAFBFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.75rem' },
-  zoneChip:   { display: 'inline-flex', alignItems: 'center', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '20px', padding: '2px 4px 2px 9px', fontSize: '0.72rem', color: '#475569', fontWeight: 500 },
+  zoneChip:   { display: 'inline-flex', alignItems: 'center', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '20px', padding: '2px 10px', fontSize: '0.72rem', color: '#475569', fontWeight: 500 },
 
   emptyMsg:   { color: '#94A3B8', fontSize: '0.9rem', padding: '2rem', textAlign: 'center' as const, gridColumn: '1 / -1' },
   errorBox:   { display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0 1.5rem', padding: '0.7rem 0.875rem', background: '#FFF5F5', border: '1px solid #FECACA', borderRadius: '8px', color: '#EF4444', fontSize: '0.82rem' },

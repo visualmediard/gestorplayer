@@ -97,7 +97,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
 
   async function loadEntries(zoneId: string) {
     const { data: items } = await supabase.from('media_content').select('*').eq('zone_id', zoneId).is('sub_playlist_id', null).is('archived_at', null).order('sort_order')
-    const { data: subs } = await supabase.from('sub_playlists').select('*').eq('zone_id', zoneId).order('sort_order')
+    const { data: subs } = await supabase.from('sub_playlists').select('*').eq('zone_id', zoneId).is('archived_at', null).order('sort_order')
     const subItems: Record<string, MediaItem[]> = {}
     if (subs) {
       for (const sub of subs) {
