@@ -250,6 +250,18 @@ export default function Screens() {
                   </div>
                 )}
 
+                {sc.device_token && (
+                  <div style={{ padding: '0 1.25rem 0.5rem' }}>
+                    <button
+                      style={s.btnPlayer}
+                      title={sc.current_program_id ? 'Abrir el reproductor de esta pantalla' : 'Sin programa asignado — el reproductor mostrará una pantalla de espera'}
+                      onClick={() => window.open(`/play?token=${sc.device_token}`, '_blank', 'noopener')}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg>
+                      Ver reproductor
+                    </button>
+                  </div>
+                )}
+
                 <div style={s.cardActions}>
                   <button style={s.btnAct} onClick={() => { setAssigningScreen(sc.id); setSelectedProgram(sc.current_program_id ?? '') }}>Asignar programa</button>
                   <button style={s.btnAct} onClick={() => handleToggle(sc.id, sc.is_active)}>{sc.is_active ? 'Desactivar' : 'Activar'}</button>
@@ -286,5 +298,6 @@ const s: Record<string, React.CSSProperties> = {
   meta: { display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#64748B', fontSize: '0.8rem' },
   cardActions: { padding: '0.75rem 1.25rem', borderTop: '1px solid #F1F5F9', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' },
   btnAct: { padding: '0.38rem 0.75rem', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: '0.78rem', fontWeight: 500, cursor: 'pointer' },
+  btnPlayer: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', width: '100%', padding: '0.5rem 0.75rem', borderRadius: '8px', border: 'none', background: '#2563EB', color: '#fff', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' },
   btnDel: { display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.38rem 0.75rem', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', fontSize: '0.78rem', fontWeight: 500, cursor: 'pointer' },
 }
