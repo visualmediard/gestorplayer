@@ -175,7 +175,7 @@ export default function Campaigns() {
     if (insertError) { setWizardError('Error al guardar: ' + insertError.message); setUploading(false); return }
     if (inserted) {
       setMedia(prev => [inserted as MediaItem, ...prev])
-      setAssigns(prev => [...prev, { media_id: inserted.id, zones: [] }])
+      setAssigns(prev => [...prev, { media_id: inserted.id, zones: [], frequency: DEFAULT_FREQ }])
     }
     setUploadFile(null); setUploadProgress(0); setUploading(false); setShowUploadForm(false)
     if (uploadRef.current) uploadRef.current.value = ''
@@ -192,7 +192,7 @@ export default function Campaigns() {
     if (error) { setWizardError('Error: ' + error.message); return }
     if (inserted) {
       setMedia(prev => [inserted as MediaItem, ...prev])
-      setAssigns(prev => [...prev, { media_id: inserted.id, zones: [] }])
+      setAssigns(prev => [...prev, { media_id: inserted.id, zones: [], frequency: DEFAULT_FREQ }])
     }
     setUrlValue(''); setUrlName(''); setUrlDuration(30); setShowUrlForm(false)
   }
@@ -246,7 +246,7 @@ export default function Campaigns() {
       if (row.sub_playlist_id) continue
       const m = media.find(mm => mm.storage_path === row.storage_path)
       if (!m || !row.zone_id) continue
-      const entry = map.get(m.id) ?? { zones: [], frequency: row.is_unlimited ? 0 : (row.daily_frequency ?? DEFAULT_FREQ) }
+      const entry: { zones: string[]; frequency: number } = map.get(m.id) ?? { zones: [], frequency: row.is_unlimited ? 0 : (row.daily_frequency ?? DEFAULT_FREQ) }
       if (!entry.zones.includes(row.zone_id)) entry.zones.push(row.zone_id)
       map.set(m.id, entry)
     }
@@ -261,7 +261,7 @@ export default function Campaigns() {
     const groups = new Map<string, SubAssign>()
     for (const [subId, meta] of subById.entries()) {
       const key = meta.name
-      const g = groups.get(key) ?? { uid: `sub_${key}_${Date.now()}`, name: meta.name, media_ids: [], zones: [], frequency: meta.frequency }
+      const g: SubAssign = groups.get(key) ?? { uid: `sub_${key}_${Date.now()}`, name: meta.name, media_ids: [], zones: [], frequency: meta.frequency }
       if (!g.zones.includes(meta.zone_id)) g.zones.push(meta.zone_id)
       // media in this sub_playlists row
       for (const row of (rows ?? [])) {
