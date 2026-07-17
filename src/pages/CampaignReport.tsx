@@ -39,14 +39,33 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     if (c) setCamp(c as Campaign)
     if (d) {
       const rows = d as Detail[]
-      // Fetch media names for all unique media_ids
+      // Fetch the injected records to get their storage_path
       const mediaIds = [...new Set(rows.map(r => r.media_id).filter(Boolean))]
-      const nameMap: Record<string, string> = {}
+      const pathById: Record<string, string> = {}
+      const nameById: Record<string, string> = {}
       if (mediaIds.length > 0) {
-        const { data: mediaRows } = await supabase.from('media_content').select('id, name').in('id', mediaIds)
-        for (const m of (mediaRows ?? [])) nameMap[m.id] = m.name
+        const { data: injected } = await supabase
+          .from('media_content').select('id, name, storage_path').in('id', mediaIds)
+        for (const m of (injected ?? [])) {
+          pathById[m.id] = m.storage_path
+          nameById[m.id] = m.name
+        }
+        // Resolve original name by storage_path (library items: campaign_id=null, zone_id=null)
+        const paths = [...new Set(Object.values(pathById).filter(Boolean))]
+        if (paths.length > 0) {
+          const { data: originals } = await supabase
+            .from('media_content').select('storage_path, name')
+            .in('storage_path', paths).is('campaign_id', null).is('zone_id', null)
+          const origByPath: Record<string, string> = {}
+          for (const o of (originals ?? [])) origByPath[o.storage_path] = o.name
+          // Override with original name when available
+          for (const id of mediaIds) {
+            const orig = origByPath[pathById[id]]
+            if (orig) nameById[id] = orig
+          }
+        }
       }
-      setDetails(rows.map(r => ({ ...r, media_name: nameMap[r.media_id] ?? r.program_name })))
+      setDetails(rows.map(r => ({ ...r, media_name: nameById[r.media_id] ?? r.program_name })))
     }
     if (pd?.organization_id) {
       const { data: org } = await supabase.from('organizations').select('name').eq('id', pd.organization_id).single()

@@ -382,7 +382,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
       if (!m) continue
       for (const zoneId of a.zones) {
         const { error: insErr } = await supabase.from('media_content').insert({
-          zone_id: zoneId, name: `Campaña ${w1.name.trim()}`, type: m.type,
+          zone_id: zoneId, name: m.name, type: m.type,
           storage_path: m.storage_path, duration_seconds: m.duration_seconds,
           uploaded_by: profile?.id, campaign_id: campId,
           daily_frequency: a.frequency === 0 ? null : a.frequency,
@@ -408,7 +408,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
           const m = media.find(mm => mm.id === mediaId)
           if (!m) continue
           const { error: insErr } = await supabase.from('media_content').insert({
-            zone_id: zoneId, sub_playlist_id: spRow.id, name: `Campaña ${w1.name.trim()}`,
+            zone_id: zoneId, sub_playlist_id: spRow.id, name: m.name,
             type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds,
             uploaded_by: profile?.id, campaign_id: campId,
             is_unlimited: true, daily_frequency: null, sort_order: order++, expires_at: endsAt,
