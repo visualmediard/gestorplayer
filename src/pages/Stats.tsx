@@ -86,7 +86,7 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
       campaign_name: campaignNameMap[cid] ?? 'Campaña',
       storage_path: items.find(i => i.storage_path)?.storage_path ?? null,
       content_type: items[0]?.type ?? 'video',
-      zone_count: items.length,
+      zone_count: new Set(items.map(i => `${i.program_name}|${i.zone_name}`)).size,
       total_reproductions: items.reduce((s, i) => s + i.total_reproductions, 0),
       today_reproductions: items.reduce((s, i) => s + i.today_reproductions, 0),
       last_reproduction: items.map(i => i.last_reproduction).filter(Boolean).sort().pop() ?? null,
