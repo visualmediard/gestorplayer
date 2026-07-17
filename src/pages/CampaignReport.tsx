@@ -19,6 +19,7 @@ type Detail = {
   program_id: string; program_name: string
   screen_id: string | null; screen_name: string | null
   total_plays: number; today_plays: number
+  media_name?: string
 }
 
 export default function CampaignReport({ campaignId, onBack }: { campaignId: string; onBack: () => void }) {
@@ -36,7 +37,17 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
       supabase.from('profiles').select('organization_id').eq('id', profile?.id ?? '').single(),
     ])
     if (c) setCamp(c as Campaign)
-    if (d) setDetails(d as Detail[])
+    if (d) {
+      const rows = d as Detail[]
+      // Fetch media names for all unique media_ids
+      const mediaIds = [...new Set(rows.map(r => r.media_id).filter(Boolean))]
+      const nameMap: Record<string, string> = {}
+      if (mediaIds.length > 0) {
+        const { data: mediaRows } = await supabase.from('media_content').select('id, name').in('id', mediaIds)
+        for (const m of (mediaRows ?? [])) nameMap[m.id] = m.name
+      }
+      setDetails(rows.map(r => ({ ...r, media_name: nameMap[r.media_id] ?? r.program_name })))
+    }
     if (pd?.organization_id) {
       const { data: org } = await supabase.from('organizations').select('name').eq('id', pd.organization_id).single()
       if (org) setOrgName(org.name)
@@ -108,10 +119,10 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     // Table
     autoTable(doc, {
       startY: y + 6,
-      head: [['Pantalla', 'Programa', 'Zona', 'Rep/día', 'Total']],
+      head: [['Pantalla', 'Publicidad', 'Zona', 'Rep/día', 'Total']],
       body: details.map(d => [
         d.screen_name ?? '—',
-        d.program_name,
+        d.media_name ?? d.program_name,
         d.zone_name,
         String(d.reps_per_day ?? '—'),
         Number(d.total_plays).toLocaleString(),
@@ -247,7 +258,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
             <thead>
               <tr>
                 <th style={s.th}>Pantalla</th>
-                <th style={s.th}>Programa</th>
+                <th style={s.th}>Publicidad</th>
                 <th style={s.th}>Zona</th>
                 <th style={{ ...s.th, textAlign: 'right' }}>Rep/día</th>
                 <th style={{ ...s.th, textAlign: 'right' }}>Total</th>
@@ -257,16 +268,24 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
             <tbody>
               {details.length === 0 ? (
                 <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: '#94A3B8' }}>Sin datos.</td></tr>
-              ) : details.map((d, i) => (
-                <tr key={i} className="table-row" style={{ borderBottom: '1px solid #F8FAFC' }}>
-                  <td style={s.td}>{d.screen_name ?? '—'}</td>
-                  <td style={{ ...s.td, color: '#64748B' }}>{d.program_name}</td>
-                  <td style={{ ...s.td, fontWeight: 600 }}>{d.zone_name}</td>
-                  <td style={{ ...s.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{d.reps_per_day ?? '—'}</td>
-                  <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{Number(d.total_plays).toLocaleString()}</td>
-                  <td style={{ ...s.td, textAlign: 'right', color: '#059669', fontVariantNumeric: 'tabular-nums' }}>{Number(d.today_plays).toLocaleString()}</td>
-                </tr>
-              ))}
+              ) : details.map((d, i) => {
+                const showScreen = i === 0 || details[i - 1].screen_id !== d.screen_id
+                return (
+                  <tr key={i} className="table-row" style={{ borderBottom: '1px solid #F8FAFC' }}>
+                    <td style={s.td}>
+                      {showScreen
+                        ? <span style={{ fontWeight: 600, color: '#0F172A' }}>{d.screen_name ?? '—'}</span>
+                        : <span style={{ color: '#CBD5E1', fontSize: '0.75rem', paddingLeft: '0.5rem' }}>↳</span>
+                      }
+                    </td>
+                    <td style={{ ...s.td, color: '#0F172A' }}>{d.media_name ?? '—'}</td>
+                    <td style={{ ...s.td, color: '#64748B' }}>{d.zone_name}</td>
+                    <td style={{ ...s.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{d.reps_per_day ?? '—'}</td>
+                    <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{Number(d.total_plays).toLocaleString()}</td>
+                    <td style={{ ...s.td, textAlign: 'right', color: '#059669', fontVariantNumeric: 'tabular-nums' }}>{Number(d.today_plays).toLocaleString()}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
