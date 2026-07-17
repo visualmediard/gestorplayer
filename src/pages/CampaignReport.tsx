@@ -62,9 +62,19 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     // Only media that belongs to this campaign (source of truth for media list)
     const { data: campMedia } = await supabase
       .from('media_content')
-      .select('id, name, storage_path, zone_id, daily_frequency, is_unlimited')
+      .select('id, name, storage_path, zone_id, sub_playlist_id, daily_frequency, is_unlimited')
       .eq('campaign_id', campaignId)
       .is('archived_at', null)
+
+    // Sub-playlist frequency lives on the sub_playlists row, not on individual items
+    const subIds = [...new Set((campMedia ?? []).map(m => m.sub_playlist_id).filter(Boolean))]
+    const subFreqMap: Record<string, { freq: number; unlimited: boolean }> = {}
+    if (subIds.length > 0) {
+      const { data: subs } = await supabase
+        .from('sub_playlists').select('id, daily_frequency, is_unlimited').in('id', subIds)
+      for (const s of (subs ?? []))
+        subFreqMap[s.id] = { freq: s.daily_frequency ?? 0, unlimited: s.is_unlimited ?? true }
+    }
 
     if (!campMedia || campMedia.length === 0) { setDetails([]); setLoading(false); return }
 
@@ -87,7 +97,9 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
         zone_id: m.zone_id, zone_name: z.zone_name,
         program_id: '', program_name: '',
         screen_id: z.screen_id, screen_name: z.screen_name,
-        reps_per_day: m.is_unlimited ? 0 : (m.daily_frequency ?? 0),
+        reps_per_day: m.sub_playlist_id
+          ? (subFreqMap[m.sub_playlist_id]?.unlimited ? 0 : (subFreqMap[m.sub_playlist_id]?.freq ?? 0))
+          : (m.is_unlimited ? 0 : (m.daily_frequency ?? 0)),
         total_plays: z.total_plays, today_plays: z.today_plays,
       }
     })
