@@ -19,24 +19,24 @@ async function fetchAdCounts(): Promise<AdCount[]> {
   const zoneProgram: Record<string, string> = {}
   for (const z of (zones ?? [])) zoneProgram[z.id] = z.program_id
 
-  // Build sub_playlist→zone map (only non-archived sub_playlists)
-  const { data: subs } = await supabase.from('sub_playlists').select('id, zone_id').is('archived_at', null)
-  const subZone: Record<string, string> = {}
-  for (const s of (subs ?? [])) if (s.zone_id) subZone[s.id] = s.zone_id
-
-  // Count all non-archived media items, resolving to program via zone
-  const { data: media } = await supabase.from('media_content').select('zone_id, sub_playlist_id').is('archived_at', null)
   const counts: Record<string, number> = {}
+
+  // Direct items (not inside a sub-playlist) count as 1 each
+  const { data: media } = await supabase.from('media_content')
+    .select('zone_id').is('archived_at', null).is('sub_playlist_id', null).not('zone_id', 'is', null)
   for (const m of (media ?? [])) {
-    let programId: string | undefined
-    if (m.zone_id) {
-      programId = zoneProgram[m.zone_id]
-    } else if (m.sub_playlist_id) {
-      const zoneId = subZone[m.sub_playlist_id]
-      if (zoneId) programId = zoneProgram[zoneId]
-    }
-    if (programId) counts[programId] = (counts[programId] ?? 0) + 1
+    const pid = zoneProgram[m.zone_id]
+    if (pid) counts[pid] = (counts[pid] ?? 0) + 1
   }
+
+  // Each sub-playlist counts as 1 slot regardless of how many items it contains
+  const { data: subs } = await supabase.from('sub_playlists')
+    .select('zone_id').is('archived_at', null).not('zone_id', 'is', null)
+  for (const s of (subs ?? [])) {
+    const pid = zoneProgram[s.zone_id]
+    if (pid) counts[pid] = (counts[pid] ?? 0) + 1
+  }
+
   return Object.entries(counts).map(([program_id, total_ads]) => ({ program_id, total_ads }))
 }
 
