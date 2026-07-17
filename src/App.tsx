@@ -41,6 +41,7 @@ function Gate() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [pageKey, setPageKey] = useState(0)
   const [editProgramId, setEditProgramId] = useState<string | null>(null)
+  const [campaignReportId, setCampaignReportId] = useState<string | null>(null)
   const isMobile = useIsMobile()
   const isTablet = useIsTablet()
 
@@ -55,7 +56,16 @@ function Gate() {
 
   function navigate(p: string) {
     setEditProgramId(null)
+    setCampaignReportId(null)
     setPage(p as Page)
+    setPageKey(k => k + 1)
+    setMobileOpen(false)
+  }
+
+  function openCampaignReport(id: string) {
+    setEditProgramId(null)
+    setCampaignReportId(id)
+    setPage('campaigns')
     setPageKey(k => k + 1)
     setMobileOpen(false)
   }
@@ -180,8 +190,8 @@ function Gate() {
             {page === 'programs'  && <Programs initialEditId={editProgramId} />}
             {page === 'screens'   && <Screens />}
             {page === 'content'   && <Content />}
-            {page === 'stats'     && <Stats />}
-            {page === 'campaigns' && <Campaigns />}
+            {page === 'stats'     && <Stats onGoToCampaign={openCampaignReport} />}
+            {page === 'campaigns' && <Campaigns initialReportId={campaignReportId} />}
           </div>
         </main>
       </div>

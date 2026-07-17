@@ -44,7 +44,7 @@ const STATUS_COLOR: Record<string, { bg: string; color: string; border: string }
 }
 const DEFAULT_FREQ = 0 // 0 = ∞ Ilimitado (matches zone editor default)
 
-export default function Campaigns() {
+export default function Campaigns({ initialReportId }: { initialReportId?: string | null }) {
   const { profile } = useAuth()
   const [stats, setStats]         = useState<CampaignStat[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
@@ -52,7 +52,7 @@ export default function Campaigns() {
   const [tree, setTree]           = useState<ScreenNode[]>([])
   const [loading, setLoading]     = useState(true)
   const [search, setSearch]       = useState('')
-  const [reportId, setReportId]   = useState<string | null>(null)
+  const [reportId, setReportId]   = useState<string | null>(initialReportId ?? null)
 
   // Wizard
   const [wizardOpen, setWizardOpen] = useState(false)

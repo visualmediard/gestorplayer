@@ -8,8 +8,33 @@ type Stat = {
   last_reproduction: string | null; storage_path?: string
 }
 
-export default function Stats() {
-  const [stats, setStats] = useState<Stat[]>([])
+type StatEnriched = Stat & { campaign_id: string | null }
+
+type CampaignRow = {
+  kind: 'campaign'
+  campaign_id: string
+  campaign_name: string
+  storage_path: string | null
+  content_type: string
+  zone_count: number
+  total_reproductions: number
+  today_reproductions: number
+  last_reproduction: string | null
+}
+
+type ContentRow = { kind: 'content' } & StatEnriched
+
+type DisplayRow = CampaignRow | ContentRow
+
+function getThumbUrl(storage_path: string | null | undefined) {
+  if (!storage_path) return null
+  try {
+    return supabase.storage.from('media').getPublicUrl(storage_path).data.publicUrl
+  } catch { return null }
+}
+
+export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string) => void }) {
+  const [rows, setRows] = useState<DisplayRow[]>([])
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [liveCount, setLiveCount] = useState(0)
@@ -21,8 +46,57 @@ export default function Stats() {
     if (!silent) setLoading(true)
     const { data: profileData } = await supabase.from('profiles').select('organization_id').eq('id', (await supabase.auth.getUser()).data.user?.id ?? '').single()
     if (!profileData?.organization_id) { if (!silent) setLoading(false); return }
+
     const { data } = await supabase.from('content_stats').select('*').eq('organization_id', profileData.organization_id).order('total_reproductions', { ascending: false })
-    if (data) { setStats(data as Stat[]); setLastUpdate(new Date()) }
+    if (!data) { if (!silent) setLoading(false); return }
+
+    // Enrich with campaign_id from media_content
+    const contentIds = (data as Stat[]).map(r => r.content_id)
+    let campaignIdMap: Record<string, string | null> = {}
+    if (contentIds.length > 0) {
+      const { data: contentData } = await supabase.from('media_content').select('id, campaign_id').in('id', contentIds)
+      for (const c of (contentData ?? [])) campaignIdMap[c.id] = c.campaign_id ?? null
+    }
+
+    const enriched: StatEnriched[] = (data as Stat[]).map(r => ({ ...r, campaign_id: campaignIdMap[r.content_id] ?? null }))
+
+    // Fetch campaign names
+    const campaignIds = [...new Set(enriched.filter(r => r.campaign_id).map(r => r.campaign_id as string))]
+    const campaignNameMap: Record<string, string> = {}
+    if (campaignIds.length > 0) {
+      const { data: camps } = await supabase.from('campaigns').select('id, name').in('id', campaignIds)
+      for (const c of (camps ?? [])) campaignNameMap[c.id] = c.name
+    }
+
+    // Group by campaign_id; non-campaign rows stay individual
+    const campaignGroups: Record<string, StatEnriched[]> = {}
+    const contentItems: ContentRow[] = []
+    for (const r of enriched) {
+      if (r.campaign_id) {
+        if (!campaignGroups[r.campaign_id]) campaignGroups[r.campaign_id] = []
+        campaignGroups[r.campaign_id].push(r)
+      } else {
+        contentItems.push({ kind: 'content', ...r })
+      }
+    }
+
+    const campaignRows: CampaignRow[] = Object.entries(campaignGroups).map(([cid, items]) => ({
+      kind: 'campaign',
+      campaign_id: cid,
+      campaign_name: campaignNameMap[cid] ?? 'Campaña',
+      storage_path: items.find(i => i.storage_path)?.storage_path ?? null,
+      content_type: items[0]?.type ?? 'video',
+      zone_count: items.length,
+      total_reproductions: items.reduce((s, i) => s + i.total_reproductions, 0),
+      today_reproductions: items.reduce((s, i) => s + i.today_reproductions, 0),
+      last_reproduction: items.map(i => i.last_reproduction).filter(Boolean).sort().pop() ?? null,
+    }))
+
+    const allRows: DisplayRow[] = ([...campaignRows, ...contentItems] as DisplayRow[])
+      .sort((a, b) => b.total_reproductions - a.total_reproductions)
+
+    setRows(allRows)
+    setLastUpdate(new Date())
     if (!silent) setLoading(false)
   }
 
@@ -36,22 +110,11 @@ export default function Stats() {
       }).subscribe()
     return () => { clearInterval(interval); if (channelRef.current) supabase.removeChannel(channelRef.current) }
   }, [])
-  function getThumbnail(stat: Stat) {
-    if (!stat.storage_path || stat.storage_path === '') return null
-    try {
-      const { data } = supabase.storage.from('media').getPublicUrl(stat.storage_path)
-      return data.publicUrl
-    } catch {
-      return null
-    }
-  }
 
-  async function handleDeleteStat(row: Stat) {
+  async function handleDeleteStat(row: ContentRow) {
     if (!confirm(`¿Eliminar definitivamente "${row.name}" de las estadísticas?\n\nSe borrará su registro de reproducciones. Esta acción no se puede deshacer.`)) return
     setDeleting(row.content_id)
-    // Hard delete the media_content row (removes it from the stats view)
     await supabase.from('media_content').delete().eq('id', row.content_id)
-    // Remove the file only if no other content still references it (campaigns reuse paths)
     if (row.storage_path) {
       const { data: others } = await supabase.from('media_content').select('id').eq('storage_path', row.storage_path).limit(1)
       if (!others || others.length === 0) await supabase.storage.from('media').remove([row.storage_path])
@@ -60,11 +123,14 @@ export default function Stats() {
     load()
   }
 
-  const filtered = stats.filter(r =>
-    r.name.toLowerCase().includes(search.toLowerCase()) ||
-    r.program_name.toLowerCase().includes(search.toLowerCase()) ||
-    r.zone_name.toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = rows.filter(r => {
+    const term = search.toLowerCase()
+    if (!term) return true
+    if (r.kind === 'campaign') return r.campaign_name.toLowerCase().includes(term)
+    return r.name.toLowerCase().includes(term) ||
+      r.program_name.toLowerCase().includes(term) ||
+      r.zone_name.toLowerCase().includes(term)
+  })
 
   return (
     <div>
@@ -114,12 +180,65 @@ export default function Stats() {
             </thead>
             <tbody>
               {filtered.map(row => {
-                const thumbUrl = getThumbnail(row)
+                if (row.kind === 'campaign') {
+                  const thumbUrl = getThumbUrl(row.storage_path)
+                  return (
+                    <tr
+                      key={`campaign-${row.campaign_id}`}
+                      style={{ ...s.tr, cursor: onGoToCampaign ? 'pointer' : undefined }}
+                      onClick={() => onGoToCampaign?.(row.campaign_id)}
+                    >
+                      <td style={s.td}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <div style={{ width: '56px', height: '36px', borderRadius: '6px', overflow: 'hidden', background: '#EFF6FF', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #BFDBFE' }}>
+                            {thumbUrl
+                              ? row.content_type === 'video'
+                                ? <video src={thumbUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted onLoadedMetadata={e => { e.currentTarget.currentTime = 1 }} />
+                                : <img src={thumbUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                              : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" strokeWidth="2"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+                            }
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: 0 }}>
+                            <span style={{ color: '#0F172A', fontWeight: 600, fontSize: '0.875rem' }}>{row.campaign_name}</span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: '#EFF6FF', color: '#2563EB', fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', border: '1px solid #BFDBFE', width: 'fit-content' }}>
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+                              Campaña
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={s.td}>
+                        <span style={{ background: '#EFF6FF', color: '#2563EB', fontSize: '0.72rem', fontWeight: 600, padding: '2px 8px', borderRadius: '20px' }}>
+                          Campaña
+                        </span>
+                      </td>
+                      <td style={{ ...s.td, color: '#64748B' }}>
+                        {row.zone_count} zona{row.zone_count !== 1 ? 's' : ''}
+                      </td>
+                      <td style={{ ...s.td, color: '#3B82F6', fontWeight: 700, fontSize: '1rem' }}>{row.today_reproductions}</td>
+                      <td style={{ ...s.td, color: '#10B981', fontWeight: 700, fontSize: '1rem' }}>{row.total_reproductions.toLocaleString()}</td>
+                      <td style={{ ...s.td, color: '#94A3B8', fontSize: '0.8rem' }}>
+                        {row.last_reproduction ? new Date(row.last_reproduction).toLocaleString('es-DO') : '—'}
+                      </td>
+                      <td style={{ ...s.td, textAlign: 'right' }}>
+                        {onGoToCampaign && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: '#2563EB', fontSize: '0.78rem', fontWeight: 600 }}>
+                            Ver reporte
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                }
+
+                // Normal content row
+                const thumbUrl = getThumbUrl(row.storage_path)
                 return (
                   <tr key={row.content_id} style={s.tr}>
                     <td style={s.td}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <div style={{ width: '56px', height: '36px', borderRadius: '6px', overflow: 'hidden', background: '#F1F5F9', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div style={{ width: '56px', height: '36px', borderRadius: '6px', overflow: 'hidden', background: '#F1F5F9', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           {thumbUrl
                             ? row.type === 'video'
                               ? <video src={thumbUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted onLoadedMetadata={e => { e.currentTarget.currentTime = 1 }} />
@@ -127,15 +246,7 @@ export default function Stats() {
                             : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/></svg>
                           }
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-                          <span style={{ color: '#0F172A', fontWeight: 500, fontSize: '0.875rem' }}>{row.name}</span>
-                          {row.name.startsWith('Campaña ') && (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', background: '#EFF6FF', color: '#2563EB', fontSize: '0.68rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', border: '1px solid #BFDBFE', flexShrink: 0 }}>
-                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
-                              Campaña
-                            </span>
-                          )}
-                        </div>
+                        <span style={{ color: '#0F172A', fontWeight: 500, fontSize: '0.875rem' }}>{row.name}</span>
                       </div>
                     </td>
                     <td style={s.td}>
