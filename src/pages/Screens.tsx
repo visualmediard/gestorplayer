@@ -13,6 +13,33 @@ type Screen = {
 
 type AdCount = { program_id: string; total_ads: number }
 
+async function fetchAdCounts(): Promise<AdCount[]> {
+  // Build zone→program map
+  const { data: zones } = await supabase.from('zones').select('id, program_id')
+  const zoneProgram: Record<string, string> = {}
+  for (const z of (zones ?? [])) zoneProgram[z.id] = z.program_id
+
+  // Build sub_playlist→zone map (only non-archived sub_playlists)
+  const { data: subs } = await supabase.from('sub_playlists').select('id, zone_id').is('archived_at', null)
+  const subZone: Record<string, string> = {}
+  for (const s of (subs ?? [])) if (s.zone_id) subZone[s.id] = s.zone_id
+
+  // Count all non-archived media items, resolving to program via zone
+  const { data: media } = await supabase.from('media_content').select('zone_id, sub_playlist_id').is('archived_at', null)
+  const counts: Record<string, number> = {}
+  for (const m of (media ?? [])) {
+    let programId: string | undefined
+    if (m.zone_id) {
+      programId = zoneProgram[m.zone_id]
+    } else if (m.sub_playlist_id) {
+      const zoneId = subZone[m.sub_playlist_id]
+      if (zoneId) programId = zoneProgram[zoneId]
+    }
+    if (programId) counts[programId] = (counts[programId] ?? 0) + 1
+  }
+  return Object.entries(counts).map(([program_id, total_ads]) => ({ program_id, total_ads }))
+}
+
 function getStatus(hb: string | null, prog: string | null) {
   if (!prog) return { label: 'Sin programa', color: '#F59E0B', dot: '#F59E0B' }
   if (!hb) return { label: 'Player no corriendo', color: '#94A3B8', dot: '#CBD5E1' }
@@ -73,8 +100,7 @@ export default function Screens() {
     if (data) setScreens(data as Screen[])
     const { data: progs } = await supabase.from('programs').select('id, name')
     if (progs) setPrograms(progs)
-    const { data: counts } = await supabase.from('program_ad_count').select('*')
-    if (counts) setAdCounts(counts as AdCount[])
+    setAdCounts(await fetchAdCounts())
     setLoading(false)
   }
 
@@ -83,8 +109,7 @@ export default function Screens() {
     const interval = setInterval(async () => {
       const { data } = await supabase.from('screens').select('*').order('created_at', { ascending: true })
       if (data) setScreens(data as Screen[])
-      const { data: counts } = await supabase.from('program_ad_count').select('*')
-      if (counts) setAdCounts(counts as AdCount[])
+      setAdCounts(await fetchAdCounts())
     }, 60000)
     return () => clearInterval(interval)
   }, [])
