@@ -31,59 +31,86 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
 
   async function load() {
     setLoading(true)
-    const [{ data: c }, { data: d }, { data: pd }] = await Promise.all([
+    const [{ data: c }, { data: pd }] = await Promise.all([
       supabase.from('campaigns').select('*').eq('id', campaignId).single(),
-      supabase.from('campaign_zone_detail').select('*').eq('campaign_id', campaignId),
       supabase.from('profiles').select('organization_id').eq('id', profile?.id ?? '').single(),
     ])
     if (c) setCamp(c as Campaign)
-    if (d) {
-      const rows = d as Detail[]
-      // Fetch the injected records to get their storage_path
-      const mediaIds = [...new Set(rows.map(r => r.media_id).filter(Boolean))]
-      const pathById: Record<string, string> = {}
-      const nameById: Record<string, string> = {}
-      if (mediaIds.length > 0) {
-        const { data: injected } = await supabase
-          .from('media_content').select('id, name, storage_path').in('id', mediaIds)
-        for (const m of (injected ?? [])) {
-          pathById[m.id] = m.storage_path
-          nameById[m.id] = m.name
-        }
-        // Resolve original name by storage_path (library items: campaign_id=null, zone_id=null)
-        const paths = [...new Set(Object.values(pathById).filter(Boolean))]
-        if (paths.length > 0) {
-          const { data: originals } = await supabase
-            .from('media_content').select('storage_path, name')
-            .in('storage_path', paths).is('campaign_id', null).is('zone_id', null)
-          const origByPath: Record<string, string> = {}
-          for (const o of (originals ?? [])) origByPath[o.storage_path] = o.name
-          // Override with original name when available
-          for (const id of mediaIds) {
-            const orig = origByPath[pathById[id]]
-            if (orig) nameById[id] = orig
-          }
-        }
-      }
-      setDetails(rows.map(r => ({ ...r, media_name: nameById[r.media_id] ?? r.program_name })))
-    }
     if (pd?.organization_id) {
       const { data: org } = await supabase.from('organizations').select('name').eq('id', pd.organization_id).single()
       if (org) setOrgName(org.name)
     }
+
+    // Zone/screen/play data from view — aggregate per zone to avoid duplicates
+    const { data: viewRows } = await supabase
+      .from('campaign_zone_detail')
+      .select('zone_id, zone_name, screen_id, screen_name, reps_per_day, total_plays, today_plays')
+      .eq('campaign_id', campaignId)
+    const zoneMap: Record<string, { zone_name: string; screen_id: string | null; screen_name: string | null; reps_per_day: number; total_plays: number; today_plays: number }> = {}
+    for (const row of (viewRows ?? [])) {
+      if (zoneMap[row.zone_id]) {
+        zoneMap[row.zone_id].total_plays += Number(row.total_plays)
+        zoneMap[row.zone_id].today_plays += Number(row.today_plays)
+      } else {
+        zoneMap[row.zone_id] = {
+          zone_name: row.zone_name, screen_id: row.screen_id, screen_name: row.screen_name,
+          reps_per_day: row.reps_per_day, total_plays: Number(row.total_plays), today_plays: Number(row.today_plays),
+        }
+      }
+    }
+
+    // Only media that belongs to this campaign (source of truth for media list)
+    const { data: campMedia } = await supabase
+      .from('media_content')
+      .select('id, name, storage_path, zone_id')
+      .eq('campaign_id', campaignId)
+      .is('archived_at', null)
+
+    if (!campMedia || campMedia.length === 0) { setDetails([]); setLoading(false); return }
+
+    // Resolve original name by storage_path (library records have campaign_id=null, zone_id=null)
+    const paths = [...new Set(campMedia.map(m => m.storage_path).filter(Boolean))]
+    const origName: Record<string, string> = {}
+    if (paths.length > 0) {
+      const { data: originals } = await supabase
+        .from('media_content').select('storage_path, name')
+        .in('storage_path', paths).is('campaign_id', null).is('zone_id', null)
+      for (const o of (originals ?? [])) origName[o.storage_path] = o.name
+    }
+
+    // Build one row per campaign media item
+    const rows: Detail[] = campMedia.map(m => {
+      const z = zoneMap[m.zone_id] ?? { zone_name: '—', screen_id: null, screen_name: null, reps_per_day: 0, total_plays: 0, today_plays: 0 }
+      return {
+        campaign_id: campaignId, media_id: m.id,
+        media_name: origName[m.storage_path] ?? m.name,
+        zone_id: m.zone_id, zone_name: z.zone_name,
+        program_id: '', program_name: '',
+        screen_id: z.screen_id, screen_name: z.screen_name,
+        reps_per_day: z.reps_per_day, total_plays: z.total_plays, today_plays: z.today_plays,
+      }
+    })
+    rows.sort((a, b) => {
+      const sc = (a.screen_name ?? '').localeCompare(b.screen_name ?? '')
+      return sc !== 0 ? sc : a.zone_name.localeCompare(b.zone_name)
+    })
+    setDetails(rows)
     setLoading(false)
   }
   useEffect(() => { load() }, [campaignId])
 
-  const totalPlays  = details.reduce((sum, d) => sum + Number(d.total_plays), 0)
-  const todayPlays  = details.reduce((sum, d) => sum + Number(d.today_plays), 0)
-  const totalZones  = details.length
+  // Deduplicate by zone so plays aren't counted once per video in the same zone
+  const uniqueZones = new Map<string, Detail>()
+  details.forEach(d => { if (!uniqueZones.has(d.zone_id)) uniqueZones.set(d.zone_id, d) })
+  const totalPlays = Array.from(uniqueZones.values()).reduce((s, d) => s + Number(d.total_plays), 0)
+  const todayPlays = Array.from(uniqueZones.values()).reduce((s, d) => s + Number(d.today_plays), 0)
+  const totalZones = uniqueZones.size
 
   const daysLeft = camp ? Math.max(0, Math.ceil((new Date(camp.ends_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : 0
 
-  // Group by screen for chart
+  // Group by screen for chart (unique zones only)
   const byScreen = new Map<string, number>()
-  details.forEach(d => {
+  Array.from(uniqueZones.values()).forEach(d => {
     const key = d.screen_name ?? 'Sin pantalla'
     byScreen.set(key, (byScreen.get(key) ?? 0) + Number(d.total_plays))
   })
