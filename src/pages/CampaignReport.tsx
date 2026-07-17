@@ -62,7 +62,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     // Only media that belongs to this campaign (source of truth for media list)
     const { data: campMedia } = await supabase
       .from('media_content')
-      .select('id, name, storage_path, zone_id')
+      .select('id, name, storage_path, zone_id, daily_frequency, is_unlimited')
       .eq('campaign_id', campaignId)
       .is('archived_at', null)
 
@@ -87,7 +87,8 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
         zone_id: m.zone_id, zone_name: z.zone_name,
         program_id: '', program_name: '',
         screen_id: z.screen_id, screen_name: z.screen_name,
-        reps_per_day: z.reps_per_day, total_plays: z.total_plays, today_plays: z.today_plays,
+        reps_per_day: m.is_unlimited ? 0 : (m.daily_frequency ?? 0),
+        total_plays: z.total_plays, today_plays: z.today_plays,
       }
     })
     rows.sort((a, b) => {
@@ -170,7 +171,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
         d.screen_name ?? '—',
         d.media_name ?? d.program_name,
         d.zone_name,
-        String(d.reps_per_day ?? '—'),
+        d.reps_per_day === 0 ? 'Ilimitado' : String(d.reps_per_day ?? '—'),
         Number(d.total_plays).toLocaleString(),
       ]),
       headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold', fontSize: 9 },
@@ -326,7 +327,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
                     </td>
                     <td style={{ ...s.td, color: '#0F172A' }}>{d.media_name ?? '—'}</td>
                     <td style={{ ...s.td, color: '#64748B' }}>{d.zone_name}</td>
-                    <td style={{ ...s.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{d.reps_per_day ?? '—'}</td>
+                    <td style={{ ...s.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{d.reps_per_day === 0 ? '∞' : (d.reps_per_day ?? '—')}</td>
                     <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{Number(d.total_plays).toLocaleString()}</td>
                     <td style={{ ...s.td, textAlign: 'right', color: '#059669', fontVariantNumeric: 'tabular-nums' }}>{Number(d.today_plays).toLocaleString()}</td>
                   </tr>
