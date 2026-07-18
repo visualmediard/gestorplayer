@@ -1,4 +1,5 @@
 import { useAuth } from '../auth/AuthContext'
+import logoNegro from '../assets/logo/logo-negro.png'
 
 type Props = {
   current: string
@@ -58,14 +59,15 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
         flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <div style={s.logoIcon}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
-          </div>
+          {(!isMobile && collapsed) ? (
+            <div style={s.logoIcon}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
+            </div>
+          ) : (
+            <img src={logoNegro} alt="GestorPlayer" style={{ height: '28px', width: 'auto', objectFit: 'contain' }} />
+          )}
           {(isMobile || !collapsed) && (
-            <>
-              <span style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0F172A', letterSpacing: '-0.01em' }}>GestorPlayer</span>
-              <span style={s.betaBadge}>BETA</span>
-            </>
+            <span style={s.betaBadge}>BETA</span>
           )}
         </div>
 

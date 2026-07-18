@@ -1,5 +1,6 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import { supabase } from '../lib/supabase'
+import logoNegro from '../assets/logo/logo-negro.png'
 
 export default function Register() {
   const [orgName, setOrgName] = useState('')
@@ -64,10 +65,7 @@ export default function Register() {
       <div style={s.card}>
         {/* Logo */}
         <div style={s.logoWrap}>
-          <div style={s.logoIcon}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
-          </div>
-          <span style={s.logoText}>GestorPlayer</span>
+          <img src={logoNegro} alt="GestorPlayer" style={{ height: '36px', width: 'auto', objectFit: 'contain' }} />
           <span style={s.betaBadge}>BETA</span>
         </div>
 
