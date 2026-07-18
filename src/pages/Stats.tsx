@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
 
 type Stat = {
   content_id: string; name: string; type: string
@@ -29,7 +30,7 @@ type DisplayRow = CampaignRow | ContentRow
 function getThumbUrl(storage_path: string | null | undefined) {
   if (!storage_path) return null
   try {
-    return supabase.storage.from('media').getPublicUrl(storage_path).data.publicUrl
+    return resolveMediaUrl(storage_path) || null
   } catch { return null }
 }
 
@@ -115,7 +116,9 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
     if (!confirm(`¿Eliminar definitivamente "${row.name}" de las estadísticas?\n\nSe borrará su registro de reproducciones. Esta acción no se puede deshacer.`)) return
     setDeleting(row.content_id)
     await supabase.from('media_content').delete().eq('id', row.content_id)
-    if (row.storage_path) {
+    // Solo intentamos borrar de Supabase Storage los archivos legacy; los de R2
+    // no se borran desde el cliente (el archivo queda huérfano, aceptable).
+    if (row.storage_path && !isRemoteUrl(row.storage_path)) {
       const { data: others } = await supabase.from('media_content').select('id').eq('storage_path', row.storage_path).limit(1)
       if (!others || others.length === 0) await supabase.storage.from('media').remove([row.storage_path])
     }

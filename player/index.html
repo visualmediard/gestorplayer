@@ -190,6 +190,16 @@
       dlog('ERROR creando Supabase client: ' + e.message, 'err')
     }
 
+    // Un storage_path puede ser una ruta de Supabase (archivos antiguos) o una
+    // URL pública completa de Cloudflare R2 (archivos nuevos). Si ya es URL, se
+    // usa tal cual; si no, se resuelve por Supabase. El caché offline funciona
+    // igual con ambas porque cachea por URL final.
+    function resolveMediaUrl(path) {
+      if (!path) return ''
+      if (/^https?:\/\//i.test(path)) return path
+      return sb.storage.from('media').getPublicUrl(path).data.publicUrl
+    }
+
     // ════════════════════════════════════════════════════════════
     //  ESTADO DEL PLAYER
     // ════════════════════════════════════════════════════════════
@@ -376,8 +386,8 @@
           var items = entry.kind === 'item' ? [entry.item] : (entry.items || [])
           items.forEach(function(it) {
             if (it && it.type !== 'url' && it.storage_path) {
-              var u = sb.storage.from('media').getPublicUrl(it.storage_path).data.publicUrl
-              urls[u] = true
+              var u = resolveMediaUrl(it.storage_path)
+              if (u) urls[u] = true
             }
           })
         })
@@ -700,7 +710,7 @@
       }
 
       var publicUrl = item.storage_path
-        ? sb.storage.from('media').getPublicUrl(item.storage_path).data.publicUrl
+        ? resolveMediaUrl(item.storage_path)
         : null
       var localBlobUrl = null
 

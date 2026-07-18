@@ -35,3 +35,7 @@ dist-ssr
 *.docx
 Instalación*
 *_files/
+
+# Notas con tokens/credenciales — NUNCA subir
+Token value*
+*.psd

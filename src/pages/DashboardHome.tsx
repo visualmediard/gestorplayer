@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { resolveMediaUrl } from '../lib/mediaUrl'
 import { useAuth } from '../auth/AuthContext'
 
 type MediaItem = { id: string; name: string; type: string; storage_path: string; created_at: string }
@@ -67,9 +68,7 @@ export default function DashboardHome({
     setPublishing(null); load()
   }
 
-  function getPublicUrl(path: string) {
-    return supabase.storage.from('media').getPublicUrl(path).data.publicUrl
-  }
+  const getPublicUrl = resolveMediaUrl
 
   const online = screens.filter(sc => {
     if (!sc.current_program_id || !sc.last_heartbeat) return false

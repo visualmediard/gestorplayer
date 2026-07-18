@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { uploadWithProgress } from '../lib/uploadWithProgress'
+import { uploadToR2 } from '../lib/uploadToR2'
+import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
 import { fileTooLargeMessage } from '../lib/fileLimit'
 import { useAuth } from '../auth/AuthContext'
 
@@ -136,9 +137,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     else { setEntries([]); setPreviewPlaylist([]) }
   }, [selectedZone])
 
-  function getPublicUrl(path: string) {
-    return supabase.storage.from('media').getPublicUrl(path).data.publicUrl
-  }
+  const getPublicUrl = resolveMediaUrl
 
   function freqLabel(item: { is_unlimited: boolean; daily_frequency: number | null }) {
     if (item.is_unlimited) return '∞ Ilimitado'
@@ -259,15 +258,17 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   async function handleReplaceFromFile(file: File) {
     if (!replacingItem) return
     setReplacing(true)
-    const ext = file.name.split('.').pop()
-    const path = `${selectedZone}/${Date.now()}_replace.${ext}`
     const isVideo = file.type.startsWith('video/')
-    const { error: storageError } = await uploadWithProgress('media', path, file, setReplaceProgress)
-    if (storageError) { alert('Error: ' + storageError.message); setReplacing(false); return }
-    if (replacingItem.storage_path) await supabase.storage.from('media').remove([replacingItem.storage_path])
+    const { url, error: storageError } = await uploadToR2(file, setReplaceProgress)
+    if (storageError || !url) { alert('Error: ' + (storageError?.message ?? 'desconocido')); setReplacing(false); return }
+    // Solo borramos de Supabase si el archivo viejo vivía ahí; los de R2 no se
+    // borran desde el cliente (quedan huérfanos, aceptable).
+    if (replacingItem.storage_path && !isRemoteUrl(replacingItem.storage_path)) {
+      await supabase.storage.from('media').remove([replacingItem.storage_path])
+    }
     await supabase.from('media_content').update({
       name: file.name, type: isVideo ? 'video' : 'image',
-      storage_path: path, duration_seconds: isVideo ? null : (replacingItem.duration_seconds ?? 10),
+      storage_path: url, duration_seconds: isVideo ? null : (replacingItem.duration_seconds ?? 10),
     }).eq('id', replacingItem.id)
     setReplacing(false); setReplaceProgress(0)
     setReplacingItem(null); setShowReplaceLibrary(false)
@@ -278,13 +279,10 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   async function handleUpload() {
     if (!file || !uploadTarget) return
     setUploading(true); setError(null)
-    const ext = file.name.split('.').pop()
-    const folder = uploadTarget.type === 'zone' ? uploadTarget.id : `sub_${uploadTarget.id}`
-    const path = `${folder}/${Date.now()}.${ext}`
     const isVideo = file.type.startsWith('video/')
-    const { error: storageError } = await uploadWithProgress('media', path, file, setProgress)
-    if (storageError) { setError('Error: ' + storageError.message); setUploading(false); return }
-    const insertData: any = { name: file.name, type: isVideo ? 'video' : 'image', storage_path: path, duration_seconds: isVideo ? null : duration, uploaded_by: profile?.id, is_unlimited: true, daily_frequency: null }
+    const { url, error: storageError } = await uploadToR2(file, setProgress)
+    if (storageError || !url) { setError('Error: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
+    const insertData: any = { name: file.name, type: isVideo ? 'video' : 'image', storage_path: url, duration_seconds: isVideo ? null : duration, uploaded_by: profile?.id, is_unlimited: true, daily_frequency: null }
     if (uploadTarget.type === 'zone') { insertData.zone_id = selectedZone; insertData.sort_order = entries.length; insertData.sub_playlist_id = null }
     else { const entry = entries.find(e => e.kind === 'sub' && e.sub.id === uploadTarget.id); const subItems = entry?.kind === 'sub' ? entry.items : []; insertData.zone_id = selectedZone; insertData.sub_playlist_id = uploadTarget.id; insertData.sort_order = subItems.length }
     await supabase.from('media_content').insert(insertData)

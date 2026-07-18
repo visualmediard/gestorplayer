@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { uploadWithProgress } from '../lib/uploadWithProgress'
+import { uploadToR2 } from '../lib/uploadToR2'
+import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { useAuth } from '../auth/AuthContext'
 import CampaignReport from './CampaignReport'
@@ -139,10 +140,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     return { screen: fz?.screen_name ?? '—', zone: fz?.zone_name ?? '—' }
   }
 
-  function getPublicUrl(path: string) {
-    if (!path) return ''
-    return supabase.storage.from('media').getPublicUrl(path).data.publicUrl
-  }
+  const getPublicUrl = resolveMediaUrl
   function getStat(id: string) { return stats.find(s => s.campaign_id === id) }
   function getMedia(id: string | null) { return id ? media.find(m => m.id === id) : null }
 
@@ -161,14 +159,12 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   async function handleWizardUpload() {
     if (!uploadFile) return
     setUploading(true); setWizardError(null)
-    const ext = uploadFile.name.split('.').pop()
-    const path = `library/${Date.now()}.${ext}`
     const isVideo = uploadFile.type.startsWith('video/')
-    const { error: storageError } = await uploadWithProgress('media', path, uploadFile, setUploadProgress)
-    if (storageError) { setWizardError('Error al subir: ' + storageError.message); setUploading(false); return }
+    const { url, error: storageError } = await uploadToR2(uploadFile, setUploadProgress)
+    if (storageError || !url) { setWizardError('Error al subir: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
     const { data: inserted, error: insertError } = await supabase.from('media_content').insert({
       zone_id: null, name: uploadFile.name, type: isVideo ? 'video' : 'image',
-      storage_path: path, duration_seconds: isVideo ? null : 10,
+      storage_path: url, duration_seconds: isVideo ? null : 10,
       uploaded_by: profile?.id,
     }).select('id, name, type, storage_path, duration_seconds').single()
     if (insertError) { setWizardError('Error al guardar: ' + insertError.message); setUploading(false); return }
@@ -201,18 +197,16 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     const m = media.find(mm => mm.id === replacingMediaId)
     if (!m) return
     setReplaceUploading(true)
-    const ext = file.name.split('.').pop()
-    const path = `library/${Date.now()}_replace.${ext}`
     const isVideo = file.type.startsWith('video/')
-    const { error: storageError } = await uploadWithProgress('media', path, file, setReplaceProgress)
-    if (storageError) { alert('Error: ' + storageError.message); setReplaceUploading(false); return }
-    if (m.storage_path) await supabase.storage.from('media').remove([m.storage_path])
+    const { url, error: storageError } = await uploadToR2(file, setReplaceProgress)
+    if (storageError || !url) { alert('Error: ' + (storageError?.message ?? 'desconocido')); setReplaceUploading(false); return }
+    if (m.storage_path && !isRemoteUrl(m.storage_path)) await supabase.storage.from('media').remove([m.storage_path])
     await supabase.from('media_content').update({
       name: file.name, type: isVideo ? 'video' : 'image',
-      storage_path: path, duration_seconds: isVideo ? null : (m.duration_seconds ?? 10),
+      storage_path: url, duration_seconds: isVideo ? null : (m.duration_seconds ?? 10),
     }).eq('id', replacingMediaId)
     setMedia(prev => prev.map(mm => mm.id === replacingMediaId
-      ? { ...mm, name: file.name, type: isVideo ? 'video' : 'image', storage_path: path } : mm))
+      ? { ...mm, name: file.name, type: isVideo ? 'video' : 'image', storage_path: url } : mm))
     setReplaceUploading(false); setReplaceProgress(0); setReplacingMediaId(null)
     if (replaceRef.current) replaceRef.current.value = ''
   }

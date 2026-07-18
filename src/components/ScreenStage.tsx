@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveMediaUrl } from '../lib/mediaUrl'
 
 // Reusable playback engine: loads a program's zones + playlists and renders
 // them filling the whole surface, with each zone placed by percentage of the
@@ -100,7 +101,8 @@ export default function ScreenStage({ client, programId, onPlay, onEmpty }: {
   const [program, setProgram] = useState<Program | null>(null)
   const [zones, setZones] = useState<ZoneData[]>([])
 
-  const pub = (path: string) => path ? client.storage.from('media').getPublicUrl(path).data.publicUrl : ''
+  // Resuelve rutas de Supabase o URLs completas de R2 indistintamente.
+  const pub = (path: string) => resolveMediaUrl(path)
 
   useEffect(() => {
     let cancelled = false

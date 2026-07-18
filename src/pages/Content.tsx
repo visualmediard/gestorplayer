@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { uploadWithProgress } from '../lib/uploadWithProgress'
+import { uploadToR2 } from '../lib/uploadToR2'
+import { resolveMediaUrl } from '../lib/mediaUrl'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { useAuth } from '../auth/AuthContext'
 
@@ -64,17 +65,14 @@ export default function Content() {
     const tooBig = fileTooLargeMessage(file)
     if (tooBig) { setError(tooBig); return }
     setUploading(true); setError(null)
-    const ext = file.name.split('.').pop()
-    const folder = selectedZone || 'library'
-    const path = `${folder}/${Date.now()}.${ext}`
     const isVideo = file.type.startsWith('video/')
-    const { error: storageError } = await uploadWithProgress('media', path, file, setProgress)
-    if (storageError) { setError('Error al subir: ' + storageError.message); setUploading(false); return }
+    const { url, error: storageError } = await uploadToR2(file, setProgress)
+    if (storageError || !url) { setError('Error al subir: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
     const { error: insertError } = await supabase.from('media_content').insert({
       zone_id: selectedZone || null,
       name: file.name,
       type: isVideo ? 'video' : 'image',
-      storage_path: path,
+      storage_path: url,
       duration_seconds: isVideo ? null : duration,
       uploaded_by: profile?.id,
     })
@@ -96,10 +94,7 @@ export default function Content() {
     load()
   }
 
-  function getPublicUrl(path: string) {
-    const { data } = supabase.storage.from('media').getPublicUrl(path)
-    return data.publicUrl
-  }
+  const getPublicUrl = resolveMediaUrl
 
   const filtered = items.filter(i => i.name.toLowerCase().includes(search.toLowerCase()))
 

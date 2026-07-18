@@ -38,6 +38,74 @@ ALTER TABLE sub_playlists ADD COLUMN IF NOT EXISTS campaign_id uuid;
 ALTER TABLE sub_playlists ADD COLUMN IF NOT EXISTS archived_at timestamptz;
 ```
 
+### Índices de rendimiento (recomendado a escala)
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_media_content_organization ON media_content(organization_id);
+CREATE INDEX IF NOT EXISTS idx_media_content_campaign     ON media_content(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_playback_events_screen     ON playback_events(screen_id);
+CREATE INDEX IF NOT EXISTS idx_playback_events_campaign   ON playback_events(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_playback_events_created    ON playback_events(created_at);
+```
+
+---
+
+## Almacenamiento: Cloudflare R2 para videos e imágenes
+
+Los archivos pesados (videos e imágenes de las pantallas) se suben a **Cloudflare R2**
+a través de la Edge Function `supabase/functions/upload-to-r2`. Supabase Storage se
+mantiene solo para archivos pequeños (logos, etc.).
+
+**Las credenciales de R2 nunca están en el frontend.** El frontend solo llama a la
+Edge Function con el JWT del usuario; la función valida la sesión, resuelve el
+`organization_id` del usuario server-side y firma la subida S3 con las credenciales
+que viven como *secrets* del servidor.
+
+`media_content.storage_path` ahora puede contener **una ruta de Supabase** (archivos
+antiguos, que siguen funcionando sin migrar) **o una URL pública completa de R2**
+(archivos nuevos). El helper `src/lib/mediaUrl.ts` (`resolveMediaUrl`) detecta cuál es
+y la resuelve; el player Android (`player/index.html`) hace lo mismo.
+
+### Secrets de la Edge Function (nunca en `.env` del frontend)
+
+```bash
+supabase secrets set \
+  R2_ACCOUNT_ID=2f3c4fe8c6bb3d788f080d206498784f \
+  R2_BUCKET_NAME=gestplayer-media \
+  R2_PUBLIC_URL=https://pub-3b8fbcfbfb9c47b792014349a03369c1.r2.dev \
+  R2_ACCESS_KEY_ID=<tu-access-key-id> \
+  R2_SECRET_ACCESS_KEY=<tu-secret-access-key>
+```
+
+`SUPABASE_URL` y `SUPABASE_ANON_KEY` ya los inyecta Supabase automáticamente en las
+Edge Functions; no hace falta definirlos.
+
+### Desplegar la función
+
+```bash
+supabase functions deploy upload-to-r2
+```
+
+### CORS del bucket R2 (obligatorio para la reproducción offline)
+
+La reproducción **online** funciona sin CORS (los tags `<video>`/`<img>` no lo exigen).
+Pero el **caché offline** del player usa `fetch()` para descargar los archivos, y eso sí
+requiere que R2 permita el origen del player. En el bucket R2 → Settings → CORS Policy:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://gestorplayer.vercel.app", "http://localhost:5173"],
+    "AllowedMethods": ["GET"],
+    "AllowedHeaders": ["*"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Sin esta política, todo se reproduce en línea con normalidad, pero los archivos de R2
+no se guardarán en el caché para uso sin conexión.
+
 ---
 
 ## Plantilla base: React + TypeScript + Vite
