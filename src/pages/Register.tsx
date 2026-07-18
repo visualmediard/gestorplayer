@@ -65,9 +65,7 @@ export default function Register() {
       <div style={s.card}>
         {/* Logo */}
         <div style={s.logoWrap}>
-          <div style={{ width: '160px', height: '44px', overflow: 'hidden', position: 'relative', flexShrink: 0 }}>
-            <img src={logoNegro} alt="GestorPlayer" style={{ position: 'absolute', width: '500px', top: '-191px', left: '-55px' }} />
-          </div>
+          <img src={logoNegro} alt="GestorPlayer" style={{ height: '44px', width: 'auto' }} />
           <span style={s.betaBadge}>BETA</span>
         </div>
 
