@@ -50,28 +50,26 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
     <aside style={sidebarStyle}>
       {/* Logo + toggle */}
       <div style={{
-        padding: (!isMobile && collapsed) ? '1rem 0' : '0 1rem',
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: (!isMobile && collapsed) ? 'center' : 'space-between',
+        justifyContent: 'center',
         borderBottom: '1px solid #F1F5F9',
-        height: '56px',
+        height: '68px',
         flexShrink: 0,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          {(!isMobile && collapsed) ? (
-            <div style={s.logoIcon}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
-            </div>
-          ) : (
-            <img src={logoNegro} alt="GestorPlayer" style={{ height: '38px', width: 'auto' }} />
-          )}
-          {(isMobile || !collapsed) && (
+        {(!isMobile && collapsed) ? (
+          <div style={s.logoIcon}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <img src={logoNegro} alt="GestorPlayer" style={{ height: '46px', width: 'auto' }} />
             <span style={s.betaBadge}>BETA</span>
-          )}
-        </div>
+          </div>
+        )}
 
-        <button onClick={onToggle} style={s.toggleBtn} aria-label={isMobile ? 'Cerrar menú' : (collapsed ? 'Expandir' : 'Colapsar')}>
+        <button onClick={onToggle} style={{ ...s.toggleBtn, position: 'absolute', right: '0.75rem' }} aria-label={isMobile ? 'Cerrar menú' : (collapsed ? 'Expandir' : 'Colapsar')}>
           {isMobile ? (
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
