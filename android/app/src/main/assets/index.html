@@ -3,669 +3,1311 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GestorPlayer</title>
+  <title>GestorPlayer · Reproductor</title>
   <style>
-    * { margin:0; padding:0; box-sizing:border-box; }
-    html, body { width:100%; height:100%; overflow:hidden; background:#000; }
-    #screen { width:100vw; height:100vh; position:relative; background:#000; display:none; }
-    .zone { position:absolute; overflow:hidden; background:#000; }
-    .zone img, .zone video {
-      position:absolute; top:0; left:0;
-      width:100%; height:100%; object-fit:fill; display:block;
-    }
-    video::-webkit-media-controls { display:none !important; }
-    video::-webkit-media-controls-overlay-cast-button { display:none !important; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    #screen { width: 100vw; height: 100vh; position: relative; background: #000; }
+    .zone { position: absolute; overflow: hidden; background: #000; }
+    .zone img, .zone video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    video::-webkit-media-controls { display: none !important; }
+    video::-webkit-media-controls-overlay-cast-button { display: none !important; }
     #status {
-      position:fixed; bottom:8px; right:12px; font-family:monospace; font-size:11px;
-      color:rgba(255,255,255,0.4); z-index:9999; pointer-events:none;
-      text-align:right; line-height:1.6;
+      position: fixed; bottom: 8px; right: 12px;
+      font-family: monospace; font-size: 11px;
+      color: rgba(255,255,255,0.35); z-index: 9999;
+      pointer-events: none; text-align: right; line-height: 1.6;
+      white-space: pre-line;
     }
-    #setup {
-      position:fixed; inset:0; background:#0F172A;
-      display:flex; flex-direction:column; align-items:center; justify-content:center;
-      font-family:system-ui,sans-serif; color:#fff; padding:2rem; text-align:center;
-      z-index:10000;
+    /* Punto discreto de conectividad: gris = offline, verde = online. */
+    #net-dot {
+      position: fixed; top: 10px; right: 10px;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #64748B; z-index: 9999; pointer-events: none;
+      box-shadow: 0 0 4px rgba(0,0,0,0.5);
+      transition: background 0.3s ease;
     }
-    .spin {
-      border:3px solid rgba(255,255,255,0.1); border-top:3px solid #3B82F6;
-      border-radius:50%; width:32px; height:32px;
-      animation:spin 1s linear infinite; margin-bottom:1rem;
-    }
-    @keyframes spin { to { transform:rotate(360deg); } }
-    #dbg {
-      position:fixed; top:0; left:0; right:0; bottom:0;
-      background:rgba(0,0,0,0.95); color:#0f0; font-family:monospace;
-      font-size:12px; line-height:1.7; padding:10px;
-      overflow-y:auto; z-index:99999; word-break:break-all;
-      display:none;
-    }
-    #dbg .e { color:#f55; }
-    #dbg .w { color:#fa0; }
-    #dbg .o { color:#4f4; }
-    #dbg .i { color:#8cf; }
-    #dclose {
-      position:fixed; top:6px; right:10px; background:#f55; color:#fff;
-      border:none; border-radius:4px; font-size:13px; font-weight:bold;
-      padding:4px 12px; cursor:pointer; z-index:100000;
-    }
-    #token-screen {
-      position:fixed; inset:0; background:#0F172A;
-      display:none; align-items:center; justify-content:center;
-      font-family:system-ui,sans-serif; z-index:10001;
-      padding:1.5rem; box-sizing:border-box; overflow-y:auto;
-    }
-    #token-screen .card {
-      background:#1E293B; border:1px solid #334155; border-radius:16px;
-      padding:2rem; width:100%; max-width:360px;
-      display:flex; flex-direction:column; align-items:center;
-    }
-    #token-screen input {
-      width:100%; padding:.6rem .85rem; border-radius:8px;
-      border:1px solid #334155; background:#0F172A; color:#F1F5F9;
-      font-size:.85rem; box-sizing:border-box; outline:none; font-family:monospace;
-    }
-    #token-screen button.connect-btn {
-      margin-top:.75rem; padding:.65rem; border-radius:8px; border:none;
-      background:#2563EB; color:#fff; font-weight:700; cursor:pointer;
-      font-size:.9rem; font-family:inherit; width:100%;
-    }
-    #token-screen .divider {
-      display:flex; align-items:center; gap:.75rem; width:100%; margin:1.25rem 0;
-    }
-    #token-screen .divider hr { flex:1; border:none; border-top:1px solid #334155; }
-    #token-screen .divider span { color:#475569; font-size:.75rem; white-space:nowrap; }
-    #tk-error {
-      color:#FCA5A5; font-size:.78rem; display:none; margin-top:.45rem;
-      background:#450a0a; border:1px solid #7f1d1d; border-radius:6px; padding:.45rem .7rem; width:100%;
-    }
+    #net-dot.online { background: #10B981; }
+    /* ── Panel de diagnóstico (solo desarrollo) ── */
+    #debug-panel { display: none; }
+    #debug-toggle { display: none; }
   </style>
 </head>
 <body>
+  <!-- Botón para mostrar/ocultar diagnóstico -->
+  <button id="debug-toggle" onclick="toggleDebug()">🔍 DEBUG</button>
 
-  <!-- Panel debug visible al arrancar -->
-  <div id="dbg"></div>
-  <button id="dclose" onclick="document.getElementById('dbg').style.display='none';this.style.display='none'">✕ CERRAR</button>
+  <!-- Panel de diagnóstico -->
+  <div id="debug-panel"></div>
 
-  <!-- Pantalla de carga -->
-  <div id="setup">
-    <div class="spin"></div>
-    <h2 id="st" style="font-size:1.4rem;margin-bottom:.5rem;">Conectando...</h2>
-    <p  id="sm" style="color:#94A3B8;font-size:.95rem;">Iniciando GestorPlayer</p>
-    <p  id="se" style="color:#fca5a5;font-size:.85rem;margin-top:.75rem;background:#7f1d1d;padding:.5rem .75rem;border-radius:6px;display:none;"></p>
-  </div>
+  <!-- Pantalla de conexión -->
+  <div id="token-screen" style="display:none; position:fixed; inset:0; background:#F8FAFC; overflow-y:auto; z-index:9999; font-family:'Inter',system-ui,sans-serif; align-items:center; justify-content:center; padding:1.5rem; box-sizing:border-box;">
+    <div style="background:#fff; border:1px solid #E2E8F0; border-radius:16px; padding:2rem; width:100%; max-width:360px; display:flex; flex-direction:column; align-items:center; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
 
-  <!-- Pantalla de conexión (QR + token manual) -->
-  <div id="token-screen">
-    <div class="card">
-
-      <!-- Logo -->
-      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1.25rem;">
-        <div style="width:34px;height:34px;background:#2563EB;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
+        <!-- Logo -->
+        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1.25rem;">
+          <div style="width:34px; height:34px; background:#3B82F6; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
+          </div>
+          <span style="font-weight:800; font-size:1.15rem; color:#0F172A;">GestorPlayer</span>
+          <span style="font-size:0.55rem; font-weight:700; background:#EFF6FF; color:#3B82F6; border:1px solid #BFDBFE; border-radius:4px; padding:2px 5px;">BETA</span>
         </div>
-        <span style="font-weight:800;font-size:1.15rem;color:#F1F5F9;">GestorPlayer</span>
-        <span style="font-size:.55rem;font-weight:700;background:#1e3a8a;color:#93C5FD;border:1px solid #1d4ed8;border-radius:4px;padding:2px 5px;">BETA</span>
+
+        <div style="height:1px; background:#F1F5F9; width:100%; margin-bottom:1.25rem;"></div>
+
+        <!-- QR -->
+        <p style="color:#0F172A; font-size:0.9rem; font-weight:600; margin:0 0 0.25rem; text-align:center;">Escanea con tu celular</p>
+        <p style="color:#94A3B8; font-size:0.78rem; margin:0 0 1rem; text-align:center;">Selecciona la pantalla desde el dashboard</p>
+
+        <div id="qr-loading" style="color:#94A3B8; font-size:0.82rem; padding:1.5rem 0; text-align:center;">Generando QR...</div>
+        <div id="qr-ready" style="display:none; text-align:center; width:100%;">
+          <img id="qr-img" src="" alt="QR" style="width:160px; height:160px; border-radius:10px; border:1px solid #E2E8F0;" />
+          <p id="qr-status" style="color:#94A3B8; font-size:0.78rem; margin:0.6rem 0 0;">Esperando conexión...</p>
+        </div>
+
+        <!-- Divisor -->
+        <div style="display:flex; align-items:center; gap:0.75rem; width:100%; margin:1.25rem 0;">
+          <div style="flex:1; height:1px; background:#E2E8F0;"></div>
+          <span style="color:#CBD5E1; font-size:0.75rem; white-space:nowrap;">o ingresa el token</span>
+          <div style="flex:1; height:1px; background:#E2E8F0;"></div>
+        </div>
+
+        <!-- Token manual -->
+        <div style="width:100%;">
+          <input
+            id="token-input"
+            type="text"
+            placeholder="Pega el token aquí..."
+            style="width:100%; padding:0.6rem 0.85rem; border-radius:8px; border:1px solid #E2E8F0; background:#F8FAFC; color:#0F172A; font-size:0.85rem; box-sizing:border-box; outline:none; font-family:monospace;"
+          />
+          <p id="token-error" style="color:#EF4444; font-size:0.78rem; display:none; margin-top:0.45rem; background:#FFF5F5; border:1px solid #FECACA; border-radius:6px; padding:0.45rem 0.7rem;">
+            ❌ Token inválido. Verifica e intenta de nuevo.
+          </p>
+          <button id="token-btn"
+            style="margin-top:0.75rem; padding:0.65rem; border-radius:8px; border:none; background:#2563EB; color:#fff; font-weight:700; cursor:pointer; font-size:0.9rem; font-family:inherit; width:100%;">
+            Conectar pantalla
+          </button>
+        </div>
+
       </div>
-
-      <div style="height:1px;background:#334155;width:100%;margin-bottom:1.25rem;"></div>
-
-      <!-- QR -->
-      <p style="color:#F1F5F9;font-size:.9rem;font-weight:600;margin:0 0 .25rem;text-align:center;">Escanea con tu celular</p>
-      <p style="color:#64748B;font-size:.78rem;margin:0 0 1rem;text-align:center;">Selecciona la pantalla desde el dashboard</p>
-
-      <div id="qr-loading" style="color:#64748B;font-size:.82rem;padding:1.5rem 0;text-align:center;">Generando QR...</div>
-      <div id="qr-ready" style="display:none;text-align:center;width:100%;">
-        <img id="qr-img" src="" alt="QR" style="width:160px;height:160px;border-radius:10px;border:1px solid #334155;" />
-        <p id="qr-status" style="color:#64748B;font-size:.78rem;margin:.6rem 0 0;">Esperando conexión...</p>
-      </div>
-
-      <!-- Divisor -->
-      <div class="divider">
-        <hr /><span>o ingresa el token</span><hr />
-      </div>
-
-      <!-- Input manual -->
-      <div style="width:100%;">
-        <input id="tk-input" type="text" placeholder="Pega el token aquí..." />
-        <p id="tk-error">❌ Token inválido. Verifica e intenta de nuevo.</p>
-        <button class="connect-btn" id="tk-btn">Conectar pantalla</button>
-      </div>
-
-    </div>
   </div>
 
-  <div id="screen"></div>
+  <div id="screen" style="display:none;"></div>
   <div id="status">Iniciando...</div>
+  <div id="net-dot"></div>
+  <button
+    onclick="clearTokenAndReload()"
+    style="position:fixed; bottom:8px; left:12px; background:transparent; border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.2); font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; font-family:monospace; z-index:9999;"
+  >⚙ cambiar pantalla</button>
+
+  <!-- ── Supabase como UMD (sin ES modules, compatible con WebView Android) ── -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 
   <script>
-    // ═══════════════════════════════════════════════
-    //  CONFIGURACIÓN  ─  sin librerías externas
-    // ═══════════════════════════════════════════════
-    var URL_SB  = 'https://pekjgxyllilzfwkdyzmm.supabase.co'
-    var KEY_SB  = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
-    var TOKEN   = ''  // se obtiene de localStorage o pantalla de emparejamiento
+    // ════════════════════════════════════════════════════════════
+    //  CONFIGURACIÓN
+    // ════════════════════════════════════════════════════════════
 
-    // ═══════════════════════════════════════════════
-    //  DEBUG
-    // ═══════════════════════════════════════════════
-    var dbgEl = document.getElementById('dbg')
-    var dbgLines = []
-    function dl(msg, t) {
-      var h = new Date().toLocaleTimeString('es',{hour12:false})
-      dbgLines.push('<div class="'+(t||'i')+'">['+h+'] '+esc(msg)+'</div>')
-      if (dbgLines.length > 120) dbgLines.shift()
-      dbgEl.innerHTML = dbgLines.join('')
-      dbgEl.scrollTop = dbgEl.scrollHeight
-      console.log(msg)
+    var SUPABASE_URL    = 'https://pekjgxyllilzfwkdyzmm.supabase.co'
+    var SUPABASE_KEY    = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
+
+    var HARDCODED_TOKEN = ''  // vacío: siempre usa localStorage o pantalla de ingreso
+
+    // ════════════════════════════════════════════════════════════
+    //  PANEL DE DIAGNÓSTICO
+    // ════════════════════════════════════════════════════════════
+
+    var debugPanel  = document.getElementById('debug-panel')
+    var debugLines  = []
+    var debugVisible = false
+
+    function toggleDebug() {
+      debugVisible = !debugVisible
+      debugPanel.className = debugVisible ? 'visible' : ''
     }
-    function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 
-    // ═══════════════════════════════════════════════
-    //  UI HELPERS
-    // ═══════════════════════════════════════════════
-    var screenEl = document.getElementById('screen')
+    function dlog(msg, type) {
+      var t    = new Date().toLocaleTimeString('es', { hour12: false })
+      var cls  = 'log-' + (type || 'info')
+      var line = '<div class="' + cls + '">[' + t + '] ' + escapeHtml(msg) + '</div>'
+      debugLines.push(line)
+      if (debugLines.length > 60) debugLines.shift()
+      debugPanel.innerHTML = debugLines.join('')
+      debugPanel.scrollTop = debugPanel.scrollHeight
+      console.log('[GP]', msg)
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  HELPERS
+    // ════════════════════════════════════════════════════════════
+
     var statusEl = document.getElementById('status')
-    var setupEl  = document.getElementById('setup')
-    function log(m)        { statusEl.textContent = m; dl(m) }
-    function setTitle(m)   { document.getElementById('st').textContent = m }
-    function setMsg(m)     { document.getElementById('sm').textContent = m }
-    function showErr(m) {
-      dl('ERROR: '+m,'e')
-      setTitle('Sin conexión')
-      setMsg('Reintentando en 5 segundos...')
-      var e = document.getElementById('se')
-      e.textContent = m; e.style.display='block'
-      setTimeout(function(){ e.style.display='none'; startPlayer(activeToken) }, 5000)
+    var screenEl = document.getElementById('screen')
+
+    function log(msg) {
+      statusEl.textContent = msg
+      dlog(msg.replace(/\n/g, ' · '), 'info')
     }
 
-    // ═══════════════════════════════════════════════
-    //  CLIENTE SUPABASE (fetch puro, sin librería)
-    // ═══════════════════════════════════════════════
-    var SB_HEADERS = {
-      'apikey':        KEY_SB,
-      'Authorization': 'Bearer ' + KEY_SB,
-      'Content-Type':  'application/json',
-      'Accept':        'application/json'
+    function clearTokenAndReload() {
+      try { localStorage.removeItem('device_token') } catch(e) {}
+      location.reload()
     }
 
-    function sbUrl(table, params) {
-      var q = Object.keys(params).map(function(k){
-        return encodeURIComponent(k)+'='+encodeURIComponent(params[k])
-      }).join('&')
-      return URL_SB + '/rest/v1/' + table + (q ? '?'+q : '')
+    // localStorage con fallback (falla en file:// sin permisos)
+    var _memStore = {}
+    function lsGet(key) {
+      try { return localStorage.getItem(key) } catch(e) { return _memStore[key] || null }
+    }
+    function lsSet(key, val) {
+      try { localStorage.setItem(key, val) } catch(e) { _memStore[key] = val }
+    }
+    function lsDel(key) {
+      try { localStorage.removeItem(key) } catch(e) { delete _memStore[key] }
     }
 
-    async function sbGet(table, params, single) {
-      var p = Object.assign({ select:'*' }, params)
-      if (single) p['limit'] = '1'
-      try {
-        var r = await withTimeout(fetch(sbUrl(table, p), { headers: SB_HEADERS }), 10000)
-        var j = await r.json()
-        if (!r.ok) { dl('sbGet '+table+' HTTP '+r.status+': '+JSON.stringify(j).slice(0,80),'e'); return { data:null, error:j } }
-        var data = single ? (Array.isArray(j) ? j[0]||null : j) : (Array.isArray(j)?j:[j])
-        dl('sbGet '+table+' → '+(single?'1 fila':data.length+' filas'),'o')
-        return { data:data, error:null }
-      } catch(e) {
-        dl('sbGet '+table+' excepcion: '+e.message,'e')
-        return { data:null, error:{ message:e.message } }
-      }
+    // ════════════════════════════════════════════════════════════
+    //  INIT SUPABASE
+    // ════════════════════════════════════════════════════════════
+
+    var supabaseLib = window.supabase
+    if (!supabaseLib) {
+      dlog('ERROR CRÍTICO: Supabase no cargó desde CDN. Verifica conexión.', 'err')
     }
 
-    async function sbInsert(table, row) {
-      try {
-        var r = await withTimeout(fetch(URL_SB+'/rest/v1/'+table, {
-          method:'POST', headers:SB_HEADERS, body:JSON.stringify(row)
-        }), 8000)
-        if (!r.ok) { var j=await r.json(); dl('sbInsert '+table+' error: '+JSON.stringify(j).slice(0,60),'w') }
-      } catch(e) { dl('sbInsert '+table+' excepcion: '+e.message,'w') }
-    }
-
-    async function sbDelete(table, eqKey, eqVal) {
-      try {
-        var url = URL_SB+'/rest/v1/'+table+'?'+encodeURIComponent(eqKey)+'=eq.'+encodeURIComponent(eqVal)
-        await withTimeout(fetch(url, { method:'DELETE', headers:SB_HEADERS }), 8000)
-      } catch(e) { dl('sbDelete excepcion: '+e.message,'w') }
-    }
-
-    async function sbUpdate(table, row, eqKey, eqVal) {
-      try {
-        var url = URL_SB+'/rest/v1/'+table+'?'+encodeURIComponent(eqKey)+'=eq.'+encodeURIComponent(eqVal)
-        var r   = await withTimeout(fetch(url, { method:'PATCH', headers:SB_HEADERS, body:JSON.stringify(row) }), 8000)
-        if (!r.ok) dl('sbUpdate '+table+' error HTTP '+r.status,'w')
-        else dl('sbUpdate '+table+' OK','o')
-      } catch(e) { dl('sbUpdate excepcion: '+e.message,'w') }
-    }
-
-    function storageUrl(path) {
-      return URL_SB + '/storage/v1/object/public/media/' + path
-    }
-
-    function withTimeout(promise, ms) {
-      return Promise.race([
-        promise,
-        new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('Timeout '+ms+'ms')) }, ms) })
-      ])
-    }
-
-    // ═══════════════════════════════════════════════
-    //  LOCALSTORAGE CON FALLBACK
-    // ═══════════════════════════════════════════════
-    var _mem = {}
-    function lsGet(k){ try{ return localStorage.getItem(k) }catch(e){ return _mem[k]||null } }
-    function lsSet(k,v){ try{ localStorage.setItem(k,v) }catch(e){ _mem[k]=v } }
-    function lsDel(k){ try{ localStorage.removeItem(k) }catch(e){ delete _mem[k] } }
-
-    // ═══════════════════════════════════════════════
-    //  ESTADO DEL PLAYER
-    // ═══════════════════════════════════════════════
-    var screenData  = null
-    var zoneStates  = {}
-    var isOnline    = true
-    var activeToken = null
-
-    // ═══════════════════════════════════════════════
-    //  DIAGNÓSTICO AL INICIO
-    // ═══════════════════════════════════════════════
-    function envCheck() {
-      dl('══ DIAGNÓSTICO ══','i')
-      dl('UA: '+navigator.userAgent.slice(0,100),'i')
-      dl('Online: '+navigator.onLine, navigator.onLine?'o':'e')
-      dl('URL: '+window.location.href,'i')
-      try { localStorage.setItem('_t','1'); localStorage.removeItem('_t'); dl('localStorage: OK','o') }
-      catch(e) { dl('localStorage FALLA: '+e.message,'w') }
-      dl('fetch: '+(typeof fetch!=='undefined'?'OK':'NO DISPONIBLE'),typeof fetch!=='undefined'?'o':'e')
-      dl('Token guardado: '+(lsGet('device_token')||'(ninguno)'),'i')
-      dl('Supabase URL: '+URL_SB,'i')
-      dl('API Key (inicio): '+KEY_SB.slice(0,20)+'...','i')
-      dl('══════════════════','i')
-    }
-
-    // ═══════════════════════════════════════════════
-    //  CARGA DE CONTEOS
-    // ═══════════════════════════════════════════════
-    async function loadCounts() {
-      var res = await sbGet('screen_content_counts',
-        { 'screen_id': 'eq.'+screenData.id }, false)
-      var counts={}, lastPlayed={}
-      if (res.data) {
-        res.data.forEach(function(r){
-          counts[r.content_id]     = r.total_plays
-          lastPlayed[r.content_id] = r.last_played_at ? new Date(r.last_played_at).getTime() : 0
-        })
-      }
-      return { counts:counts, lastPlayed:lastPlayed }
-    }
-
-    // ═══════════════════════════════════════════════
-    //  ALGORITMO DE PLAYLIST
-    // ═══════════════════════════════════════════════
-    function getNextItem(zoneId) {
-      var state=zoneStates[zoneId], entries=state.entries
-      var opH=screenData.operating_hours||20, now=Date.now(), total=entries.length
-      if (!total) return null
-      for (var i=0; i<total; i++) {
-        var entry=entries[state.idx++%total]
-        if (entry.kind==='item') {
-          var it=entry.item
-          if (!it.is_unlimited && it.daily_frequency) {
-            if ((state.dc[it.id]||0)>=it.daily_frequency) continue
-            if (now-(state.lp[it.id]||0)<(opH*3600000/it.daily_frequency)) continue
-          }
-          return { item:it, subName:null }
-        }
-        if (entry.kind==='sub' && entry.items && entry.items.length) {
-          var sub=entry.sub
-          if (!sub.is_unlimited && sub.daily_frequency) {
-            if ((state.dc['s'+sub.id]||0)>=sub.daily_frequency) continue
-            if (now-(state.lp['s'+sub.id]||0)<(opH*3600000/sub.daily_frequency)) continue
-          }
-          return { item:entry.items[entry.si++%entry.items.length], subName:sub.name }
-        }
-      }
-      return null
-    }
-
-    // Mira qué viene después sin avanzar el estado
-    function peekNextItem(zoneId) {
-      var state=zoneStates[zoneId], entries=state.entries, total=entries.length
-      if (!total) return null
-      for (var i=0; i<total; i++) {
-        var entry=entries[(state.idx+i)%total]
-        if (entry.kind==='item') return entry.item
-        if (entry.kind==='sub' && entry.items && entry.items.length)
-          return entry.items[entry.si % entry.items.length]
-      }
-      return null
-    }
-
-    function playNext(zoneId) {
-      var r=getNextItem(zoneId)
-      if (!r) { setTimeout(function(){ playNext(zoneId) },5000); return }
-      renderItem(zoneId, r.item, r.subName)
-    }
-
-    // Elimina todos los hijos excepto el último
-    function clearOld(zEl) {
-      while (zEl.children.length > 1) zEl.removeChild(zEl.children[0])
-    }
-
-    // Crea un <video> oculto y lo empieza a cargar en el DOM del zone
-    function preloadNextVideo(zoneId) {
-      var state = zoneStates[zoneId]
-      if (state.preloaded) return          // ya hay uno precargando
-      var next = peekNextItem(zoneId)
-      if (!next || next.type !== 'video') return
-
-      var url = storageUrl(next.storage_path)
-      if (state.preloadedUrl === url) return  // ya es el mismo
-
-      var vid = document.createElement('video')
-      vid.src = url; vid.muted = true; vid.preload = 'auto'
-      vid.setAttribute('webkit-playsinline','')
-      vid.setAttribute('disableremoteplayback','')
-      // Invisible, detrás del contenido actual
-      vid.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:fill;opacity:0;pointer-events:none;z-index:0;'
-      vid.load()
-
-      var zEl = document.getElementById('zone-'+zoneId)
-      if (zEl) zEl.insertBefore(vid, zEl.firstChild)  // detrás de todo
-
-      state.preloaded    = vid
-      state.preloadedUrl = url
-      dl('Precargando: '+next.name.slice(0,25),'i')
-    }
-
-    function renderItem(zoneId, item, subName) {
-      var zEl=document.getElementById('zone-'+zoneId); if (!zEl) return
-      var state=zoneStates[zoneId]
-      var url=storageUrl(item.storage_path)
-      state.dc[item.id]=(state.dc[item.id]||0)+1
-      state.lp[item.id]=Date.now()
-      if (subName) { state.dc['s'+item.sub_playlist_id]=(state.dc['s'+item.sub_playlist_id]||0)+1; state.lp['s'+item.sub_playlist_id]=Date.now() }
-      dl('▶ '+item.name.slice(0,30)+' ['+item.type+']','o')
-      log('▶ '+item.name.slice(0,28))
-      sbInsert('playback_events',{ screen_id:screenData.id, zone_id:zoneId, content_id:item.id })
-
-      if (item.type==='image') {
-        var img=document.createElement('img')
-        img.onload=function(){
-          zEl.appendChild(img)
-          clearOld(zEl)
-          // Precargar siguiente mientras muestra la imagen
-          preloadNextVideo(zoneId)
-          setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||10)*1000)
-        }
-        img.onerror=function(){ dl('Error img: '+url.slice(0,50),'e'); setTimeout(function(){ playNext(zoneId) },3000) }
-        img.src=url
-
-      } else if (item.type==='url') {
-        var ifr=document.createElement('iframe')
-        ifr.src=item.url||''; ifr.style.cssText='position:absolute;top:0;left:0;width:100%;height:100%;border:none;'
-        ifr.allow='autoplay; fullscreen;'; ifr.setAttribute('allowfullscreen','')
-        zEl.appendChild(ifr)
-        clearOld(zEl)
-        setTimeout(function(){ playNext(zoneId) },(item.duration_seconds||30)*1000)
-
-      } else {
-        // ── Video: usa el elemento precargado si coincide con la URL ──
-        var vid
-        if (state.preloaded && state.preloadedUrl === url) {
-          vid = state.preloaded
-          vid.style.opacity = '1'
-          vid.style.zIndex  = ''
-          dl('Usando elemento precargado ✓','o')
-        } else {
-          vid = document.createElement('video')
-          vid.src=url; vid.preload='auto'
-        }
-        state.preloaded    = null
-        state.preloadedUrl = null
-
-        vid.muted=true; vid.autoplay=true; vid.playsInline=true
-        vid.setAttribute('webkit-playsinline','')
-        vid.setAttribute('disableremoteplayback','')
-
-        vid.addEventListener('playing', function(){ clearOld(zEl) }, { once:true })
-        setTimeout(function(){ clearOld(zEl) }, 600)
-
-        vid.onended = function() {
-          state.preloaded    = null
-          state.preloadedUrl = null
-          playNext(zoneId)
-        }
-        vid.onerror = function() {
-          dl('Error vid: '+url.slice(0,50),'e')
-          state.preloaded = null
-          clearOld(zEl)
-          setTimeout(function(){ playNext(zoneId) },3000)
-        }
-
-        // Precargar el siguiente en cuanto este empieza a reproducirse
-        vid.addEventListener('playing', function(){
-          preloadNextVideo(zoneId)
-        }, { once:true })
-
-        // También precargar cuando queden ~2s (para videos cortos)
-        vid.addEventListener('timeupdate', function(){
-          if (vid.duration && vid.currentTime >= vid.duration - 2) {
-            preloadNextVideo(zoneId)
-          }
-        })
-
-        zEl.appendChild(vid)
-        vid.play().catch(function(e){ dl('play() rechazado: '+e.message,'w') })
-      }
-    }
-
-    // ═══════════════════════════════════════════════
-    //  LAYOUT
-    // ═══════════════════════════════════════════════
-    function buildLayout(program, zones) {
-      screenEl.innerHTML=''
-      var c=document.createElement('div')
-      c.style.cssText='position:absolute;background:#000;width:100vw;height:100vh;left:0;top:0;overflow:hidden;'
-      var sx=window.innerWidth/program.width, sy=window.innerHeight/program.height
-      dl('Layout: prog '+program.width+'×'+program.height+' → escala x'+sx.toFixed(2)+' y'+sy.toFixed(2),'o')
-      zones.forEach(function(z){
-        var d=document.createElement('div')
-        d.className='zone'; d.id='zone-'+z.id
-        d.style.cssText='left:'+(z.x*sx)+'px;top:'+(z.y*sy)+'px;width:'+(z.width*sx)+'px;height:'+(z.height*sy)+'px;background:'+(z.background_color||'#000')+';'
-        c.appendChild(d)
+    var sb = null
+    try {
+      sb = supabaseLib.createClient(SUPABASE_URL, SUPABASE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false }
       })
-      screenEl.appendChild(c)
+      dlog('Supabase client creado OK', 'ok')
+    } catch(e) {
+      dlog('ERROR creando Supabase client: ' + e.message, 'err')
     }
 
-    // ═══════════════════════════════════════════════
-    //  HEARTBEAT / POLLING
-    // ═══════════════════════════════════════════════
+    // Un storage_path puede ser una ruta de Supabase (archivos antiguos) o una
+    // URL pública completa de Cloudflare R2 (archivos nuevos). Si ya es URL, se
+    // usa tal cual; si no, se resuelve por Supabase. El caché offline funciona
+    // igual con ambas porque cachea por URL final.
+    function resolveMediaUrl(path) {
+      if (!path) return ''
+      if (/^https?:\/\//i.test(path)) return path
+      return sb.storage.from('media').getPublicUrl(path).data.publicUrl
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  ESTADO DEL PLAYER
+    // ════════════════════════════════════════════════════════════
+
+    var screenData      = null
+    var isOnline         = true
+    var zoneStates       = {}
+    var lastPublishedAt  = null
+
+    // Estado adicional para reproducción offline
+    var zoneObjectUrls  = {}   // zoneId -> última blob URL creada (para revocar)
+    var zoneWatchdogs   = {}   // zoneId -> intervalId del vigilante anti-congelamiento
+    var zoneFailStreak  = {}   // zoneId -> intentos fallidos consecutivos (offline sin caché)
+    var countsDirty     = {}   // zoneId -> true si sus contadores cambiaron desde el último guardado
+    var countsSaveTimer = null
+
+    function setConnStatus(online) {
+      isOnline = online
+      var dot = document.getElementById('net-dot')
+      if (dot) dot.className = online ? 'online' : ''
+      log(online ? '🟢 Conectado' : '🔴 Sin conexión')
+      dlog('Conexión: ' + (online ? 'ONLINE' : 'OFFLINE'), online ? 'ok' : 'warn')
+      if (online) flushEventQueue()
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  ALMACENAMIENTO LOCAL — INDEXEDDB
+    //  Guarda la playlist completa (zonas, contenido, frecuencias,
+    //  vencimientos) y una cola de eventos pendientes de sincronizar.
+    //  Así el player puede arrancar y seguir reproduciendo sin red.
+    // ════════════════════════════════════════════════════════════
+
+    var IDB_NAME    = 'gp_offline_db'
+    var IDB_VERSION = 1
+    var idbPromise  = null
+
+    function idbOpen() {
+      if (idbPromise) return idbPromise
+      idbPromise = new Promise(function(resolve, reject) {
+        if (!window.indexedDB) { reject(new Error('IndexedDB no soportado')); return }
+        var req = indexedDB.open(IDB_NAME, IDB_VERSION)
+        req.onupgradeneeded = function(e) {
+          var db = e.target.result
+          if (!db.objectStoreNames.contains('meta'))   db.createObjectStore('meta', { keyPath: 'key' })
+          if (!db.objectStoreNames.contains('zones'))  db.createObjectStore('zones', { keyPath: 'zoneId' })
+          if (!db.objectStoreNames.contains('counts')) db.createObjectStore('counts', { keyPath: 'zoneId' })
+          if (!db.objectStoreNames.contains('events')) db.createObjectStore('events', { keyPath: 'id', autoIncrement: true })
+        }
+        req.onsuccess = function(e) { resolve(e.target.result) }
+        req.onerror   = function(e) { reject((e.target && e.target.error) || new Error('IDB open error')) }
+      })
+      return idbPromise
+    }
+
+    function idbStore(storeName, mode) {
+      return idbOpen().then(function(db) {
+        return db.transaction(storeName, mode).objectStore(storeName)
+      })
+    }
+
+    function idbPut(storeName, value) {
+      return idbStore(storeName, 'readwrite').then(function(store) {
+        return new Promise(function(resolve, reject) {
+          var r = store.put(value)
+          r.onsuccess = function() { resolve(r.result) }
+          r.onerror   = function() { reject(r.error) }
+        })
+      })
+    }
+
+    function idbGet(storeName, key) {
+      return idbStore(storeName, 'readonly').then(function(store) {
+        return new Promise(function(resolve, reject) {
+          var r = store.get(key)
+          r.onsuccess = function() { resolve(r.result) }
+          r.onerror   = function() { reject(r.error) }
+        })
+      })
+    }
+
+    function idbGetAll(storeName) {
+      return idbStore(storeName, 'readonly').then(function(store) {
+        return new Promise(function(resolve, reject) {
+          var r = store.getAll()
+          r.onsuccess = function() { resolve(r.result || []) }
+          r.onerror   = function() { reject(r.error) }
+        })
+      })
+    }
+
+    function idbDelete(storeName, key) {
+      return idbStore(storeName, 'readwrite').then(function(store) {
+        return new Promise(function(resolve, reject) {
+          var r = store.delete(key)
+          r.onsuccess = function() { resolve() }
+          r.onerror   = function() { reject(r.error) }
+        })
+      })
+    }
+
+    function idbCount(storeName) {
+      return idbStore(storeName, 'readonly').then(function(store) {
+        return new Promise(function(resolve, reject) {
+          var r = store.count()
+          r.onsuccess = function() { resolve(r.result) }
+          r.onerror   = function() { reject(r.error) }
+        })
+      })
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  CACHÉ DE MEDIOS — CACHE API (sin Service Worker)
+    //  Descarga cada video/imagen a disco local para reproducirlo
+    //  100% offline. Se usa la Cache Storage directamente desde la
+    //  página (no requiere registrar un Service Worker).
+    // ════════════════════════════════════════════════════════════
+
+    var MEDIA_CACHE_NAME     = 'gp-media-v1'
+    var CACHE_API_OK         = (typeof caches !== 'undefined')
+    var DOWNLOAD_CONCURRENCY = 2
+    var downloadQueue        = []
+    var downloadQueueSet     = {}
+    var activeDownloads      = 0
+
+    // Busca el archivo en caché y devuelve su Blob, o null si no está.
+    function cacheHasBlob(url) {
+      if (!CACHE_API_OK) return Promise.resolve(null)
+      return caches.open(MEDIA_CACHE_NAME).then(function(cache) {
+        return cache.match(url)
+      }).then(function(res) {
+        return res ? res.blob() : null
+      }).catch(function() { return null })
+    }
+
+    async function downloadOne(url) {
+      try {
+        var cache = await caches.open(MEDIA_CACHE_NAME)
+        var hit = await cache.match(url)
+        if (hit) return
+        var res = await fetch(url)
+        if (!res || !res.ok) throw new Error('HTTP ' + (res && res.status))
+        await cache.put(url, res.clone())
+        dlog('Cacheado OK: ...' + url.slice(-40), 'ok')
+      } catch(e) {
+        dlog('No se pudo cachear (' + e.message + '): ...' + url.slice(-40), 'warn')
+      }
+    }
+
+    function enqueueDownload(url) {
+      if (!CACHE_API_OK || !url || downloadQueueSet[url]) return
+      downloadQueueSet[url] = true
+      downloadQueue.push(url)
+      pumpDownloadQueue()
+    }
+
+    function pumpDownloadQueue() {
+      while (activeDownloads < DOWNLOAD_CONCURRENCY && downloadQueue.length > 0) {
+        (function(url) {
+          activeDownloads++
+          downloadOne(url).then(function() {
+            delete downloadQueueSet[url]
+            activeDownloads--
+            pumpDownloadQueue()
+          })
+        })(downloadQueue.shift())
+      }
+    }
+
+    function waitForDownloadQueueIdle(cb) {
+      var check = setInterval(function() {
+        if (activeDownloads === 0 && downloadQueue.length === 0) {
+          clearInterval(check)
+          cb()
+        }
+      }, 1000)
+    }
+
+    // Recolecta las URLs públicas de todo el contenido (items + sub-playlists)
+    // que el programa actual necesita.
+    function collectMediaUrls(zoneEntriesMap) {
+      var urls = {}
+      Object.keys(zoneEntriesMap).forEach(function(zoneId) {
+        (zoneEntriesMap[zoneId] || []).forEach(function(entry) {
+          var items = entry.kind === 'item' ? [entry.item] : (entry.items || [])
+          items.forEach(function(it) {
+            if (it && it.type !== 'url' && it.storage_path) {
+              var u = resolveMediaUrl(it.storage_path)
+              if (u) urls[u] = true
+            }
+          })
+        })
+      })
+      return Object.keys(urls)
+    }
+
+    // Descarga en segundo plano todo lo requerido y, al terminar, borra del
+    // caché lo que ya no se use (contenido reemplazado o eliminado).
+    function enqueueAllMedia(zoneEntriesMap) {
+      if (!CACHE_API_OK) return
+      var urls = collectMediaUrls(zoneEntriesMap)
+      dlog('Assets requeridos para este programa: ' + urls.length, 'info')
+      urls.forEach(function(u) { enqueueDownload(u) })
+      waitForDownloadQueueIdle(function() { purgeStaleCache(urls) })
+    }
+
+    function purgeStaleCache(validUrls) {
+      var validSet = {}
+      validUrls.forEach(function(u) { validSet[u] = true })
+      caches.open(MEDIA_CACHE_NAME).then(function(cache) {
+        return cache.keys().then(function(reqs) {
+          var toDelete = reqs.filter(function(r) { return !validSet[r.url] })
+          if (!toDelete.length) return
+          dlog('Purgando ' + toDelete.length + ' archivo(s) obsoleto(s) del caché', 'info')
+          return Promise.all(toDelete.map(function(r) { return cache.delete(r) }))
+        })
+      }).catch(function(e) { dlog('Purga de caché falló: ' + e.message, 'warn') })
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  SNAPSHOT LOCAL (playlist + contadores)
+    // ════════════════════════════════════════════════════════════
+
+    function persistSnapshot(program, zonesRaw, zoneEntriesMap) {
+      idbPut('meta', {
+        key: 'state',
+        screenId: screenData.id,
+        program: {
+          id: program.id, name: program.name, width: program.width, height: program.height,
+          published_at: program.published_at, updated_at: program.updated_at,
+        },
+        publishedAt: program.published_at || program.updated_at,
+        savedAt: Date.now(),
+      }).catch(function(e) { dlog('No se pudo guardar snapshot (meta): ' + e.message, 'warn') })
+
+      zonesRaw.forEach(function(zone) {
+        idbPut('zones', {
+          zoneId: zone.id,
+          zone: {
+            id: zone.id, name: zone.name, x: zone.x, y: zone.y,
+            width: zone.width, height: zone.height, background_color: zone.background_color,
+          },
+          entries: zoneEntriesMap[zone.id] || [],
+          savedAt: Date.now(),
+        }).catch(function(e) { dlog('No se pudo guardar zona ' + zone.id.slice(0,6) + ': ' + e.message, 'warn') })
+      })
+
+      // Limpia zonas que ya no pertenecen a este programa (borradas, etc.)
+      var validIds = {}
+      zonesRaw.forEach(function(z) { validIds[z.id] = true })
+      idbGetAll('zones').then(function(rows) {
+        rows.forEach(function(r) {
+          if (!validIds[r.zoneId]) idbDelete('zones', r.zoneId).catch(function() {})
+        })
+      }).catch(function() {})
+    }
+
+    // Guarda los contadores de reproducción con un pequeño retraso (evita
+    // escribir en disco en cada frame) para que sobrevivan a un apagón.
+    function persistCountsDebounced(zoneId) {
+      countsDirty[zoneId] = true
+      if (countsSaveTimer) return
+      countsSaveTimer = setTimeout(function() {
+        countsSaveTimer = null
+        var toSave = Object.keys(countsDirty)
+        countsDirty = {}
+        toSave.forEach(function(zid) {
+          var st = zoneStates[zid]
+          if (!st) return
+          idbPut('counts', { zoneId: zid, dailyCounts: st.dailyCounts, lastPlayedAt: st.lastPlayedAt })
+            .catch(function(e) { dlog('No se pudo guardar contadores de zona ' + zid.slice(0,6) + ': ' + e.message, 'warn') })
+        })
+      }, 4000)
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  COLA DE EVENTOS OFFLINE (heartbeat + reproducciones)
+    // ════════════════════════════════════════════════════════════
+
+    var MAX_QUEUE   = 5000
+    var flushingNow = false
+
+    function queueEvent(evt) {
+      idbPut('events', evt).then(function() {
+        trimQueueIfNeeded()
+      }).catch(function(e) { dlog('No se pudo encolar evento offline: ' + e.message, 'err') })
+    }
+
+    function trimQueueIfNeeded() {
+      idbCount('events').then(function(count) {
+        if (count <= MAX_QUEUE) return
+        idbStore('events', 'readwrite').then(function(store) {
+          var toDelete = count - MAX_QUEUE
+          var deleted  = 0
+          var cursorReq = store.openCursor()
+          cursorReq.onsuccess = function(e) {
+            var cursor = e.target.result
+            if (cursor && deleted < toDelete) {
+              cursor.delete()
+              deleted++
+              cursor.continue()
+            }
+          }
+        })
+      }).catch(function() {})
+    }
+
+    function flushEventQueue() {
+      if (flushingNow || !isOnline || !sb) return
+      flushingNow = true
+      idbGetAll('events').then(function(rows) {
+        if (!rows.length) { flushingNow = false; return }
+        dlog('Sincronizando ' + rows.length + ' evento(s) pendiente(s)...', 'info')
+        var BATCH   = 100
+        var batch   = rows.slice(0, BATCH)
+        var payload = batch.map(function(r) {
+          return { screen_id: r.screen_id, zone_id: r.zone_id, content_id: r.content_id, played_at: r.played_at }
+        })
+        sb.from('playback_events').insert(payload).then(function(res) {
+          if (res.error) {
+            dlog('Sincronización de eventos falló: ' + res.error.message, 'warn')
+            flushingNow = false
+            return
+          }
+          Promise.all(batch.map(function(r) { return idbDelete('events', r.id) })).then(function() {
+            dlog('Sincronizados ' + batch.length + ' evento(s) OK', 'ok')
+            flushingNow = false
+            if (rows.length > BATCH) flushEventQueue()
+          }).catch(function() { flushingNow = false })
+        }).catch(function(e) {
+          dlog('Sincronización de eventos: excepción ' + e.message, 'warn')
+          flushingNow = false
+        })
+      }).catch(function(e) {
+        dlog('No se pudo leer la cola de eventos: ' + e.message, 'err')
+        flushingNow = false
+      })
+    }
+
+    function startEventSync() {
+      setInterval(function() { if (isOnline) flushEventQueue() }, 20000)
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  TOKEN
+    // ════════════════════════════════════════════════════════════
+
+    function getDeviceToken() {
+      // 1. URL param
+      try {
+        var params   = new URLSearchParams(window.location.search)
+        var urlToken = params.get('token')
+        if (urlToken) {
+          dlog('Token desde URL: ' + urlToken.slice(0,12) + '...', 'ok')
+          lsSet('device_token', urlToken)
+          return urlToken
+        }
+      } catch(e) {
+        dlog('Error leyendo URL params: ' + e.message, 'warn')
+      }
+
+      // 2. localStorage
+      try {
+        var saved = lsGet('device_token')
+        if (saved) {
+          dlog('Token desde localStorage: ' + saved.slice(0,12) + '...', 'ok')
+          return saved
+        }
+      } catch(e) {
+        dlog('Error leyendo localStorage: ' + e.message, 'warn')
+      }
+
+      // 3. Token hardcodeado (para dispositivos sin UI de configuración)
+      if (HARDCODED_TOKEN) {
+        dlog('Usando token hardcodeado: ' + HARDCODED_TOKEN.slice(0,12) + '...', 'warn')
+        return HARDCODED_TOKEN
+      }
+
+      dlog('Sin token disponible → mostrando pantalla de ingreso', 'warn')
+      return null
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  DIAGNÓSTICO DE ENTORNO AL INICIO
+    // ════════════════════════════════════════════════════════════
+
+    function runEnvCheck() {
+      dlog('═══ DIAGNÓSTICO DE ENTORNO ═══', 'info')
+      dlog('UserAgent: ' + navigator.userAgent.slice(0, 120), 'info')
+      dlog('Online (navigator): ' + navigator.onLine, navigator.onLine ? 'ok' : 'err')
+      dlog('URL: ' + window.location.href.slice(0, 80), 'info')
+
+      // Test localStorage
+      try {
+        localStorage.setItem('_test', '1')
+        localStorage.removeItem('_test')
+        dlog('localStorage: OK', 'ok')
+      } catch(e) {
+        dlog('localStorage: FALLA (' + e.message + ') → usando memoria', 'warn')
+      }
+
+      dlog('IndexedDB: ' + (window.indexedDB ? 'DISPONIBLE' : 'NO DISPONIBLE'), window.indexedDB ? 'ok' : 'warn')
+      dlog('Cache API: ' + (CACHE_API_OK ? 'DISPONIBLE (offline habilitado)' : 'NO DISPONIBLE (solo streaming en vivo)'), CACHE_API_OK ? 'ok' : 'warn')
+
+      // Test Supabase lib
+      dlog('window.supabase: ' + (window.supabase ? 'CARGADO' : 'NO DISPONIBLE'), window.supabase ? 'ok' : 'err')
+
+      dlog('SUPABASE_URL: ' + SUPABASE_URL, 'info')
+      dlog('SUPABASE_KEY (primeros 20): ' + SUPABASE_KEY.slice(0, 20) + '...', 'info')
+      dlog('HARDCODED_TOKEN: ' + (HARDCODED_TOKEN ? HARDCODED_TOKEN.slice(0,12) + '...' : '(vacío)'), 'info')
+      dlog('═══════════════════════════════', 'info')
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  CARGA DE DATOS
+    // ════════════════════════════════════════════════════════════
+
+    async function loadCounts() {
+      try {
+        var res = await sb.from('screen_content_counts')
+          .select('content_id, total_plays, last_played_at')
+          .eq('screen_id', screenData.id)
+        var counts     = {}
+        var lastPlayed = {}
+        if (res.error) {
+          dlog('loadCounts error: ' + res.error.message, 'warn')
+        } else if (res.data) {
+          res.data.forEach(function(row) {
+            counts[row.content_id]     = row.total_plays
+            lastPlayed[row.content_id] = row.last_played_at ? new Date(row.last_played_at).getTime() : 0
+          })
+          dlog('loadCounts OK: ' + res.data.length + ' registros', 'ok')
+        }
+        return { counts: counts, lastPlayed: lastPlayed }
+      } catch(e) {
+        dlog('loadCounts excepción: ' + e.message, 'err')
+        return { counts: {}, lastPlayed: {} }
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  ALGORITMO DE PLAYLIST
+    // ════════════════════════════════════════════════════════════
+
+    function getNextItem(zoneId) {
+      var state   = zoneStates[zoneId]
+      var entries = state.entries
+      var opHours = screenData.operating_hours || 20
+      var now     = Date.now()
+      var total   = entries.length
+      if (total === 0) return null
+
+      for (var attempt = 0; attempt < total; attempt++) {
+        var idx   = state.currentIndex % total
+        state.currentIndex++
+        var entry = entries[idx]
+
+        if (entry.kind === 'item') {
+          var item = entry.item
+          if (!item.is_unlimited && item.daily_frequency) {
+            var played = state.dailyCounts[item.id] || 0
+            if (played >= item.daily_frequency) continue
+            var intervalMs = (opHours * 3600 * 1000) / item.daily_frequency
+            var elapsed    = now - (state.lastPlayedAt[item.id] || 0)
+            if (elapsed < intervalMs) continue
+          }
+          return { item: item, subName: null }
+        }
+
+        if (entry.kind === 'sub') {
+          var sub      = entry.sub
+          var subItems = entry.items
+          if (!subItems || subItems.length === 0) continue
+          if (!sub.is_unlimited && sub.daily_frequency) {
+            var subPlayed   = state.dailyCounts['sub_' + sub.id] || 0
+            if (subPlayed >= sub.daily_frequency) continue
+            var subInterval = (opHours * 3600 * 1000) / sub.daily_frequency
+            var subElapsed  = now - (state.lastPlayedAt['sub_' + sub.id] || 0)
+            if (subElapsed < subInterval) continue
+          }
+          var subItem = subItems[entry.subIndex % subItems.length]
+          entry.subIndex++
+          return { item: subItem, subName: sub.name }
+        }
+      }
+      return null
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  REPRODUCCIÓN — resuelve la fuente local (caché) antes que la
+    //  remota, y nunca se queda esperando: si no hay caché ni red,
+    //  salta al siguiente ítem en vez de congelarse.
+    // ════════════════════════════════════════════════════════════
+
+    async function playNext(zoneId) {
+      var result = getNextItem(zoneId)
+      if (!result) {
+        setTimeout(function() { playNext(zoneId) }, 5000)
+        return
+      }
+      var item    = result.item
+      var subName = result.subName
+
+      // Los streams tipo URL no se cachean (son contenido en vivo/externo).
+      if (item.type === 'url') {
+        zoneFailStreak[zoneId] = 0
+        renderItem(zoneId, item, subName, item.url || '')
+        return
+      }
+
+      var publicUrl = item.storage_path
+        ? resolveMediaUrl(item.storage_path)
+        : null
+      var localBlobUrl = null
+
+      if (publicUrl && CACHE_API_OK) {
+        try {
+          var blob = await cacheHasBlob(publicUrl)
+          if (blob) localBlobUrl = URL.createObjectURL(blob)
+        } catch(e) {
+          dlog('Lectura de caché falló: ' + e.message, 'warn')
+        }
+      }
+
+      if (!localBlobUrl && !isOnline) {
+        // Nada local y sin conexión: no hay forma de mostrarlo, saltar.
+        dlog('Sin caché y sin conexión, saltando: ' + item.name, 'warn')
+        zoneFailStreak[zoneId] = (zoneFailStreak[zoneId] || 0) + 1
+        var wait = zoneFailStreak[zoneId] > 3 ? 5000 : 300
+        setTimeout(function() { playNext(zoneId) }, wait)
+        return
+      }
+
+      zoneFailStreak[zoneId] = 0
+      renderItem(zoneId, item, subName, localBlobUrl || publicUrl)
+
+      // Si se sirvió desde la red, dejarlo descargándose para la próxima vez.
+      if (!localBlobUrl && isOnline && publicUrl) enqueueDownload(publicUrl)
+    }
+
+    function renderItem(zoneId, item, subName, srcUrl) {
+      var zoneEl = document.getElementById('zone-' + zoneId)
+      if (!zoneEl) return
+
+      var state = zoneStates[zoneId]
+      var url   = srcUrl
+
+      state.dailyCounts[item.id]  = (state.dailyCounts[item.id] || 0) + 1
+      state.lastPlayedAt[item.id] = Date.now()
+
+      if (subName) {
+        state.dailyCounts['sub_' + item.sub_playlist_id]  = (state.dailyCounts['sub_' + item.sub_playlist_id] || 0) + 1
+        state.lastPlayedAt['sub_' + item.sub_playlist_id] = Date.now()
+      }
+
+      logPlayback(zoneId, item.id)
+      persistCountsDebounced(zoneId)
+
+      var isLocal = url && url.indexOf('blob:') === 0
+      var label   = subName ? '[' + subName + '] ' + item.name.slice(0, 20) : item.name.slice(0, 28)
+      var played  = state.dailyCounts[item.id]
+      var cuota   = item.daily_frequency ? item.daily_frequency : '∞'
+      log('▶ ' + label + '\n' + played + '/' + cuota + ' reproducciones' + (isLocal ? ' · 💾 local' : ''))
+      dlog('Reproduciendo: ' + item.name + ' tipo=' + item.type + (isLocal ? ' (caché local)' : ' (red)'), 'ok')
+
+      // Limpiar el vigilante y la blob URL de la reproducción anterior.
+      clearVideoWatchdog(zoneId)
+      if (zoneObjectUrls[zoneId]) {
+        URL.revokeObjectURL(zoneObjectUrls[zoneId])
+        zoneObjectUrls[zoneId] = null
+      }
+      if (isLocal) zoneObjectUrls[zoneId] = url
+
+      zoneEl.innerHTML = ''
+
+      if (item.type === 'url') {
+        var iframe          = document.createElement('iframe')
+        iframe.src          = item.url || ''
+        iframe.style.width  = '100%'
+        iframe.style.height = '100%'
+        iframe.style.border = 'none'
+        iframe.allow        = 'autoplay; fullscreen; encrypted-media'
+        iframe.setAttribute('allowfullscreen', '')
+        zoneEl.appendChild(iframe)
+        setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 30) * 1000)
+      } else if (item.type === 'image') {
+        var img     = document.createElement('img')
+        img.onload  = function() { setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 10) * 1000) }
+        img.onerror = function() {
+          dlog('Error cargando imagen: ' + (url || '').slice(0, 60), 'err')
+          setTimeout(function() { playNext(zoneId) }, 500)
+        }
+        img.src = url
+        zoneEl.appendChild(img)
+      } else {
+        var video         = document.createElement('video')
+        video.muted       = true
+        video.autoplay    = true
+        video.playsInline = true
+        video.setAttribute('webkit-playsinline', '')
+        video.setAttribute('disableremoteplayback', '')
+        video.onended = function() { clearVideoWatchdog(zoneId); playNext(zoneId) }
+        video.onerror = function() {
+          dlog('Error reproduciendo video: ' + (url || '').slice(0, 60), 'err')
+          clearVideoWatchdog(zoneId)
+          setTimeout(function() { playNext(zoneId) }, 500)
+        }
+        video.src = url
+        zoneEl.appendChild(video)
+        video.play().catch(function(e) {
+          dlog('video.play() rechazado: ' + e.message, 'warn')
+        })
+        armVideoWatchdog(zoneId, video)
+      }
+    }
+
+    // Vigilante anti-congelamiento: si un video queda "atascado" (el
+    // currentTime no avanza) más de 8s mientras debería estar reproduciendo
+    // — típico cuando se cae la red a mitad de un stream en vivo — se salta
+    // al siguiente ítem en vez de dejar la pantalla congelada.
+    function armVideoWatchdog(zoneId, videoEl) {
+      clearVideoWatchdog(zoneId)
+      var lastTime     = -1
+      var stalledSince = null
+      zoneWatchdogs[zoneId] = setInterval(function() {
+        if (!videoEl || videoEl.ended || videoEl.paused) return
+        var t = videoEl.currentTime
+        if (t === lastTime) {
+          if (stalledSince === null) stalledSince = Date.now()
+          else if (Date.now() - stalledSince > 8000) {
+            dlog('Video atascado en zona ' + zoneId.slice(0,6) + ' → saltando', 'warn')
+            clearVideoWatchdog(zoneId)
+            playNext(zoneId)
+            return
+          }
+        } else {
+          stalledSince = null
+        }
+        lastTime = t
+      }, 2000)
+    }
+
+    function clearVideoWatchdog(zoneId) {
+      if (zoneWatchdogs[zoneId]) {
+        clearInterval(zoneWatchdogs[zoneId])
+        zoneWatchdogs[zoneId] = null
+      }
+    }
+
+    function logPlayback(zoneId, contentId) {
+      var evt = {
+        screen_id: screenData.id, zone_id: zoneId, content_id: contentId,
+        played_at: new Date().toISOString(),
+      }
+      if (isOnline && sb) {
+        sb.from('playback_events').insert(evt).then(function(res) {
+          if (res.error) {
+            dlog('Playback insert falló, encolando: ' + res.error.message, 'warn')
+            queueEvent(evt)
+          }
+        }).catch(function(e) {
+          dlog('Playback insert excepción, encolando: ' + e.message, 'warn')
+          queueEvent(evt)
+        })
+      } else {
+        queueEvent(evt)
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  LAYOUT
+    // ════════════════════════════════════════════════════════════
+
+    function buildLayout(program, zones) {
+      screenEl.innerHTML = ''
+      var screenW    = window.screen.width
+      var screenH    = window.screen.height
+      var exactMatch = (screenW === program.width && screenH === program.height)
+
+      var container              = document.createElement('div')
+      container.id               = 'program-container'
+      container.style.position   = 'absolute'
+      container.style.background = '#000'
+      container.style.width      = program.width  + 'px'
+      container.style.height     = program.height + 'px'
+
+      if (exactMatch) {
+        container.style.left      = '0px'
+        container.style.top       = '0px'
+        container.style.transform = 'none'
+        dlog('Layout: modo exacto ' + program.width + '×' + program.height, 'ok')
+      } else {
+        var scale   = Math.min(window.innerWidth / program.width, window.innerHeight / program.height)
+        var offsetX = (window.innerWidth  - program.width  * scale) / 2
+        var offsetY = (window.innerHeight - program.height * scale) / 2
+        container.style.left            = offsetX + 'px'
+        container.style.top             = offsetY + 'px'
+        container.style.transformOrigin = 'top left'
+        container.style.transform       = 'scale(' + scale + ')'
+        dlog('Layout: escala ' + scale.toFixed(3) + ' (pantalla ' + screenW + '×' + screenH + ' vs ' + program.width + '×' + program.height + ')', 'ok')
+      }
+
+      for (var i = 0; i < zones.length; i++) {
+        var zone             = zones[i]
+        var div              = document.createElement('div')
+        div.className        = 'zone'
+        div.id               = 'zone-' + zone.id
+        div.style.left       = zone.x      + 'px'
+        div.style.top        = zone.y      + 'px'
+        div.style.width      = zone.width  + 'px'
+        div.style.height     = zone.height + 'px'
+        div.style.background = zone.background_color || '#000'
+        container.appendChild(div)
+      }
+      screenEl.appendChild(container)
+      dlog('Zonas creadas: ' + zones.length, 'ok')
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  HEARTBEAT
+    // ════════════════════════════════════════════════════════════
+
     function startHeartbeat() {
-      setInterval(function(){
-        sbUpdate('screens',{ last_heartbeat:new Date().toISOString() },'id',screenData.id)
-      },30000)
+      function beat() {
+        if (!sb || !screenData) return
+        sb.from('screens')
+          .update({ last_heartbeat: new Date().toISOString() })
+          .eq('id', screenData.id)
+          .then(function(res) {
+            if (res.error) dlog('Heartbeat error: ' + res.error.message, 'warn')
+            else dlog('Heartbeat OK', 'ok')
+          })
+      }
+      beat()
+      setInterval(beat, 30000)
     }
 
-    var lastPub = null
+    // ════════════════════════════════════════════════════════════
+    //  POLLING
+    // ════════════════════════════════════════════════════════════
+
     function startPolling() {
-      setInterval(async function(){
-        if (!screenData.current_program_id) return
-        var r=await sbGet('programs',{'id':'eq.'+screenData.current_program_id},true)
-        if (r.error) { dl('Polling err: '+r.error.message,'w'); return }
-        if (!isOnline) { isOnline=true; dl('Reconectado','o') }
-        var pub=r.data && r.data.published_at
-        if (lastPub===null) { lastPub=pub; return }
-        if (pub && pub!==lastPub) { dl('Nueva publicación → recargando','o'); window.location.reload() }
-      },30000)
+      setInterval(async function() {
+        if (!sb || !screenData || !screenData.current_program_id) return
+        try {
+          var res = await sb.from('programs')
+            .select('published_at, updated_at')
+            .eq('id', screenData.current_program_id)
+            .single()
+
+          if (res.error) throw new Error(res.error.message)
+
+          if (!isOnline) {
+            setConnStatus(true)
+            dlog('Reconectado — recargando conteos...', 'ok')
+            var saved = await loadCounts()
+            Object.keys(zoneStates).forEach(function(zoneId) {
+              Object.keys(saved.counts).forEach(function(contentId) {
+                var current = zoneStates[zoneId].dailyCounts[contentId] || 0
+                if (saved.counts[contentId] > current) {
+                  zoneStates[zoneId].dailyCounts[contentId]  = saved.counts[contentId]
+                  zoneStates[zoneId].lastPlayedAt[contentId] = saved.lastPlayed[contentId] || 0
+                }
+              })
+              persistCountsDebounced(zoneId)
+            })
+          }
+
+          if (res.data) {
+            var latest = res.data.published_at
+            if (lastPublishedAt === null) { lastPublishedAt = latest; return }
+            if (latest && latest !== lastPublishedAt) {
+              dlog('Nueva publicación detectada → recargando', 'ok')
+              log('🔄 Publicación detectada · recargando...')
+              setTimeout(function() { window.location.reload() }, 1000)
+            }
+          }
+        } catch(e) {
+          if (isOnline) {
+            setConnStatus(false)
+            dlog('Polling falló: ' + e.message, 'err')
+          }
+        }
+      }, 15000)
     }
 
-    // ═══════════════════════════════════════════════
-    //  CARGA DEL PROGRAMA
-    // ═══════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════
+    //  REALTIME (con fallback silencioso si falla)
+    // ════════════════════════════════════════════════════════════
+
+    function subscribeToChanges() {
+      try {
+        sb.channel('player-' + screenData.id)
+          .on('postgres_changes', {
+            event: 'UPDATE', schema: 'public', table: 'programs',
+            filter: 'id=eq.' + screenData.current_program_id
+          }, function() {
+            dlog('Realtime: cambio detectado → recargando', 'ok')
+            log('🔄 Publicado · recargando...')
+            setTimeout(function() { window.location.reload() }, 2000)
+          })
+          .subscribe(function(status) {
+            dlog('Realtime status: ' + status, status === 'SUBSCRIBED' ? 'ok' : 'warn')
+          })
+      } catch(e) {
+        dlog('Realtime no disponible: ' + e.message + ' (polling activo como respaldo)', 'warn')
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  CONEXIÓN
+    // ════════════════════════════════════════════════════════════
+
+    function watchConnection() {
+      window.addEventListener('online',  function() { setConnStatus(true);  dlog('Evento: online', 'ok') })
+      window.addEventListener('offline', function() { setConnStatus(false); dlog('Evento: offline', 'err') })
+      setConnStatus(navigator.onLine)
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  CARGA DE PROGRAMA
+    //  Intenta cargar en vivo desde Supabase; si falla o no hay
+    //  conexión, usa el último snapshot guardado en IndexedDB para
+    //  seguir reproduciendo sin interrupción.
+    // ════════════════════════════════════════════════════════════
+
     async function loadProgram() {
       if (!screenData.current_program_id) {
-        dl('Sin programa asignado','w'); setTitle('⚠ Sin programa'); setMsg('Asigna un programa en el dashboard'); return
+        dlog('Sin programa asignado a esta pantalla', 'warn')
+        log('⚠ Sin programa asignado')
+        return
       }
-      dl('Cargando programa...','i')
-      var pr=await sbGet('programs',{'id':'eq.'+screenData.current_program_id},true)
-      if (pr.error||!pr.data) { showErr('Programa no encontrado: '+(pr.error?pr.error.message:'sin datos')); return }
-      dl('Programa: '+pr.data.name,'o')
-      lastPub = pr.data.published_at
 
-      var zr=await sbGet('zones',{'program_id':'eq.'+pr.data.id,'order':'sort_order'},false)
-      var zones=zr.data||[]
-      if (!zones.length) { dl('Sin zonas','w'); setTitle('⚠ Sin zonas'); return }
+      log('Cargando programa...')
 
-      var saved=await loadCounts()
+      var program        = null
+      var zones           = []
+      var zoneEntriesMap  = {}
+      var onlineLoadOk    = false
+      var remoteCounts    = { counts: {}, lastPlayed: {} }
 
-      for (var i=0;i<zones.length;i++) {
-        var z=zones[i]
-        var ir=await sbGet('media_content',{'zone_id':'eq.'+z.id,'sub_playlist_id':'is.null','order':'sort_order'},false)
-        var sr=await sbGet('sub_playlists',{'zone_id':'eq.'+z.id,'order':'sort_order'},false)
-        var subs=sr.data||[], subEntries=[]
-        for (var j=0;j<subs.length;j++) {
-          var siR=await sbGet('media_content',{'sub_playlist_id':'eq.'+subs[j].id,'order':'sort_order'},false)
-          subEntries.push({ kind:'sub', sub:subs[j], items:siR.data||[], si:0, sort_order:subs[j].sort_order })
+      if (isOnline) {
+        try {
+          var progRes = await sb.from('programs').select('*').eq('id', screenData.current_program_id).single()
+          if (progRes.error) throw new Error(progRes.error.message)
+          program = progRes.data
+          dlog('Programa OK: ' + program.name, 'ok')
+
+          var zonesRes = await sb.from('zones').select('*').eq('program_id', program.id).order('sort_order')
+          if (zonesRes.error) throw new Error(zonesRes.error.message)
+          zones = zonesRes.data || []
+
+          if (!zones.length) {
+            dlog('El programa no tiene zonas configuradas', 'warn')
+            log('⚠ Sin zonas')
+            return
+          }
+          dlog('Zonas cargadas: ' + zones.length, 'ok')
+
+          log('Cargando historial de reproducciones...')
+          remoteCounts = await loadCounts()
+
+          for (var i = 0; i < zones.length; i++) {
+            var zone     = zones[i]
+            var itemsRes = await sb.from('media_content').select('*')
+              .eq('zone_id', zone.id).is('sub_playlist_id', null).is('archived_at', null).order('sort_order')
+            var subsRes  = await sb.from('sub_playlists').select('*')
+              .eq('zone_id', zone.id).is('archived_at', null).order('sort_order')
+
+            if (itemsRes.error) dlog('Error cargando media zona ' + zone.id.slice(0,8) + ': ' + itemsRes.error.message, 'err')
+            if (subsRes.error)  dlog('Error cargando sub-playlists: ' + subsRes.error.message, 'err')
+
+            var subs       = subsRes.data || []
+            var subEntries = []
+
+            for (var j = 0; j < subs.length; j++) {
+              var sub   = subs[j]
+              var siRes = await sb.from('media_content').select('*')
+                .eq('sub_playlist_id', sub.id).is('archived_at', null).order('sort_order')
+              if (siRes.error) dlog('Error sub-playlist ' + sub.id.slice(0,8) + ': ' + siRes.error.message, 'err')
+              subEntries.push({ kind: 'sub', sub: sub, items: siRes.data || [], subIndex: 0 })
+            }
+
+            var directEntries = (itemsRes.data || []).map(function(item) {
+              return { kind: 'item', item: item, sort_order: item.sort_order }
+            })
+            var subEntriesOrdered = subEntries.map(function(e) {
+              return Object.assign({}, e, { sort_order: e.sub.sort_order })
+            })
+            var combined = directEntries.concat(subEntriesOrdered)
+            combined.sort(function(a, b) { return a.sort_order - b.sort_order })
+
+            dlog('Zona ' + zone.id.slice(0,8) + ': ' + combined.length + ' entradas de contenido', 'ok')
+            zoneEntriesMap[zone.id] = combined
+          }
+
+          lastPublishedAt = program.published_at || program.updated_at
+          onlineLoadOk    = true
+          persistSnapshot(program, zones, zoneEntriesMap)
+        } catch(e) {
+          dlog('Carga online falló (' + e.message + ') → usando snapshot local', 'warn')
+          onlineLoadOk = false
         }
-        var combined=(ir.data||[]).map(function(it){ return { kind:'item', item:it, sort_order:it.sort_order } })
-          .concat(subEntries).sort(function(a,b){ return a.sort_order-b.sort_order })
-        zoneStates[z.id]={ entries:combined, dc:Object.assign({},saved.counts), lp:Object.assign({},saved.lastPlayed), idx:0 }
-        dl('Zona '+z.id.slice(0,8)+': '+combined.length+' ítems','o')
       }
 
-      buildLayout(pr.data, zones)
+      if (!onlineLoadOk) {
+        log('Sin conexión · cargando última lista guardada...')
+        var metaRow = await idbGet('meta', 'state').catch(function() { return null })
+        if (!metaRow || metaRow.screenId !== screenData.id || !metaRow.program) {
+          log('⚠ Sin lista guardada — esperando conexión')
+          dlog('No hay snapshot local utilizable para esta pantalla', 'err')
+          setTimeout(loadProgram, 5000)
+          return
+        }
+        var zoneRows = await idbGetAll('zones').catch(function() { return [] })
+        if (!zoneRows.length) {
+          log('⚠ Snapshot sin zonas — esperando conexión')
+          setTimeout(loadProgram, 5000)
+          return
+        }
+        program         = metaRow.program
+        lastPublishedAt = metaRow.publishedAt
+        zones           = zoneRows.map(function(r) { return r.zone })
+        zoneRows.forEach(function(r) { zoneEntriesMap[r.zoneId] = r.entries })
+        dlog('Snapshot local cargado: ' + zones.length + ' zona(s) (modo offline)', 'ok')
+      }
 
-      // Arrancar reproducción y ocultar debug
-      setupEl.style.display='none'
-      screenEl.style.display='block'
-      setTimeout(function(){
-        dbgEl.style.display='none'
-        document.getElementById('dclose').style.display='none'
-      }, 4000)
+      var localCountsRows = await idbGetAll('counts').catch(function() { return [] })
+      var localCountsMap  = {}
+      localCountsRows.forEach(function(r) { localCountsMap[r.zoneId] = r })
 
-      zones.forEach(function(z,idx){
-        setTimeout(function(){
-          if (zoneStates[z.id].entries.length) playNext(z.id)
-          else dl('Zona '+z.id.slice(0,8)+' sin contenido','w')
-        }, idx*300)
+      zones.forEach(function(zone) {
+        var lc = localCountsMap[zone.id]
+        zoneStates[zone.id] = {
+          entries:      zoneEntriesMap[zone.id] || [],
+          dailyCounts:  Object.assign({}, lc ? lc.dailyCounts  : {}, remoteCounts.counts),
+          lastPlayedAt: Object.assign({}, lc ? lc.lastPlayedAt : {}, remoteCounts.lastPlayed),
+          currentIndex: 0,
+          startTime:    Date.now(),
+        }
       })
 
-      log('▶ '+pr.data.name+' · '+zones.length+' zona(s)')
+      buildLayout(program, zones)
+
+      if (onlineLoadOk) enqueueAllMedia(zoneEntriesMap)
+
+      for (var k = 0; k < zones.length; k++) {
+        (function(zoneId, delay) {
+          setTimeout(function() {
+            if (zoneStates[zoneId].entries.length > 0) {
+              playNext(zoneId)
+            } else {
+              dlog('Zona ' + zoneId.slice(0,8) + ' sin contenido — sin reproducción', 'warn')
+            }
+          }, delay)
+        })(zones[k].id, k * 300)
+      }
+
+      log('▶ ' + program.name + ' · ' + zones.length + ' zona(s) · ' + (screenData.operating_hours || 20) + 'h/día' + (onlineLoadOk ? '' : ' · modo offline'))
+      dlog('Player iniciado: ' + program.name + (onlineLoadOk ? '' : ' (desde snapshot local)'), 'ok')
     }
 
-    // ═══════════════════════════════════════════════
-    //  INICIO
-    // ═══════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════
+    //  INICIO DEL PLAYER
+    // ════════════════════════════════════════════════════════════
+
     async function startPlayer(token) {
-      activeToken = token
-      setTitle('Conectando...'); setMsg('Iniciando GestorPlayer')
-      dl('Buscando pantalla con token: '+token.slice(0,12)+'...','i')
+      log('Identificando pantalla...')
+      dlog('Buscando pantalla con token: ' + token.slice(0,12) + '...', 'info')
 
-      if (typeof fetch==='undefined') {
-        showErr('fetch() no disponible en este WebView — WebView demasiado antiguo')
+      var res
+      try {
+        res = await sb.from('screens').select('*').eq('device_token', token).single()
+      } catch(e) {
+        dlog('Excepción en consulta screens: ' + e.message, 'err')
+        log('❌ Error de red consultando pantalla')
         return
       }
 
-      var res=await sbGet('screens',{'device_token':'eq.'+token},true)
-      if (res.error||!res.data) {
-        showErr(res.error ? res.error.message : 'Token no encontrado en Supabase')
+      if (res.error) {
+        dlog('Error Supabase screens: ' + res.error.message + ' | code=' + res.error.code + ' | details=' + JSON.stringify(res.error.details), 'err')
+        log('❌ Pantalla no encontrada · recarga la página')
+        lsDel('device_token')
         return
       }
 
-      screenData=res.data
-      dl('Pantalla: '+screenData.name,'o')
-      log('✓ '+screenData.name)
+      screenData = res.data
+      dlog('Pantalla identificada: ' + screenData.name + ' (id=' + screenData.id.slice(0,8) + ')', 'ok')
+      log('✓ ' + screenData.name)
 
-      window.addEventListener('online',  function(){ isOnline=true;  dl('online','o') })
-      window.addEventListener('offline', function(){ isOnline=false; dl('offline','e') })
-
+      watchConnection()
       startHeartbeat()
       startPolling()
+      subscribeToChanges()
+      startEventSync()
       await loadProgram()
     }
 
-    // ═══════════════════════════════════════════════
-    //  EMPAREJAMIENTO POR QR
-    // ═══════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════
+    //  ARRANQUE
+    // ════════════════════════════════════════════════════════════
+
+    async function init() {
+      runEnvCheck()
+
+      if (!sb) {
+        log('❌ Supabase no disponible')
+        dlog('No se puede continuar sin Supabase', 'err')
+        return
+      }
+
+      var token = getDeviceToken()
+
+      if (!token) {
+        document.getElementById('token-screen').style.display = 'flex'
+        startQRPairing()
+
+        document.getElementById('token-btn').addEventListener('click', async function() {
+          var input = document.getElementById('token-input').value.trim()
+          if (!input) return
+
+          document.getElementById('token-btn').textContent = 'Conectando...'
+          document.getElementById('token-error').style.display = 'none'
+          dlog('Verificando token ingresado: ' + input.slice(0,12) + '...', 'info')
+
+          var res
+          try {
+            res = await sb.from('screens').select('id, name').eq('device_token', input).single()
+          } catch(e) {
+            dlog('Error verificando token: ' + e.message, 'err')
+            document.getElementById('token-error').style.display = 'block'
+            document.getElementById('token-btn').textContent = 'Conectar pantalla'
+            return
+          }
+
+          if (res.error || !res.data) {
+            dlog('Token inválido: ' + (res.error ? res.error.message : 'sin datos'), 'err')
+            document.getElementById('token-error').style.display = 'block'
+            document.getElementById('token-btn').textContent = 'Conectar pantalla'
+            return
+          }
+
+          dlog('Token válido: ' + res.data.name, 'ok')
+          lsSet('device_token', input)
+          document.getElementById('token-screen').style.display = 'none'
+          document.getElementById('screen').style.display = 'block'
+          await startPlayer(input)
+        })
+
+        document.getElementById('token-input').addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') document.getElementById('token-btn').click()
+        })
+        return
+      }
+
+      document.getElementById('token-screen').style.display = 'none'
+      document.getElementById('screen').style.display = 'block'
+      await startPlayer(token)
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  CONEXIÓN POR QR
+    // ════════════════════════════════════════════════════════════
+
     var qrCode     = null
     var qrInterval = null
 
+    var PAIR_BASE_URL = (
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === ''
+    ) ? 'https://gestorplayer.vercel.app' : window.location.origin
+
     async function startQRPairing() {
-      qrCode = Math.random().toString(36).substring(2,8).toUpperCase()
+      qrCode = Math.random().toString(36).substring(2, 8).toUpperCase()
+
       try {
-        await sbInsert('device_pairings', { code: qrCode, token: null })
+        var res = await sb.from('device_pairings').insert({ code: qrCode, token: null })
+        if (res.error) throw new Error(res.error.message)
       } catch(e) {
-        document.getElementById('qr-loading').textContent = 'Error creando código: '+e.message
+        document.getElementById('qr-loading').textContent = 'Error creando código: ' + e.message
         return
       }
-      var pairUrl = 'https://gestorplayer.vercel.app/pair?code=' + qrCode
-      dl('QR URL: '+pairUrl,'i')
+
+      var pairUrl = PAIR_BASE_URL + '/pair?code=' + qrCode
+      dlog('QR URL: ' + pairUrl, 'info')
       document.getElementById('qr-img').src =
-        'https://api.qrserver.com/v1/create-qr-code/?size=160x160&ecc=M&data='+encodeURIComponent(pairUrl)
+        'https://api.qrserver.com/v1/create-qr-code/?size=160x160&ecc=M&data=' + encodeURIComponent(pairUrl)
       document.getElementById('qr-loading').style.display = 'none'
       document.getElementById('qr-ready').style.display   = 'block'
 
       qrInterval = setInterval(async function() {
-        var r = await sbGet('device_pairings', { 'code':'eq.'+qrCode, 'select':'token' }, true)
+        var r = await sb.from('device_pairings').select('token').eq('code', qrCode).single()
         if (r.data && r.data.token) {
           clearInterval(qrInterval)
           var token = r.data.token
-          sbDelete('device_pairings', 'code', qrCode)
+          sb.from('device_pairings').delete().eq('code', qrCode)
           document.getElementById('qr-status').textContent = '✅ ¡Conectado! Arrancando...'
-          document.getElementById('qr-status').style.color = '#4ade80'
+          document.getElementById('qr-status').style.color = '#10B981'
           lsSet('device_token', token)
           setTimeout(function() {
             document.getElementById('token-screen').style.display = 'none'
-            setupEl.style.display = 'flex'
+            document.getElementById('screen').style.display = 'block'
             startPlayer(token)
           }, 1200)
         }
       }, 2000)
-    }
-
-    // ═══════════════════════════════════════════════
-    //  ARRANQUE
-    // ═══════════════════════════════════════════════
-    async function init() {
-      envCheck()
-
-      // 1. localStorage
-      var saved = lsGet('device_token')
-      if (saved) { dl('Token desde localStorage: '+saved.slice(0,12)+'...','o'); startPlayer(saved); return }
-
-      // 2. Token hardcodeado (fallback para dispositivos sin UI)
-      if (TOKEN) { dl('Token hardcodeado','w'); startPlayer(TOKEN); return }
-
-      // 3. Mostrar pantalla de emparejamiento
-      dl('Sin token → mostrando pantalla de emparejamiento','w')
-      setupEl.style.display = 'none'
-      dbgEl.style.display = 'none'
-      document.getElementById('dclose').style.display = 'none'
-      var ts = document.getElementById('token-screen')
-      ts.style.display = 'flex'
-      startQRPairing()
-
-      document.getElementById('tk-btn').addEventListener('click', async function() {
-        var input = document.getElementById('tk-input').value.trim()
-        if (!input) return
-        document.getElementById('tk-btn').textContent = 'Conectando...'
-        document.getElementById('tk-error').style.display = 'none'
-        var res = await sbGet('screens', { 'device_token':'eq.'+input, 'select':'id,name' }, true)
-        if (res.error || !res.data) {
-          dl('Token inválido','e')
-          document.getElementById('tk-error').style.display = 'block'
-          document.getElementById('tk-btn').textContent = 'Conectar pantalla'
-          return
-        }
-        dl('Token válido: '+res.data.name,'o')
-        lsSet('device_token', input)
-        if (qrInterval) { clearInterval(qrInterval); qrInterval = null }
-        ts.style.display = 'none'
-        setupEl.style.display = 'flex'
-        startPlayer(input)
-      })
-
-      document.getElementById('tk-input').addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') document.getElementById('tk-btn').click()
-      })
     }
 
     init()
