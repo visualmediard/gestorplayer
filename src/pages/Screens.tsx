@@ -94,6 +94,13 @@ export default function Screens() {
   const [copied, setCopied] = useState<string | null>(null)
   const [preview, setPreview] = useState<Screen | null>(null)
   const [search, setSearch] = useState('')
+  const [editScreen, setEditScreen] = useState<Screen | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editLocation, setEditLocation] = useState('')
+  const [editWidth, setEditWidth] = useState(1920)
+  const [editHeight, setEditHeight] = useState(1080)
+  const [editCapacity, setEditCapacity] = useState(10)
+  const [editSaving, setEditSaving] = useState(false)
 
   async function load() {
     const { data } = await supabase.from('screens').select('*').order('created_at', { ascending: true })
@@ -148,6 +155,30 @@ export default function Screens() {
   async function handleAssign(id: string) {
     await supabase.from('screens').update({ current_program_id: selectedProgram || null }).eq('id', id)
     setAssigningScreen(null); setSelectedProgram(''); load()
+  }
+
+  function openEdit(sc: Screen) {
+    setEditScreen(sc)
+    setEditName(sc.name)
+    setEditLocation(sc.location ?? '')
+    setEditWidth(sc.width)
+    setEditHeight(sc.height)
+    setEditCapacity(sc.ad_capacity ?? 10)
+  }
+
+  async function handleSaveEdit() {
+    if (!editScreen || !editName.trim()) return
+    setEditSaving(true)
+    await supabase.from('screens').update({
+      name: editName.trim(),
+      location: editLocation.trim() || null,
+      width: editWidth,
+      height: editHeight,
+      ad_capacity: editCapacity,
+    }).eq('id', editScreen.id)
+    setEditSaving(false)
+    setEditScreen(null)
+    load()
   }
 
   function copyToken(token: string) {
@@ -275,17 +306,14 @@ export default function Screens() {
                   </div>
                 )}
 
-                {sc.device_token && (
-                  <div style={{ padding: '0 1.25rem 0.5rem' }}>
-                    <button
-                      style={s.btnPlayer}
-                      title={sc.current_program_id ? 'Abrir el reproductor de esta pantalla' : 'Sin programa asignado — el reproductor mostrará una pantalla de espera'}
-                      onClick={() => window.open(`/play?token=${sc.device_token}`, '_blank', 'noopener')}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg>
-                      Ver reproductor
-                    </button>
-                  </div>
-                )}
+                <div style={{ padding: '0 1.25rem 0.5rem' }}>
+                  <button
+                    style={s.btnPlayer}
+                    onClick={() => openEdit(sc)}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Editar esta pantalla
+                  </button>
+                </div>
 
                 <div style={s.cardActions}>
                   <button style={s.btnAct} onClick={() => { setAssigningScreen(sc.id); setSelectedProgram(sc.current_program_id ?? '') }}>Asignar programa</button>
@@ -304,6 +332,47 @@ export default function Screens() {
             )
           })}
         </div>
+      )}
+
+      {/* Edit screen modal */}
+      {editScreen && createPortal(
+        <div className="backdrop" style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setEditScreen(null) }}>
+          <div className="modal-pop" style={{ ...s.modalCard, maxWidth: '480px' }}>
+            <div style={s.modalHeader}>
+              <span style={{ fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' }}>Editar pantalla</span>
+              <button onClick={() => setEditScreen(null)} style={s.modalClose} aria-label="Cerrar">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div style={s.formGroup}>
+                <label style={s.label}>Nombre</label>
+                <input style={s.input} value={editName} onChange={e => setEditName(e.target.value)} placeholder="Ej: Kennedy SN" />
+              </div>
+              <div style={s.formGroup}>
+                <label style={s.label}>Ubicación</label>
+                <input style={s.input} value={editLocation} onChange={e => setEditLocation(e.target.value)} placeholder="Ej: Santo Domingo" />
+              </div>
+              <div style={s.formGroup}>
+                <label style={s.label}>Resolución</label>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input style={{ ...s.input, width: '90px' }} type="number" value={editWidth} onChange={e => setEditWidth(+e.target.value)} />
+                  <span style={{ color: '#94A3B8' }}>×</span>
+                  <input style={{ ...s.input, width: '90px' }} type="number" value={editHeight} onChange={e => setEditHeight(+e.target.value)} />
+                </div>
+              </div>
+              <div style={s.formGroup}>
+                <label style={s.label}>Capacidad de anuncios</label>
+                <input style={{ ...s.input, width: '100px' }} type="number" min={1} value={editCapacity} onChange={e => setEditCapacity(+e.target.value)} />
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', paddingTop: '0.25rem' }}>
+                <button style={s.btnPrimary} onClick={handleSaveEdit} disabled={editSaving}>{editSaving ? 'Guardando...' : 'Guardar cambios'}</button>
+                <button style={s.btnOutline} onClick={() => setEditScreen(null)}>Cancelar</button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* Capture / live preview modal */}
