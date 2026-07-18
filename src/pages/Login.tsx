@@ -23,7 +23,9 @@ export default function Login() {
       <div style={s.card}>
         {/* Logo */}
         <div style={s.logoWrap}>
-          <img src={logoNegro} alt="GestorPlayer" style={{ height: '36px', width: 'auto', objectFit: 'contain' }} />
+          <div style={{ width: '160px', height: '44px', overflow: 'hidden', position: 'relative', flexShrink: 0 }}>
+            <img src={logoNegro} alt="GestorPlayer" style={{ position: 'absolute', width: '500px', top: '-191px', left: '-55px' }} />
+          </div>
           <span style={s.betaBadge}>BETA</span>
         </div>
 

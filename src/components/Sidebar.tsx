@@ -64,7 +64,9 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
               <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
             </div>
           ) : (
-            <img src={logoNegro} alt="GestorPlayer" style={{ height: '28px', width: 'auto', objectFit: 'contain' }} />
+            <div style={{ width: '105px', height: '32px', overflow: 'hidden', position: 'relative', flexShrink: 0 }}>
+              <img src={logoNegro} alt="GestorPlayer" style={{ position: 'absolute', width: '320px', top: '-122px', left: '-35px' }} />
+            </div>
           )}
           {(isMobile || !collapsed) && (
             <span style={s.betaBadge}>BETA</span>
