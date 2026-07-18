@@ -12,28 +12,34 @@
     .zone img, .zone video { width: 100%; height: 100%; object-fit: cover; display: block; }
     video::-webkit-media-controls { display: none !important; }
     video::-webkit-media-controls-overlay-cast-button { display: none !important; }
+    /* Texto de estado y punto de conexión: ocultos en producción para no
+       aparecer sobre el contenido en pantalla. Se re-muestran solo durante
+       la carga inicial vía JS (clase .booting en el body). */
     #status {
       position: fixed; bottom: 8px; right: 12px;
       font-family: monospace; font-size: 11px;
       color: rgba(255,255,255,0.35); z-index: 9999;
       pointer-events: none; text-align: right; line-height: 1.6;
       white-space: pre-line;
+      display: none;
     }
-    /* Punto discreto de conectividad: gris = offline, verde = online. */
     #net-dot {
       position: fixed; top: 10px; right: 10px;
       width: 8px; height: 8px; border-radius: 50%;
       background: #64748B; z-index: 9999; pointer-events: none;
       box-shadow: 0 0 4px rgba(0,0,0,0.5);
       transition: background 0.3s ease;
+      display: none;
     }
     #net-dot.online { background: #10B981; }
+    /* Durante la carga inicial sí se ven, para diagnóstico. */
+    body.booting #status, body.booting #net-dot { display: block; }
     /* ── Panel de diagnóstico (solo desarrollo) ── */
     #debug-panel { display: none; }
     #debug-toggle { display: none; }
   </style>
 </head>
-<body>
+<body class="booting">
   <!-- Botón para mostrar/ocultar diagnóstico -->
   <button id="debug-toggle" onclick="toggleDebug()">🔍 DEBUG</button>
 
@@ -1161,6 +1167,9 @@
 
       log('▶ ' + program.name + ' · ' + zones.length + ' zona(s) · ' + (screenData.operating_hours || 20) + 'h/día' + (onlineLoadOk ? '' : ' · modo offline'))
       dlog('Player iniciado: ' + program.name + (onlineLoadOk ? '' : ' (desde snapshot local)'), 'ok')
+
+      // Ya hay contenido en pantalla: oculta indicadores de estado/conexión.
+      document.body.classList.remove('booting')
     }
 
     // ════════════════════════════════════════════════════════════
