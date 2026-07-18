@@ -100,8 +100,102 @@
     style="position:fixed; bottom:8px; left:12px; background:transparent; border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.2); font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; font-family:monospace; z-index:9999;"
   >⚙ cambiar pantalla</button>
 
-  <!-- ── Supabase como UMD (sin ES modules, compatible con WebView Android) ── -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <!-- ── Supabase shim: fetch puro, sin CDN (compatible con WebView Android) ── -->
+  <script>
+  (function() {
+    function withTimeout(p, ms) {
+      return Promise.race([p, new Promise(function(_, rej) {
+        setTimeout(function() { rej(new Error('Timeout ' + ms + 'ms')) }, ms)
+      })])
+    }
+    function Builder(url, key, table) {
+      this._url = url; this._key = key; this._table = table
+      this._filters = {}; this._select = '*'; this._order = null
+      this._limit = null; this._op = null; this._body = null; this._p = null
+    }
+    var H_base = function(key) { return {
+      'apikey': key, 'Authorization': 'Bearer ' + key,
+      'Content-Type': 'application/json', 'Accept': 'application/json'
+    }}
+    function filterQs(f) {
+      return Object.keys(f).map(function(k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(f[k])
+      }).join('&')
+    }
+    Builder.prototype.select = function(s) { this._select = s || '*'; return this }
+    Builder.prototype.eq  = function(c, v) { this._filters[c] = 'eq.' + v;        return this }
+    Builder.prototype.is  = function(c, v) { this._filters[c] = 'is.' + (v === null ? 'null' : v); return this }
+    Builder.prototype.order = function(c)  { this._order = c;                      return this }
+    Builder.prototype.single = function()  { this._limit = 1; return this._exec() }
+    Builder.prototype.insert = function(d) { this._op = 'insert'; this._body = d;  return this._exec() }
+    Builder.prototype.update = function(d) { this._op = 'update'; this._body = d;  return this }
+    Builder.prototype.delete = function()  {
+      var self = this; this._op = 'delete'
+      return { eq: function(c, v) { self._filters[c] = 'eq.' + v; return self._exec() } }
+    }
+    Builder.prototype.then = function(cb, eb) { return this._exec().then(cb, eb) }
+    Builder.prototype._exec = function() {
+      if (this._p) return this._p
+      var self = this
+      this._p = (async function() {
+        var H = H_base(self._key)
+        var params = Object.assign({ select: self._select }, self._filters)
+        if (self._order) params.order = self._order
+        if (self._limit) params.limit = self._limit
+        var qs = filterQs(params)
+        var base = self._url + '/rest/v1/' + self._table
+        try {
+          var r, j
+          if (!self._op || self._op === 'select') {
+            r = await withTimeout(fetch(base + (qs ? '?' + qs : ''), { headers: H }), 10000)
+            j = await r.json()
+            if (!r.ok) return { data: null, error: j }
+            var d = self._limit === 1 ? (Array.isArray(j) ? j[0] || null : j) : (Array.isArray(j) ? j : [j])
+            return { data: d, error: null }
+          }
+          if (self._op === 'insert') {
+            r = await withTimeout(fetch(base, {
+              method: 'POST', body: JSON.stringify(self._body),
+              headers: Object.assign({}, H, { 'Prefer': 'return=minimal' })
+            }), 8000)
+            if (!r.ok) { j = await r.json(); return { data: null, error: j } }
+            return { data: null, error: null }
+          }
+          var fqs = filterQs(self._filters)
+          if (self._op === 'update') {
+            r = await withTimeout(fetch(base + (fqs ? '?' + fqs : ''), {
+              method: 'PATCH', body: JSON.stringify(self._body),
+              headers: Object.assign({}, H, { 'Prefer': 'return=minimal' })
+            }), 8000)
+            return { data: null, error: r.ok ? null : { message: 'PATCH ' + r.status } }
+          }
+          if (self._op === 'delete') {
+            r = await withTimeout(fetch(base + (fqs ? '?' + fqs : ''), {
+              method: 'DELETE', headers: H
+            }), 8000)
+            return { data: null, error: r.ok ? null : { message: 'DELETE ' + r.status } }
+          }
+        } catch(e) { return { data: null, error: { message: e.message } } }
+      })()
+      return this._p
+    }
+    function createClient(url, key) {
+      function from(table) { return new Builder(url, key, table) }
+      var storage = {
+        from: function(bucket) {
+          return { getPublicUrl: function(path) {
+            if (!path) return { data: { publicUrl: '' } }
+            if (/^https?:\/\//i.test(path)) return { data: { publicUrl: path } }
+            return { data: { publicUrl: url + '/storage/v1/object/public/' + bucket + '/' + path } }
+          }}
+        }
+      }
+      function channel() { return { on: function() { return this }, subscribe: function() {} } }
+      return { from: from, storage: storage, channel: channel }
+    }
+    window.supabase = { createClient: createClient }
+  })()
+  </script>
 
   <script>
     // ════════════════════════════════════════════════════════════
