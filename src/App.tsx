@@ -45,6 +45,15 @@ function Gate() {
   const isMobile = useIsMobile()
   const isTablet = useIsTablet()
 
+  // Tras autenticarse, si venía de un enlace /pair (u otra ruta protegida)
+  // que guardó un destino de retorno, lo enviamos allí.
+  useEffect(() => {
+    if (session) {
+      const back = localStorage.getItem('post_login_redirect')
+      if (back) { localStorage.removeItem('post_login_redirect'); window.location.replace(back) }
+    }
+  }, [session])
+
   useEffect(() => {
     if (isTablet) setCollapsed(true)
     else if (!isMobile) setCollapsed(false)
@@ -232,7 +241,8 @@ const avatarStyle: React.CSSProperties = {
 
 export default function App() {
   // Rutas públicas — no requieren auth
-  if (window.location.pathname === '/play') return <Player />
-  if (window.location.pathname === '/pair') return <Pair />
+  const path = window.location.pathname
+  if (path === '/play' || path === '/player') return <Player />
+  if (path === '/pair') return <AuthProvider><Pair /></AuthProvider>
   return <AuthProvider><Gate /></AuthProvider>
 }

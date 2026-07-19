@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import ScreenStage from '../components/ScreenStage'
+import QRCode from '../components/QRCode'
 
 type Screen = {
   id: string; name: string; location: string | null
@@ -113,6 +114,8 @@ export default function Screens() {
   const [hoursValue, setHoursValue] = useState(20)
   const [copied, setCopied] = useState<string | null>(null)
   const [preview, setPreview] = useState<Screen | null>(null)
+  const [qrScreen, setQrScreen] = useState<Screen | null>(null)
+  const [qrCopied, setQrCopied] = useState(false)
   const [search, setSearch] = useState('')
   const [editScreen, setEditScreen] = useState<Screen | null>(null)
   const [editName, setEditName] = useState('')
@@ -349,6 +352,12 @@ export default function Screens() {
 
                 <div style={s.cardActions}>
                   <button style={s.btnAct} onClick={() => { setAssigningScreen(sc.id); setSelectedProgram(sc.current_program_id ?? '') }}>Asignar programa</button>
+                  <button style={s.btnAct} onClick={() => { setQrScreen(sc); setQrCopied(false) }} title="Mostrar QR para vincular esta pantalla">
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><line x1="14" y1="14" x2="14" y2="21"/><line x1="21" y1="14" x2="21" y2="21"/><line x1="17" y1="17" x2="18" y2="17"/></svg>
+                      QR
+                    </span>
+                  </button>
                   <button style={s.btnAct} onClick={() => setPreview(sc)} title="Ver una captura de lo que se está reproduciendo">
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -423,6 +432,46 @@ export default function Screens() {
                 <button style={s.btnPrimary} onClick={handleSaveEdit} disabled={editSaving}>{editSaving ? 'Guardando...' : 'Guardar cambios'}</button>
                 <button style={s.btnOutline} onClick={() => setEditScreen(null)}>Cancelar</button>
               </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* QR de vinculación */}
+      {qrScreen && createPortal(
+        <div className="backdrop" style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setQrScreen(null) }}>
+          <div className="modal-pop" style={{ ...s.modalCard, maxWidth: '380px' }}>
+            <div style={s.modalHeader}>
+              <span style={{ fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' }}>Vincular «{qrScreen.name}»</span>
+              <button onClick={() => setQrScreen(null)} style={s.modalClose} aria-label="Cerrar">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+              {qrScreen.device_token ? (() => {
+                const pairUrl = `${window.location.origin}/pair?token=${qrScreen.device_token}`
+                return (
+                  <>
+                    <QRCode value={pairUrl} size={220} />
+                    <p style={{ color: '#64748B', fontSize: '0.82rem', textAlign: 'center', margin: 0, lineHeight: 1.5 }}>
+                      Escanea este código desde tu celular (con tu sesión iniciada) para vincular la pantalla a tu organización.
+                    </p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%' }}>
+                      <input readOnly value={pairUrl} style={{ ...s.input, flex: 1, fontSize: '0.75rem', fontFamily: 'monospace', color: '#64748B' }} onFocus={e => e.currentTarget.select()} />
+                      <button
+                        style={{ ...s.btnPrimary, padding: '0.55rem 0.75rem', fontSize: '0.78rem' }}
+                        onClick={() => { navigator.clipboard.writeText(pairUrl); setQrCopied(true); setTimeout(() => setQrCopied(false), 2000) }}
+                      >{qrCopied ? '✓ Copiado' : 'Copiar enlace'}</button>
+                    </div>
+                  </>
+                )
+              })() : (
+                <div style={{ textAlign: 'center', padding: '1rem 0' }}>
+                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>⚠️</div>
+                  <p style={{ color: '#94A3B8', fontSize: '0.85rem', margin: 0 }}>Esta pantalla aún no tiene token asignado.</p>
+                </div>
+              )}
             </div>
           </div>
         </div>,
