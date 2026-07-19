@@ -182,6 +182,14 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     return new Date() > expiry
   }
 
+  // Formatea "YYYY-MM-DD" como fecha local DD/MM/YYYY. Sin esto, new Date(str)
+  // la interpreta como UTC y en zonas detrás de UTC muestra el día anterior.
+  function fmtExpiry(dateStr: string) {
+    const [y, mo, d] = String(dateStr).slice(0, 10).split('-').map(Number)
+    if (!y || !mo || !d) return dateStr
+    return new Date(y, mo - 1, d).toLocaleDateString('es-DO')
+  }
+
   function itemMetaLabel(item: MediaItem, idx: number) {
     if (item.type === 'url') return `🌐 URL · ${item.duration_seconds ?? 30}s · Pos ${idx + 1}`
     if (item.type === 'video') return `Video · Pos ${idx + 1}`
@@ -710,7 +718,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                             ) : (
                               <button onClick={() => { setEditingExpiry(item.id); setExpiryValue(item.expires_at ?? '') }}
                                 style={{ marginTop: '0.2rem', background: 'transparent', border: '1px solid #E2E8F0', borderRadius: '4px', fontSize: '0.72rem', padding: '0.15rem 0.5rem', cursor: 'pointer', color: expired ? '#EF4444' : item.expires_at ? '#D97706' : '#94A3B8' }}>
-                                {item.expires_at ? expired ? `⛔ Venció: ${new Date(item.expires_at).toLocaleDateString('es-DO')}` : `📅 Vence: ${new Date(item.expires_at).toLocaleDateString('es-DO')}` : '📅 Sin vencimiento'}
+                                {item.expires_at ? expired ? `⛔ Venció: ${fmtExpiry(item.expires_at)}` : `📅 Vence: ${fmtExpiry(item.expires_at)}` : '📅 Sin vencimiento'}
                               </button>
                             )}
                             {editingSchedule === item.id ? (
