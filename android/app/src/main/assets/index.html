@@ -1578,6 +1578,15 @@
     //  ARRANQUE
     // ════════════════════════════════════════════════════════════
 
+    // Vars de vinculación QR. Se declaran aquí, dentro del bloque ARRANQUE
+    // propio de Android (el que scripts/sync-player-android.cjs PRESERVA),
+    // para que la sincronización desde el web player no las elimine. Sin
+    // esta declaración, PAIR_BASE_URL queda indefinida y startQRPairing()
+    // lanza ReferenceError → el QR se atasca en "Generando QR...".
+    var qrCode        = null
+    var qrInterval    = null
+    var PAIR_BASE_URL = 'https://gestorplayer.vercel.app'
+
     async function init() {
       runEnvCheck()
       initAfterLib()
