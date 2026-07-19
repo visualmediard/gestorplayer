@@ -1,62 +1,62 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GestorPlayer · Reproductor</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-    #screen { width: 100vw; height: 100vh; position: relative; background: #000; }
-    .zone { position: absolute; overflow: hidden; background: #000; }
-    .zone img, .zone video { width: 100%; height: 100%; object-fit: cover; display: block; }
-    video::-webkit-media-controls { display: none !important; }
-    video::-webkit-media-controls-overlay-cast-button { display: none !important; }
-    /* Texto de estado y punto de conexión: ocultos en producción para no
-       aparecer sobre el contenido en pantalla. Se re-muestran solo durante
-       la carga inicial vía JS (clase .booting en el body). */
-    #status {
-      position: fixed; bottom: 8px; right: 12px;
-      font-family: monospace; font-size: 11px;
-      color: rgba(255,255,255,0.35); z-index: 9999;
-      pointer-events: none; text-align: right; line-height: 1.6;
-      white-space: pre-line;
-      display: none;
-    }
-    #net-dot {
-      position: fixed; top: 10px; right: 10px;
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #64748B; z-index: 9999; pointer-events: none;
-      box-shadow: 0 0 4px rgba(0,0,0,0.5);
-      transition: background 0.3s ease;
-      display: none;
-    }
-    #net-dot.online { background: #10B981; }
-    /* Durante la carga inicial sí se ven, para diagnóstico. */
-    body.booting #status, body.booting #net-dot { display: block; }
-    /* ── Panel de diagnóstico (solo desarrollo) ── */
-    #debug-panel { display: none; }
-    #debug-toggle { display: none; }
-  </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GestorPlayer · Reproductor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+        #screen { width: 100vw; height: 100vh; position: relative; background: #000; }
+        .zone { position: absolute; overflow: hidden; background: #000; }
+        .zone img, .zone video { width: 100%; height: 100%; object-fit: cover; display: block; }
+        video::-webkit-media-controls { display: none !important; }
+        video::-webkit-media-controls-overlay-cast-button { display: none !important; }
+        /* Texto de estado y punto de conexión: ocultos en producción para no
+           aparecer sobre el contenido en pantalla. Se re-muestran solo durante
+           la carga inicial vía JS (clase .booting en el body). */
+        #status {
+          position: fixed; bottom: 8px; right: 12px;
+          font-family: monospace; font-size: 11px;
+          color: rgba(255,255,255,0.35); z-index: 9999;
+          pointer-events: none; text-align: right; line-height: 1.6;
+          white-space: pre-line;
+          display: none;
+        }
+        #net-dot {
+          position: fixed; top: 10px; right: 10px;
+          width: 8px; height: 8px; border-radius: 50%;
+          background: #64748B; z-index: 9999; pointer-events: none;
+          box-shadow: 0 0 4px rgba(0,0,0,0.5);
+          transition: background 0.3s ease;
+          display: none;
+        }
+        #net-dot.online { background: #10B981; }
+        /* Durante la carga inicial sí se ven, para diagnóstico. */
+        body.booting #status, body.booting #net-dot { display: block; }
+        /* ── Panel de diagnóstico (solo desarrollo) ── */
+        #debug-panel { display: none; }
+        #debug-toggle { display: none; }
+    </style>
 </head>
 <body class="booting">
-  <!-- Botón para mostrar/ocultar diagnóstico -->
-  <button id="debug-toggle" onclick="toggleDebug()">🔍 DEBUG</button>
+<!-- Botón para mostrar/ocultar diagnóstico -->
+<button id="debug-toggle" onclick="toggleDebug()">🔍 DEBUG</button>
 
-  <!-- Panel de diagnóstico -->
-  <div id="debug-panel"></div>
+<!-- Panel de diagnóstico -->
+<div id="debug-panel"></div>
 
-  <!-- Pantalla de conexión -->
-  <div id="token-screen" style="display:none; position:fixed; inset:0; background:#F8FAFC; overflow-y:auto; z-index:9999; font-family:'Inter',system-ui,sans-serif; align-items:center; justify-content:center; padding:1.5rem; box-sizing:border-box;">
+<!-- Pantalla de conexión -->
+<div id="token-screen" style="display:none; position:fixed; inset:0; background:#F8FAFC; overflow-y:auto; z-index:9999; font-family:'Inter',system-ui,sans-serif; align-items:center; justify-content:center; padding:1.5rem; box-sizing:border-box;">
     <div style="background:#fff; border:1px solid #E2E8F0; border-radius:16px; padding:2rem; width:100%; max-width:360px; display:flex; flex-direction:column; align-items:center; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
 
         <!-- Logo -->
         <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1.25rem;">
-          <div style="width:34px; height:34px; background:#3B82F6; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
-          </div>
-          <span style="font-weight:800; font-size:1.15rem; color:#0F172A;">GestorPlayer</span>
-          <span style="font-size:0.55rem; font-weight:700; background:#EFF6FF; color:#3B82F6; border:1px solid #BFDBFE; border-radius:4px; padding:2px 5px;">BETA</span>
+            <div style="width:34px; height:34px; background:#3B82F6; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
+            </div>
+            <span style="font-weight:800; font-size:1.15rem; color:#0F172A;">GestorPlayer</span>
+            <span style="font-size:0.55rem; font-weight:700; background:#EFF6FF; color:#3B82F6; border:1px solid #BFDBFE; border-radius:4px; padding:2px 5px;">BETA</span>
         </div>
 
         <div style="height:1px; background:#F1F5F9; width:100%; margin-bottom:1.25rem;"></div>
@@ -67,51 +67,55 @@
 
         <div id="qr-loading" style="color:#94A3B8; font-size:0.82rem; padding:1.5rem 0; text-align:center;">Generando QR...</div>
         <div id="qr-ready" style="display:none; text-align:center; width:100%;">
-          <img id="qr-img" src="" alt="QR" style="width:160px; height:160px; border-radius:10px; border:1px solid #E2E8F0;" />
-          <p id="qr-status" style="color:#94A3B8; font-size:0.78rem; margin:0.6rem 0 0;">Esperando conexión...</p>
+            <img id="qr-img" src="" alt="QR" style="width:160px; height:160px; border-radius:10px; border:1px solid #E2E8F0;" />
+            <p id="qr-status" style="color:#94A3B8; font-size:0.78rem; margin:0.6rem 0 0;">Esperando conexión...</p>
         </div>
 
         <!-- Divisor -->
         <div style="display:flex; align-items:center; gap:0.75rem; width:100%; margin:1.25rem 0;">
-          <div style="flex:1; height:1px; background:#E2E8F0;"></div>
-          <span style="color:#CBD5E1; font-size:0.75rem; white-space:nowrap;">o ingresa el token</span>
-          <div style="flex:1; height:1px; background:#E2E8F0;"></div>
+            <div style="flex:1; height:1px; background:#E2E8F0;"></div>
+            <span style="color:#CBD5E1; font-size:0.75rem; white-space:nowrap;">o ingresa el token</span>
+            <div style="flex:1; height:1px; background:#E2E8F0;"></div>
         </div>
 
         <!-- Token manual -->
         <div style="width:100%;">
-          <input
-            id="token-input"
-            type="text"
-            placeholder="Pega el token aquí..."
-            style="width:100%; padding:0.6rem 0.85rem; border-radius:8px; border:1px solid #E2E8F0; background:#F8FAFC; color:#0F172A; font-size:0.85rem; box-sizing:border-box; outline:none; font-family:monospace;"
-          />
-          <p id="token-error" style="color:#EF4444; font-size:0.78rem; display:none; margin-top:0.45rem; background:#FFF5F5; border:1px solid #FECACA; border-radius:6px; padding:0.45rem 0.7rem;">
-            ❌ Token inválido. Verifica e intenta de nuevo.
-          </p>
-          <button id="token-btn"
-            style="margin-top:0.75rem; padding:0.65rem; border-radius:8px; border:none; background:#2563EB; color:#fff; font-weight:700; cursor:pointer; font-size:0.9rem; font-family:inherit; width:100%;">
-            Conectar pantalla
-          </button>
+            <label for="token-input"></label><input
+                    id="token-input"
+                    type="text"
+                    placeholder="Pega el token aquí..."
+                    style="width:100%; padding:0.6rem 0.85rem; border-radius:8px; border:1px solid #E2E8F0; background:#F8FAFC; color:#0F172A; font-size:0.85rem; box-sizing:border-box; outline:none; font-family:monospace;"
+            />
+            <p id="token-error" style="color:#EF4444; font-size:0.78rem; display:none; margin-top:0.45rem; background:#FFF5F5; border:1px solid #FECACA; border-radius:6px; padding:0.45rem 0.7rem;">
+                ❌ Token inválido. Verifica e intenta de nuevo.
+            </p>
+            <button id="token-btn"
+                    style="margin-top:0.75rem; padding:0.65rem; border-radius:8px; border:none; background:#2563EB; color:#fff; font-weight:700; cursor:pointer; font-size:0.9rem; font-family:inherit; width:100%;">
+                Conectar pantalla
+            </button>
         </div>
 
-      </div>
-  </div>
+    </div>
+</div>
 
-  <div id="screen" style="display:none;"></div>
-  <!-- Pantalla negra limpia mostrada fuera del horario operativo -->
-  <div id="offhours" style="display:none; position:fixed; inset:0; background:#000; z-index:99999;"></div>
-  <div id="status">Iniciando...</div>
-  <div id="net-dot"></div>
-  <button
-    onclick="clearTokenAndReload()"
-    style="position:fixed; bottom:8px; left:12px; background:transparent; border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.2); font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; font-family:monospace; z-index:9999;"
-  >⚙ cambiar pantalla</button>
+<div id="screen" style="display:none;"></div>
+<!-- Pantalla negra limpia mostrada fuera del horario operativo -->
+<div id="offhours" style="display:none; position:fixed; inset:0; background:#000; z-index:99999;"></div>
+<div id="status">Iniciando...</div>
+<div id="net-dot"></div>
+<button
+        onclick="clearTokenAndReload()"
+        style="position:fixed; bottom:8px; left:12px; background:transparent; border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.2); font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; font-family:monospace; z-index:9999;"
+>⚙ cambiar pantalla</button>
 
-  <!-- ── Supabase UMD local (no depende de CDN, funciona desde file://) ── -->
-  <script src="supabase.min.js"></script>
+<!-- ── Supabase cargado localmente (asegura offline y evita problemas de CDN en WebView) ── -->
+<script
+    src="supabase.min.js"
+    onload="console.log('[GP] Script supabase.min.js cargado correctamente')"
+    onerror="console.error('[GP] Error al cargar el archivo local supabase.min.js')">
+</script>
 
-  <script>
+<script>
     // ════════════════════════════════════════════════════════════
     //  CONFIGURACIÓN
     // ════════════════════════════════════════════════════════════
@@ -120,6 +124,12 @@
     var SUPABASE_KEY    = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
 
     var HARDCODED_TOKEN = ''  // vacío: siempre usa localStorage o pantalla de ingreso
+
+    // Declaradas aquí para que no sean reseteadas por el código inferior
+    // cuando startQRPairing() hace await y el script continúa ejecutándose.
+    var qrCode        = null
+    var qrInterval    = null
+    var PAIR_BASE_URL = 'https://gestorplayer.vercel.app'
 
     // ════════════════════════════════════════════════════════════
     //  PANEL DE DIAGNÓSTICO
@@ -187,17 +197,98 @@
 
     var supabaseLib = window.supabase
     if (!supabaseLib) {
-      dlog('ERROR CRÍTICO: Supabase no cargó desde CDN. Verifica conexión.', 'err')
+      dlog('ERROR CRÍTICO: window.supabase no existe todavía.', 'err');
+      // Intento manual de esperar si es por carga asíncrona (poco probable en local pero posible)
+      setTimeout(function() {
+        if (window.supabase) {
+           dlog('Supabase apareció después de 500ms', 'ok');
+           initAfterLib();
+        } else {
+           log('❌ Supabase no disponible');
+           dlog('ERROR FINAL: Supabase falló al cargar completamente.', 'err');
+        }
+      }, 500);
+    } else {
+      initAfterLib();
     }
 
-    var sb = null
-    try {
-      sb = supabaseLib.createClient(SUPABASE_URL, SUPABASE_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false }
-      })
-      dlog('Supabase client creado OK', 'ok')
-    } catch(e) {
-      dlog('ERROR creando Supabase client: ' + e.message, 'err')
+    var sb = null;
+    function initAfterLib() {
+      supabaseLib = window.supabase;
+      try {
+        if (supabaseLib) {
+          // Supabase v1 compatible client creation
+          sb = supabaseLib.createClient(SUPABASE_URL, SUPABASE_KEY, {
+            auth: { persistSession: false, autoRefreshToken: false }
+          });
+          dlog('Supabase client creado OK', 'ok');
+
+          // Configurar listeners de UI que dependen de 'sb'
+          setupUIListeners();
+
+          // Continuar con el arranque normal
+          var token = getDeviceToken();
+          if (token) {
+             startPlayerWithToken(token);
+          } else {
+             showTokenScreen();
+          }
+        }
+      } catch(e) {
+        dlog('ERROR creando Supabase client: ' + e.message, 'err');
+      }
+    }
+
+    function setupUIListeners() {
+        var btn = document.getElementById('token-btn');
+        if (!btn) return;
+
+        btn.addEventListener('click', async function() {
+          var input = document.getElementById('token-input').value.trim()
+          if (!input) return
+
+          document.getElementById('token-btn').textContent = 'Conectando...'
+          document.getElementById('token-error').style.display = 'none'
+          dlog('Verificando token ingresado: ' + input.slice(0,12) + '...', 'info')
+
+          var res
+          try {
+            res = await sb.from('screens').select('id, name').eq('device_token', input).single()
+          } catch(e) {
+            dlog('Error verificando token: ' + e.message, 'err')
+            document.getElementById('token-error').style.display = 'block'
+            document.getElementById('token-btn').textContent = 'Conectar pantalla'
+            return
+          }
+
+          if (res.error || !res.data) {
+            dlog('Token inválido: ' + (res.error ? res.error.message : 'sin datos'), 'err')
+            document.getElementById('token-error').style.display = 'block'
+            document.getElementById('token-btn').textContent = 'Conectar pantalla'
+            return
+          }
+
+          dlog('Token válido: ' + res.data.name, 'ok')
+          lsSet('device_token', input)
+          document.getElementById('token-screen').style.display = 'none'
+          document.getElementById('screen').style.display = 'block'
+          await startPlayer(input)
+        })
+
+        document.getElementById('token-input').addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') document.getElementById('token-btn').click()
+        })
+    }
+
+    function showTokenScreen() {
+      document.getElementById('token-screen').style.display = 'flex';
+      startQRPairing();
+    }
+
+    async function startPlayerWithToken(token) {
+      document.getElementById('token-screen').style.display = 'none';
+      document.getElementById('screen').style.display = 'block';
+      await startPlayer(token);
     }
 
     // Un storage_path puede ser una ruta de Supabase (archivos antiguos) o una
@@ -1386,82 +1477,29 @@
     async function init() {
       runEnvCheck()
 
-      if (!sb) {
-        log('❌ Supabase no disponible')
-        dlog('No se puede continuar sin Supabase', 'err')
-        return
+      if (!window.supabase) {
+        dlog('Esperando a Supabase...', 'info');
+        return; // El timeout en INIT SUPABASE se encargará
       }
-
-      var token = getDeviceToken()
-
-      if (!token) {
-        document.getElementById('token-screen').style.display = 'flex'
-        startQRPairing()
-
-        document.getElementById('token-btn').addEventListener('click', async function() {
-          var input = document.getElementById('token-input').value.trim()
-          if (!input) return
-
-          document.getElementById('token-btn').textContent = 'Conectando...'
-          document.getElementById('token-error').style.display = 'none'
-          dlog('Verificando token ingresado: ' + input.slice(0,12) + '...', 'info')
-
-          var res
-          try {
-            res = await sb.from('screens').select('id, name').eq('device_token', input).single()
-          } catch(e) {
-            dlog('Error verificando token: ' + e.message, 'err')
-            document.getElementById('token-error').style.display = 'block'
-            document.getElementById('token-btn').textContent = 'Conectar pantalla'
-            return
-          }
-
-          if (res.error || !res.data) {
-            dlog('Token inválido: ' + (res.error ? res.error.message : 'sin datos'), 'err')
-            document.getElementById('token-error').style.display = 'block'
-            document.getElementById('token-btn').textContent = 'Conectar pantalla'
-            return
-          }
-
-          dlog('Token válido: ' + res.data.name, 'ok')
-          lsSet('device_token', input)
-          document.getElementById('token-screen').style.display = 'none'
-          document.getElementById('screen').style.display = 'block'
-          await startPlayer(input)
-        })
-
-        document.getElementById('token-input').addEventListener('keydown', function(e) {
-          if (e.key === 'Enter') document.getElementById('token-btn').click()
-        })
-        return
-      }
-
-      document.getElementById('token-screen').style.display = 'none'
-      document.getElementById('screen').style.display = 'block'
-      await startPlayer(token)
+      // ... resto del init original si fuera necesario, pero lo moví a initAfterLib
     }
 
     // ════════════════════════════════════════════════════════════
     //  CONEXIÓN POR QR
     // ════════════════════════════════════════════════════════════
 
-    var qrCode     = null
-    var qrInterval = null
-
-    var PAIR_BASE_URL = (
-      window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1' ||
-      window.location.hostname === ''
-    ) ? 'https://gestorplayer.vercel.app' : window.location.origin
-
     async function startQRPairing() {
       qrCode = Math.random().toString(36).substring(2, 8).toUpperCase()
+      dlog('Generando código de vinculación: ' + qrCode, 'info')
 
       try {
-        var res = await sb.from('device_pairings').insert({ code: qrCode, token: null })
+        // Supabase v1 requiere un ARRAY para .insert()
+        var res = await sb.from('device_pairings').insert([{ code: qrCode, token: null }])
         if (res.error) throw new Error(res.error.message)
+        dlog('Código registrado en Supabase OK', 'ok')
       } catch(e) {
-        document.getElementById('qr-loading').textContent = 'Error creando código: ' + e.message
+        dlog('Error creando código en DB: ' + e.message, 'err')
+        document.getElementById('qr-loading').textContent = 'Error de conexión: ' + e.message
         return
       }
 
@@ -1473,24 +1511,33 @@
       document.getElementById('qr-ready').style.display   = 'block'
 
       qrInterval = setInterval(async function() {
-        var r = await sb.from('device_pairings').select('token').eq('code', qrCode).single()
-        if (r.data && r.data.token) {
-          clearInterval(qrInterval)
-          var token = r.data.token
-          sb.from('device_pairings').delete().eq('code', qrCode)
-          document.getElementById('qr-status').textContent = '✅ ¡Conectado! Arrancando...'
-          document.getElementById('qr-status').style.color = '#10B981'
-          lsSet('device_token', token)
-          setTimeout(function() {
-            document.getElementById('token-screen').style.display = 'none'
-            document.getElementById('screen').style.display = 'block'
-            startPlayer(token)
-          }, 1200)
+        try {
+          // Supabase v1 .single() funciona similar
+          var r = await sb.from('device_pairings').select('token').eq('code', qrCode).single()
+          if (r.data && r.data.token) {
+            clearInterval(qrInterval)
+            var token = r.data.token
+            dlog('¡Vínculo detectado! Token recibido.', 'ok')
+
+            // Limpieza (opcional, v1 usa delete con match)
+            sb.from('device_pairings').delete().match({ code: qrCode })
+
+            document.getElementById('qr-status').textContent = '✅ ¡Conectado! Arrancando...'
+            document.getElementById('qr-status').style.color = '#10B981'
+            lsSet('device_token', token)
+            setTimeout(function() {
+              document.getElementById('token-screen').style.display = 'none'
+              document.getElementById('screen').style.display = 'block'
+              startPlayer(token)
+            }, 1200)
+          }
+        } catch(e) {
+          // Error silencioso en polling para no saturar el log si es fallo de red temporal
         }
-      }, 2000)
+      }, 3000)
     }
 
     init()
-  </script>
+</script>
 </body>
 </html>
