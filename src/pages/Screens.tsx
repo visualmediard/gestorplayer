@@ -9,9 +9,25 @@ type Screen = {
   last_heartbeat: string | null; current_program_id: string | null
   operating_hours: number; device_token: string | null
   ad_capacity: number
+  operating_start: string | null; operating_end: string | null
 }
 
 type AdCount = { program_id: string; total_ads: number }
+
+function fmtHM(t: string | null) { return t ? String(t).slice(0, 5) : '' }
+
+// Resumen del horario operativo: "06:00 a 02:00 · 20h operativas" o
+// "Siempre activa" si no hay rango definido. Soporta cruce de medianoche.
+function operatingSummary(start: string | null, end: string | null) {
+  if (!start || !end) return 'Siempre activa'
+  const s = fmtHM(start), e = fmtHM(end)
+  const [sh, sm] = s.split(':').map(Number)
+  const [eh, em] = e.split(':').map(Number)
+  let mins = (eh * 60 + em) - (sh * 60 + sm)
+  if (mins <= 0) mins += 24 * 60 // cruza medianoche
+  const hrs = Math.round((mins / 60) * 10) / 10
+  return `${s} a ${e} · ${hrs}h operativas`
+}
 
 async function fetchAdCounts(): Promise<AdCount[]> {
   // Build zone→program map
@@ -101,6 +117,9 @@ export default function Screens() {
   const [editHeight, setEditHeight] = useState(1080)
   const [editCapacity, setEditCapacity] = useState(10)
   const [editSaving, setEditSaving] = useState(false)
+  const [editOpEnabled, setEditOpEnabled] = useState(false)
+  const [editOpStart, setEditOpStart] = useState('06:00')
+  const [editOpEnd, setEditOpEnd] = useState('00:00')
 
   async function load() {
     const { data } = await supabase.from('screens').select('*').order('created_at', { ascending: true })
@@ -164,6 +183,10 @@ export default function Screens() {
     setEditWidth(sc.width)
     setEditHeight(sc.height)
     setEditCapacity(sc.ad_capacity ?? 10)
+    const hasOp = !!(sc.operating_start && sc.operating_end)
+    setEditOpEnabled(hasOp)
+    setEditOpStart(fmtHM(sc.operating_start) || '06:00')
+    setEditOpEnd(fmtHM(sc.operating_end) || '00:00')
   }
 
   async function handleSaveEdit() {
@@ -175,6 +198,8 @@ export default function Screens() {
       width: editWidth,
       height: editHeight,
       ad_capacity: editCapacity,
+      operating_start: editOpEnabled ? editOpStart : null,
+      operating_end: editOpEnabled ? editOpEnd : null,
     }).eq('id', editScreen.id)
     setEditSaving(false)
     setEditScreen(null)
@@ -261,6 +286,7 @@ export default function Screens() {
                     <div style={s.meta}><span>🖥</span>{sc.width} × {sc.height}px</div>
                     <div style={s.meta}><span>⏱</span>{sc.last_heartbeat ? new Date(sc.last_heartbeat).toLocaleTimeString('es-DO') : 'Nunca conectada'}</div>
                     <div style={s.meta}><span>📺</span>{sc.current_program_id ? 'Programa asignado' : 'Sin programa'}</div>
+                    <div style={s.meta}><span>🕐</span>{(sc.operating_start && sc.operating_end) ? operatingSummary(sc.operating_start, sc.operating_end) : 'Siempre activa'}</div>
 
                     {sc.device_token && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.2rem' }}>
@@ -365,6 +391,28 @@ export default function Screens() {
                 <label style={s.label}>Capacidad de anuncios</label>
                 <input style={{ ...s.input, width: '100px' }} type="number" min={1} value={editCapacity} onChange={e => setEditCapacity(+e.target.value)} />
               </div>
+
+              {/* Horario operativo */}
+              <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 600, color: '#0F172A', fontSize: '0.875rem' }}>
+                  <input type="checkbox" checked={editOpEnabled} onChange={e => setEditOpEnabled(e.target.checked)} />
+                  Horario operativo
+                </label>
+                {editOpEnabled ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <input type="time" style={{ ...s.input, width: '130px' }} value={editOpStart} onChange={e => setEditOpStart(e.target.value)} />
+                      <span style={{ color: '#64748B', fontSize: '0.85rem' }}>a</span>
+                      <input type="time" style={{ ...s.input, width: '130px' }} value={editOpEnd} onChange={e => setEditOpEnd(e.target.value)} />
+                    </div>
+                    <span style={{ color: '#2563EB', fontSize: '0.8rem', fontWeight: 500 }}>{operatingSummary(editOpStart, editOpEnd)}</span>
+                    <span style={{ color: '#94A3B8', fontSize: '0.72rem' }}>Fuera de este horario la pantalla queda en negro y no cuenta estadísticas. Soporta cruce de medianoche (ej. 06:00 a 02:00).</span>
+                  </>
+                ) : (
+                  <span style={{ color: '#94A3B8', fontSize: '0.8rem' }}>Siempre activa · reproduce 24h</span>
+                )}
+              </div>
+
               <div style={{ display: 'flex', gap: '0.5rem', paddingTop: '0.25rem' }}>
                 <button style={s.btnPrimary} onClick={handleSaveEdit} disabled={editSaving}>{editSaving ? 'Guardando...' : 'Guardar cambios'}</button>
                 <button style={s.btnOutline} onClick={() => setEditScreen(null)}>Cancelar</button>

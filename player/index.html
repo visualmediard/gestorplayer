@@ -99,6 +99,8 @@
   </div>
 
   <div id="screen" style="display:none;"></div>
+  <!-- Pantalla negra limpia mostrada fuera del horario operativo -->
+  <div id="offhours" style="display:none; position:fixed; inset:0; background:#000; z-index:99999;"></div>
   <div id="status">Iniciando...</div>
   <div id="net-dot"></div>
   <button
@@ -713,6 +715,88 @@
     }
 
     // ════════════════════════════════════════════════════════════
+    //  HORARIO OPERATIVO DE LA PANTALLA
+    //  Ventana en que la pantalla reproduce y cuenta estadísticas. Fuera de
+    //  ella: pantalla negra limpia y sin registro de reproducciones. Usa la
+    //  hora LOCAL del dispositivo, así funciona offline. Soporta cruce de
+    //  medianoche (ej. 06:00 a 02:00).
+    // ════════════════════════════════════════════════════════════
+
+    var operatingActive = true
+
+    function isWithinOperatingHours() {
+      if (!screenData) return true
+      var start = screenData.operating_start
+      var end   = screenData.operating_end
+      if (!start || !end) return true      // sin restricción → siempre activa
+      var s = parseTimeToMinutes(start)
+      var e = parseTimeToMinutes(end)
+      if (s === null || e === null) return true
+      if (s === e) return true             // ventana de 24h
+      var now  = new Date()
+      var mins = now.getHours() * 60 + now.getMinutes()
+      if (s < e) return mins >= s && mins < e          // mismo día
+      return mins >= s || mins < e                     // cruza medianoche
+    }
+
+    function showOffHoursScreen() {
+      var el = document.getElementById('offhours')
+      if (el) el.style.display = 'block'
+    }
+    function hideOffHoursScreen() {
+      var el = document.getElementById('offhours')
+      if (el) el.style.display = 'none'
+    }
+
+    // Detiene y limpia toda reproducción (videos/imágenes) de todas las zonas.
+    function stopAllZonesPlayback() {
+      Object.keys(zoneStates).forEach(function(zoneId) {
+        clearVideoWatchdog(zoneId)
+        if (zoneObjectUrls[zoneId]) {
+          URL.revokeObjectURL(zoneObjectUrls[zoneId])
+          zoneObjectUrls[zoneId] = null
+        }
+        var zoneEl = document.getElementById('zone-' + zoneId)
+        if (zoneEl) zoneEl.innerHTML = ''
+      })
+    }
+
+    function resumeAllZones() {
+      Object.keys(zoneStates).forEach(function(zoneId) {
+        if (zoneStates[zoneId] && zoneStates[zoneId].entries.length > 0) playNext(zoneId)
+      })
+    }
+
+    // Estado inicial (llamado antes del primer playNext para no parpadear).
+    function initOperatingState() {
+      operatingActive = isWithinOperatingHours()
+      if (!operatingActive) {
+        showOffHoursScreen()
+        dlog('Arranque fuera de horario operativo → pantalla negra', 'warn')
+      }
+    }
+
+    // Chequeo periódico: solo actúa en las transiciones dentro↔fuera.
+    function applyOperatingState() {
+      var active = isWithinOperatingHours()
+      if (active === operatingActive) return
+      operatingActive = active
+      if (!active) {
+        dlog('Fuera de horario operativo → pantalla negra', 'warn')
+        showOffHoursScreen()
+        stopAllZonesPlayback()
+      } else {
+        dlog('Dentro de horario operativo → reanudando reproducción', 'ok')
+        hideOffHoursScreen()
+        resumeAllZones()
+      }
+    }
+
+    function startOperatingWatch() {
+      setInterval(applyOperatingState, 30000)
+    }
+
+    // ════════════════════════════════════════════════════════════
     //  ALGORITMO DE PLAYLIST
     // ════════════════════════════════════════════════════════════
 
@@ -774,6 +858,9 @@
     // ════════════════════════════════════════════════════════════
 
     async function playNext(zoneId) {
+      // Fuera del horario operativo la cadena se detiene aquí; applyOperatingState
+      // la reanuda con resumeAllZones() cuando vuelve a estar dentro de horario.
+      if (!operatingActive) return
       var result = getNextItem(zoneId)
       if (!result) {
         // Nada reproducible ahora mismo (todo fuera de horario o con su cuota
@@ -935,6 +1022,9 @@
     }
 
     function logPlayback(zoneId, contentId) {
+      // Fuera del horario operativo NO se cuentan estadísticas (ni online ni en
+      // la cola offline, para que no se sincronicen luego).
+      if (!isWithinOperatingHours()) return
       var evt = {
         screen_id: screenData.id, zone_id: zoneId, content_id: contentId,
         played_at: new Date().toISOString(),
@@ -1284,7 +1374,9 @@
       startPolling()
       subscribeToChanges()
       startEventSync()
-      await loadProgram()
+      initOperatingState()   // define operatingActive + pantalla negra si aplica
+      await loadProgram()    // el primer playNext ya respeta operatingActive
+      startOperatingWatch()  // vigila la ventana horaria cada 30s
     }
 
     // ════════════════════════════════════════════════════════════
