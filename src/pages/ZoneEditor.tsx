@@ -174,7 +174,11 @@ export default function ZoneEditor({ programId, onBack }: Props) {
 
   function isExpired(item: MediaItem) {
     if (!item.expires_at) return false
-    const expiry = new Date(item.expires_at); expiry.setHours(23, 59, 59, 999)
+    // Parsear como fecha LOCAL (no UTC) para no adelantar el vencimiento un día
+    // en zonas horarias detrás de UTC. Coincide con la lógica del player.
+    const [y, mo, d] = String(item.expires_at).slice(0, 10).split('-').map(Number)
+    if (!y || !mo || !d) return false
+    const expiry = new Date(y, mo - 1, d, 23, 59, 59, 999)
     return new Date() > expiry
   }
 

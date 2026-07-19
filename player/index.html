@@ -665,6 +665,20 @@
       return h * 60 + m
     }
 
+    // Un contenido con fecha de vencimiento deja de reproducirse al terminar
+    // ese día. La fecha se parsea como fecha LOCAL del dispositivo (no UTC),
+    // así "vence hoy" sigue válido hasta las 23:59:59 locales sin adelantarse
+    // un día en zonas horarias detrás de UTC (ej. RD, UTC-4).
+    function isExpired(item) {
+      if (!item || !item.expires_at) return false
+      var parts = String(item.expires_at).slice(0, 10).split('-')
+      if (parts.length < 3) return false
+      var y = parseInt(parts[0], 10), mo = parseInt(parts[1], 10) - 1, d = parseInt(parts[2], 10)
+      if (isNaN(y) || isNaN(mo) || isNaN(d)) return false
+      var expiry = new Date(y, mo, d, 23, 59, 59, 999)
+      return new Date() > expiry
+    }
+
     function isWithinSchedule(item) {
       if (!item) return true
       var days  = item.schedule_days
@@ -716,6 +730,8 @@
 
         if (entry.kind === 'item') {
           var item = entry.item
+          // Vencido → nunca se reproduce.
+          if (isExpired(item)) continue
           // Fuera de su horario programado → saltar a la siguiente entrada.
           if (!isWithinSchedule(item)) continue
           if (!item.is_unlimited && item.daily_frequency) {
@@ -741,7 +757,8 @@
           }
           var subItem = subItems[entry.subIndex % subItems.length]
           entry.subIndex++
-          // Si el video elegido está fuera de su horario, saltar esta ronda.
+          // Si el video elegido está vencido o fuera de su horario, saltar.
+          if (isExpired(subItem)) continue
           if (!isWithinSchedule(subItem)) continue
           return { item: subItem, subName: sub.name }
         }
