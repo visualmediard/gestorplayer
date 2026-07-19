@@ -16,17 +16,21 @@ type AdCount = { program_id: string; total_ads: number }
 
 function fmtHM(t: string | null) { return t ? String(t).slice(0, 5) : '' }
 
+// Horas operativas del rango (cruce de medianoche incluido), redondeadas al
+// entero más cercano. Se usa para el badge "Nh/día" y el cálculo de frecuencias.
+function operatingHoursCount(start: string, end: string) {
+  const [sh, sm] = fmtHM(start).split(':').map(Number)
+  const [eh, em] = fmtHM(end).split(':').map(Number)
+  let mins = (eh * 60 + em) - (sh * 60 + sm)
+  if (mins <= 0) mins += 24 * 60 // cruza medianoche
+  return Math.max(1, Math.round(mins / 60))
+}
+
 // Resumen del horario operativo: "06:00 a 02:00 · 20h operativas" o
 // "Siempre activa" si no hay rango definido. Soporta cruce de medianoche.
 function operatingSummary(start: string | null, end: string | null) {
   if (!start || !end) return 'Siempre activa'
-  const s = fmtHM(start), e = fmtHM(end)
-  const [sh, sm] = s.split(':').map(Number)
-  const [eh, em] = e.split(':').map(Number)
-  let mins = (eh * 60 + em) - (sh * 60 + sm)
-  if (mins <= 0) mins += 24 * 60 // cruza medianoche
-  const hrs = Math.round((mins / 60) * 10) / 10
-  return `${s} a ${e} · ${hrs}h operativas`
+  return `${fmtHM(start)} a ${fmtHM(end)} · ${operatingHoursCount(start, end)}h operativas`
 }
 
 async function fetchAdCounts(): Promise<AdCount[]> {
@@ -192,14 +196,16 @@ export default function Screens() {
   async function handleSaveEdit() {
     if (!editScreen || !editName.trim()) return
     setEditSaving(true)
+    const opUpdate = editOpEnabled
+      ? { operating_start: editOpStart, operating_end: editOpEnd, operating_hours: operatingHoursCount(editOpStart, editOpEnd) }
+      : { operating_start: null, operating_end: null }
     await supabase.from('screens').update({
       name: editName.trim(),
       location: editLocation.trim() || null,
       width: editWidth,
       height: editHeight,
       ad_capacity: editCapacity,
-      operating_start: editOpEnabled ? editOpStart : null,
-      operating_end: editOpEnabled ? editOpEnd : null,
+      ...opUpdate,
     }).eq('id', editScreen.id)
     setEditSaving(false)
     setEditScreen(null)
