@@ -1,62 +1,58 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GestorPlayer · Reproductor</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-        #screen { width: 100vw; height: 100vh; position: relative; background: #000; }
-        .zone { position: absolute; overflow: hidden; background: #000; }
-        .zone img, .zone video { width: 100%; height: 100%; object-fit: cover; display: block; }
-        video::-webkit-media-controls { display: none !important; }
-        video::-webkit-media-controls-overlay-cast-button { display: none !important; }
-        /* Texto de estado y punto de conexión: ocultos en producción para no
-           aparecer sobre el contenido en pantalla. Se re-muestran solo durante
-           la carga inicial vía JS (clase .booting en el body). */
-        #status {
-          position: fixed; bottom: 8px; right: 12px;
-          font-family: monospace; font-size: 11px;
-          color: rgba(255,255,255,0.35); z-index: 9999;
-          pointer-events: none; text-align: right; line-height: 1.6;
-          white-space: pre-line;
-          display: none;
-        }
-        #net-dot {
-          position: fixed; top: 10px; right: 10px;
-          width: 8px; height: 8px; border-radius: 50%;
-          background: #64748B; z-index: 9999; pointer-events: none;
-          box-shadow: 0 0 4px rgba(0,0,0,0.5);
-          transition: background 0.3s ease;
-          display: none;
-        }
-        #net-dot.online { background: #10B981; }
-        /* Durante la carga inicial sí se ven, para diagnóstico. */
-        body.booting #status, body.booting #net-dot { display: block; }
-        /* ── Panel de diagnóstico (solo desarrollo) ── */
-        #debug-panel { display: none; }
-        #debug-toggle { display: none; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GestorPlayer · Reproductor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    #screen { width: 100vw; height: 100vh; position: relative; background: #000; }
+    .zone { position: absolute; overflow: hidden; background: #000; }
+    .zone img, .zone video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    video::-webkit-media-controls { display: none !important; }
+    video::-webkit-media-controls-overlay-cast-button { display: none !important; }
+    /* Texto de estado y punto de conexión: ocultos en producción para no
+       aparecer sobre el contenido en pantalla. Se re-muestran solo durante
+       la carga inicial vía JS (clase .booting en el body). */
+    #status {
+      position: fixed; bottom: 8px; right: 12px;
+      font-family: monospace; font-size: 11px;
+      color: rgba(255,255,255,0.35); z-index: 9999;
+      pointer-events: none; text-align: right; line-height: 1.6;
+      white-space: pre-line;
+      display: none;
+    }
+    #net-dot {
+      position: fixed; top: 10px; right: 10px;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #64748B; z-index: 9999; pointer-events: none;
+      box-shadow: 0 0 4px rgba(0,0,0,0.5);
+      transition: background 0.3s ease;
+      display: none;
+    }
+    #net-dot.online { background: #10B981; }
+    /* Durante la carga inicial sí se ven, para diagnóstico. */
+    body.booting #status, body.booting #net-dot { display: block; }
+    /* ── Panel de diagnóstico (solo desarrollo) ── */
+    #debug-panel { display: none; }
+    #debug-toggle { display: none; }
+  </style>
 </head>
 <body class="booting">
-<!-- Botón para mostrar/ocultar diagnóstico -->
-<button id="debug-toggle" onclick="toggleDebug()">🔍 DEBUG</button>
+  <!-- Botón para mostrar/ocultar diagnóstico -->
+  <button id="debug-toggle" onclick="toggleDebug()">🔍 DEBUG</button>
 
-<!-- Panel de diagnóstico -->
-<div id="debug-panel"></div>
+  <!-- Panel de diagnóstico -->
+  <div id="debug-panel"></div>
 
-<!-- Pantalla de conexión -->
-<div id="token-screen" style="display:none; position:fixed; inset:0; background:#F8FAFC; overflow-y:auto; z-index:9999; font-family:'Inter',system-ui,sans-serif; align-items:center; justify-content:center; padding:1.5rem; box-sizing:border-box;">
+  <!-- Pantalla de conexión -->
+  <div id="token-screen" style="display:none; position:fixed; inset:0; background:#F8FAFC; overflow-y:auto; z-index:9999; font-family:'Inter',system-ui,sans-serif; align-items:center; justify-content:center; padding:1.5rem; box-sizing:border-box;">
     <div style="background:#fff; border:1px solid #E2E8F0; border-radius:16px; padding:2rem; width:100%; max-width:360px; display:flex; flex-direction:column; align-items:center; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
 
         <!-- Logo -->
-        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1.25rem;">
-            <div style="width:34px; height:34px; background:#3B82F6; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
-            </div>
-            <span style="font-weight:800; font-size:1.15rem; color:#0F172A;">GestorPlayer</span>
-            <span style="font-size:0.55rem; font-weight:700; background:#EFF6FF; color:#3B82F6; border:1px solid #BFDBFE; border-radius:4px; padding:2px 5px;">BETA</span>
+        <div style="margin-bottom:1.25rem;">
+          <img src="data:image/png;base64,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" alt="GestorPlayer" style="height:46px; width:auto;" />
         </div>
 
         <div style="height:1px; background:#F1F5F9; width:100%; margin-bottom:1.25rem;"></div>
@@ -67,55 +63,49 @@
 
         <div id="qr-loading" style="color:#94A3B8; font-size:0.82rem; padding:1.5rem 0; text-align:center;">Generando QR...</div>
         <div id="qr-ready" style="display:none; text-align:center; width:100%;">
-            <img id="qr-img" src="" alt="QR" style="width:160px; height:160px; border-radius:10px; border:1px solid #E2E8F0;" />
-            <p id="qr-status" style="color:#94A3B8; font-size:0.78rem; margin:0.6rem 0 0;">Esperando conexión...</p>
+          <img id="qr-img" src="" alt="QR" style="width:160px; height:160px; border-radius:10px; border:1px solid #E2E8F0;" />
+          <p id="qr-status" style="color:#94A3B8; font-size:0.78rem; margin:0.6rem 0 0;">Esperando conexión...</p>
         </div>
 
         <!-- Divisor -->
         <div style="display:flex; align-items:center; gap:0.75rem; width:100%; margin:1.25rem 0;">
-            <div style="flex:1; height:1px; background:#E2E8F0;"></div>
-            <span style="color:#CBD5E1; font-size:0.75rem; white-space:nowrap;">o ingresa el token</span>
-            <div style="flex:1; height:1px; background:#E2E8F0;"></div>
+          <div style="flex:1; height:1px; background:#E2E8F0;"></div>
+          <span style="color:#CBD5E1; font-size:0.75rem; white-space:nowrap;">o ingresa el token</span>
+          <div style="flex:1; height:1px; background:#E2E8F0;"></div>
         </div>
 
         <!-- Token manual -->
         <div style="width:100%;">
-            <label for="token-input"></label><input
-                    id="token-input"
-                    type="text"
-                    placeholder="Pega el token aquí..."
-                    style="width:100%; padding:0.6rem 0.85rem; border-radius:8px; border:1px solid #E2E8F0; background:#F8FAFC; color:#0F172A; font-size:0.85rem; box-sizing:border-box; outline:none; font-family:monospace;"
-            />
-            <p id="token-error" style="color:#EF4444; font-size:0.78rem; display:none; margin-top:0.45rem; background:#FFF5F5; border:1px solid #FECACA; border-radius:6px; padding:0.45rem 0.7rem;">
-                ❌ Token inválido. Verifica e intenta de nuevo.
-            </p>
-            <button id="token-btn"
-                    style="margin-top:0.75rem; padding:0.65rem; border-radius:8px; border:none; background:#2563EB; color:#fff; font-weight:700; cursor:pointer; font-size:0.9rem; font-family:inherit; width:100%;">
-                Conectar pantalla
-            </button>
+          <input
+            id="token-input"
+            type="text"
+            placeholder="Pega el token aquí..."
+            style="width:100%; padding:0.6rem 0.85rem; border-radius:8px; border:1px solid #E2E8F0; background:#F8FAFC; color:#0F172A; font-size:0.85rem; box-sizing:border-box; outline:none; font-family:monospace;"
+          />
+          <p id="token-error" style="color:#EF4444; font-size:0.78rem; display:none; margin-top:0.45rem; background:#FFF5F5; border:1px solid #FECACA; border-radius:6px; padding:0.45rem 0.7rem;">
+            ❌ Token inválido. Verifica e intenta de nuevo.
+          </p>
+          <button id="token-btn"
+            style="margin-top:0.75rem; padding:0.65rem; border-radius:8px; border:none; background:#2563EB; color:#fff; font-weight:700; cursor:pointer; font-size:0.9rem; font-family:inherit; width:100%;">
+            Conectar pantalla
+          </button>
         </div>
 
-    </div>
-</div>
+      </div>
+  </div>
 
-<div id="screen" style="display:none;"></div>
-<!-- Pantalla negra limpia mostrada fuera del horario operativo -->
-<div id="offhours" style="display:none; position:fixed; inset:0; background:#000; z-index:99999;"></div>
-<div id="status">Iniciando...</div>
-<div id="net-dot"></div>
-<button
-        onclick="clearTokenAndReload()"
-        style="position:fixed; bottom:8px; left:12px; background:transparent; border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.2); font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; font-family:monospace; z-index:9999;"
->⚙ cambiar pantalla</button>
+  <div id="screen" style="display:none;"></div>
+  <!-- Pantalla negra limpia mostrada fuera del horario operativo -->
+  <div id="offhours" style="display:none; position:fixed; inset:0; background:#000; z-index:99999;"></div>
+  <div id="status">Iniciando...</div>
+  <div id="net-dot"></div>
+  <button
+    onclick="clearTokenAndReload()"
+    style="position:fixed; bottom:8px; left:12px; background:transparent; border:1px solid rgba(255,255,255,0.1); color:rgba(255,255,255,0.2); font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; font-family:monospace; z-index:9999;"
+  >⚙ cambiar pantalla</button>
 
-<!-- ── Supabase cargado localmente (asegura offline y evita problemas de CDN en WebView) ── -->
-<script
-    src="supabase.min.js"
-    onload="console.log('[GP] Script supabase.min.js cargado correctamente')"
-    onerror="console.error('[GP] Error al cargar el archivo local supabase.min.js')">
-</script>
 
-<script>
+  <script>
     // ════════════════════════════════════════════════════════════
     //  CONFIGURACIÓN
     // ════════════════════════════════════════════════════════════
@@ -124,12 +114,6 @@
     var SUPABASE_KEY    = 'sb_publishable_-AynaWSJE6vWcxCk9DpKgg_qyXOqcLu'
 
     var HARDCODED_TOKEN = ''  // vacío: siempre usa localStorage o pantalla de ingreso
-
-    // Declaradas aquí para que no sean reseteadas por el código inferior
-    // cuando startQRPairing() hace await y el script continúa ejecutándose.
-    var qrCode        = null
-    var qrInterval    = null
-    var PAIR_BASE_URL = 'https://gestorplayer.vercel.app'
 
     // ════════════════════════════════════════════════════════════
     //  PANEL DE DIAGNÓSTICO
@@ -192,50 +176,125 @@
     }
 
     // ════════════════════════════════════════════════════════════
-    //  INIT SUPABASE
+    //  CLIENTE REST MINIMAL — ES5, sin ?? ni ?. (compatible con
+    //  WebViews antiguos pre-Chrome 80 como el del Nova TB50)
     // ════════════════════════════════════════════════════════════
 
-    var supabaseLib = window.supabase
-    if (!supabaseLib) {
-      dlog('ERROR CRÍTICO: window.supabase no existe todavía.', 'err');
-      // Intento manual de esperar si es por carga asíncrona (poco probable en local pero posible)
-      setTimeout(function() {
-        if (window.supabase) {
-           dlog('Supabase apareció después de 500ms', 'ok');
-           initAfterLib();
-        } else {
-           log('❌ Supabase no disponible');
-           dlog('ERROR FINAL: Supabase falló al cargar completamente.', 'err');
-        }
-      }, 500);
-    } else {
-      initAfterLib();
-    }
+    var sb = (function() {
+      var BASE    = SUPABASE_URL + '/rest/v1'
+      var STORAGE = SUPABASE_URL + '/storage/v1/object/public'
+      var HDR = {
+        'apikey'       : SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Content-Type' : 'application/json',
+        'Accept'       : 'application/json'
+      }
 
-    var sb = null;
-    function initAfterLib() {
-      supabaseLib = window.supabase;
-      try {
-        if (supabaseLib) {
-          // Supabase v1 compatible client creation
-          sb = supabaseLib.createClient(SUPABASE_URL, SUPABASE_KEY, {
-            auth: { persistSession: false, autoRefreshToken: false }
-          });
-          dlog('Supabase client creado OK', 'ok');
+      function request(method, url, body, extra) {
+        var headers = Object.assign({}, HDR, extra || {})
+        var opts = { method: method, headers: headers }
+        if (body !== undefined && body !== null) opts.body = JSON.stringify(body)
+        return fetch(url, opts).then(function(r) {
+          var status = r.status
+          return r.text().then(function(txt) {
+            var data = null
+            try { data = JSON.parse(txt) } catch(e) { data = txt }
+            if (status >= 200 && status < 300) return { data: data, error: null }
+            return { data: null, error: { message: txt, status: status } }
+          })
+        }, function(e) {
+          return { data: null, error: { message: e.message } }
+        })
+      }
 
-          // Configurar listeners de UI que dependen de 'sb'
-          setupUIListeners();
+      function QB(table) {
+        this._t    = table
+        this._sel  = '*'
+        this._f    = []
+        this._ord  = null
+        this._lim  = null
+        this._sngl = false
+        this._meth = 'GET'
+        this._body = null
+      }
 
-          // Continuar con el arranque normal
-          var token = getDeviceToken();
-          if (token) {
-             startPlayerWithToken(token);
-          } else {
-             showTokenScreen();
+      QB.prototype.select = function(cols) { this._sel = cols || '*'; return this }
+      QB.prototype.eq = function(col, val) {
+        this._f.push(encodeURIComponent(col) + '=eq.' + encodeURIComponent(val))
+        return this
+      }
+      QB.prototype.is = function(col, val) {
+        this._f.push(encodeURIComponent(col) + '=is.' + val)
+        return this
+      }
+      QB.prototype.order = function(col, opts) {
+        this._ord = col + ((opts && opts.ascending === false) ? '.desc' : '.asc')
+        return this
+      }
+      QB.prototype.limit  = function(n) { this._lim = n; return this }
+      QB.prototype.single = function() { this._sngl = true; this._lim = 1; return this }
+      QB.prototype.insert = function(data) {
+        this._meth = 'POST'
+        this._body = Array.isArray(data) ? data : [data]
+        return this
+      }
+      QB.prototype.update = function(data) { this._meth = 'PATCH'; this._body = data; return this }
+      QB.prototype['delete'] = function() { this._meth = 'DELETE'; return this }
+      QB.prototype.match = function(obj) {
+        var self = this
+        Object.keys(obj).forEach(function(k) {
+          self._f.push(encodeURIComponent(k) + '=eq.' + encodeURIComponent(obj[k]))
+        })
+        return this
+      }
+
+      QB.prototype.then = function(resolve, reject) {
+        var self   = this
+        var params = ['select=' + encodeURIComponent(self._sel)]
+        self._f.forEach(function(f) { params.push(f) })
+        if (self._ord) params.push('order=' + self._ord)
+        if (self._lim) params.push('limit=' + self._lim)
+
+        var url  = BASE + '/' + self._t + '?' + params.join('&')
+        var xhdr = {}
+        if (self._sngl) xhdr['Accept'] = 'application/vnd.pgrst.object+json'
+        if (self._meth === 'POST' || self._meth === 'PATCH') xhdr['Prefer'] = 'return=representation'
+        if (self._meth === 'DELETE') xhdr['Prefer'] = 'return=minimal'
+
+        return request(self._meth, url, self._body, xhdr).then(function(result) {
+          if (result.error) { resolve(result); return }
+          var d = result.data
+          if (self._sngl && Array.isArray(d)) d = d[0] || null
+          resolve({ data: d, error: null })
+        }, reject)
+      }
+
+      return {
+        from: function(table) { return new QB(table) },
+        storage: {
+          from: function(bucket) {
+            return {
+              getPublicUrl: function(path) {
+                return { data: { publicUrl: STORAGE + '/' + bucket + '/' + path } }
+              }
+            }
           }
+        },
+        channel: function() {
+          return { on: function() { return this }, subscribe: function() {} }
         }
-      } catch(e) {
-        dlog('ERROR creando Supabase client: ' + e.message, 'err');
+      }
+    })()
+
+    dlog('Cliente REST ES5 listo', 'ok')
+
+    function initAfterLib() {
+      setupUIListeners()
+      var token = getDeviceToken()
+      if (token) {
+        startPlayerWithToken(token)
+      } else {
+        showTokenScreen()
       }
     }
 
@@ -1476,12 +1535,7 @@
 
     async function init() {
       runEnvCheck()
-
-      if (!window.supabase) {
-        dlog('Esperando a Supabase...', 'info');
-        return; // El timeout en INIT SUPABASE se encargará
-      }
-      // ... resto del init original si fuera necesario, pero lo moví a initAfterLib
+      initAfterLib()
     }
 
     // ════════════════════════════════════════════════════════════
