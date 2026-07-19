@@ -448,6 +448,7 @@
           zone: {
             id: zone.id, name: zone.name, x: zone.x, y: zone.y,
             width: zone.width, height: zone.height, background_color: zone.background_color,
+            fit_mode: zone.fit_mode || 'cover',
           },
           entries: zoneEntriesMap[zone.id] || [],
           savedAt: Date.now(),
@@ -869,6 +870,7 @@
         setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 30) * 1000)
       } else if (item.type === 'image') {
         var img     = document.createElement('img')
+        img.style.objectFit = (state && state.fitMode) || 'cover'
         img.onload  = function() { setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 10) * 1000) }
         img.onerror = function() {
           dlog('Error cargando imagen: ' + (url || '').slice(0, 60), 'err')
@@ -881,6 +883,7 @@
         video.muted       = true
         video.autoplay    = true
         video.playsInline = true
+        video.style.objectFit = (state && state.fitMode) || 'cover'
         video.setAttribute('webkit-playsinline', '')
         video.setAttribute('disableremoteplayback', '')
         video.onended = function() { clearVideoWatchdog(zoneId); playNext(zoneId) }
@@ -1221,6 +1224,7 @@
           lastPlayedAt: Object.assign({}, lc ? lc.lastPlayedAt : {}, remoteCounts.lastPlayed),
           currentIndex: 0,
           startTime:    Date.now(),
+          fitMode:      zone.fit_mode || 'cover',
         }
       })
 

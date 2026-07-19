@@ -8,7 +8,7 @@ import { resolveMediaUrl } from '../lib/mediaUrl'
 // zone lands exactly where it was designed (same as the Android player).
 
 type Program = { id: string; name: string; width: number; height: number }
-type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string }
+type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; fit_mode: string | null }
 type PlayItem = {
   id: string; type: 'image' | 'video' | 'url'
   storage_path: string; url: string | null
@@ -27,9 +27,9 @@ function isExpired(item: PlayItem) {
   return new Date() > expiry
 }
 
-function ImageSlide({ url, ms, onDone }: { url: string; ms: number; onDone: () => void }) {
+function ImageSlide({ url, ms, onDone, fit }: { url: string; ms: number; onDone: () => void; fit: string }) {
   useEffect(() => { const t = setTimeout(onDone, ms); return () => clearTimeout(t) }, [url, ms])
-  return <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }} />
+  return <img src={url} style={{ width: '100%', height: '100%', objectFit: fit as any, position: 'absolute', inset: 0 }} />
 }
 
 function UrlTimer({ ms, onDone }: { ms: number; onDone: () => void }) {
@@ -77,15 +77,16 @@ function ZonePlayer({ z, program, pub, onPlay }: {
 
   useEffect(() => { if (item && onPlay) onPlay(item.id, zone.id) }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const zFit = zone.fit_mode || 'cover'
   let content: React.ReactNode
   if (item.type === 'url') {
     content = <iframe src={item.url ?? ''} style={{ width: '100%', height: '100%', border: 'none' }} title={item.id} />
   } else if (item.type === 'image') {
-    content = <ImageSlide key={`${item.id}-${step}`} url={pub(item.storage_path)} ms={(item.duration_seconds ?? 10) * 1000} onDone={next} />
+    content = <ImageSlide key={`${item.id}-${step}`} url={pub(item.storage_path)} ms={(item.duration_seconds ?? 10) * 1000} onDone={next} fit={zFit} />
   } else {
     content = <video key={`${item.id}-${step}`} src={pub(item.storage_path)} muted autoPlay playsInline
       onEnded={next} onError={next}
-      style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }} />
+      style={{ width: '100%', height: '100%', objectFit: zFit as any, position: 'absolute', inset: 0 }} />
   }
 
   return (
@@ -117,7 +118,7 @@ export default function ScreenStage({ client, programId, onPlay, onEmpty }: {
       setProgram(prog as Program)
 
       const { data: zoneRows } = await client.from('zones')
-        .select('id, name, x, y, width, height, background_color').eq('program_id', prog.id).order('sort_order')
+        .select('id, name, x, y, width, height, background_color, fit_mode').eq('program_id', prog.id).order('sort_order')
 
       const built: ZoneData[] = []
       for (const zone of (zoneRows ?? []) as Zone[]) {

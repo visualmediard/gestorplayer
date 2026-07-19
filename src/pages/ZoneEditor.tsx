@@ -6,7 +6,7 @@ import { fileTooLargeMessage } from '../lib/fileLimit'
 import { useAuth } from '../auth/AuthContext'
 
 type Program = { id: string; name: string; width: number; height: number }
-type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean }
+type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean; fit_mode: string | null }
 type SubPlaylist = { id: string; name: string; sort_order: number; is_unlimited: boolean; daily_frequency: number | null }
 type MediaItem = { id: string; name: string; type: 'image' | 'video' | 'url'; storage_path: string; url?: string; duration_seconds: number | null; sort_order: number; daily_frequency: number | null; is_unlimited: boolean; sub_playlist_id: string | null; expires_at: string | null; schedule_days: number[] | null; schedule_start: string | null; schedule_end: string | null }
 type PlaylistEntry = { kind: 'item'; item: MediaItem } | { kind: 'sub'; sub: SubPlaylist; items: MediaItem[] }
@@ -14,6 +14,17 @@ type Props = { programId: string; onBack: () => void }
 
 const COLORS = ['#E2E8F0', '#DBEAFE', '#D1FAE5', '#FEE2E2', '#EDE9FE', '#FEF3C7']
 const OPERATING_HOURS = 20
+
+// Modo de ajuste del contenido dentro de la zona (CSS object-fit). El tamaño
+// de la zona nunca cambia; solo cómo se encaja el video/imagen en ese espacio.
+const FIT_MODES = [
+  { v: 'cover', l: 'Rellenar', d: 'Llena la zona, recorta lo que sobra' },
+  { v: 'contain', l: 'Contener', d: 'Muestra todo el contenido, deja bandas' },
+  { v: 'fill', l: 'Estirar', d: 'Deforma para llenar exacto' },
+]
+function fitLabel(v: string | null) {
+  return (FIT_MODES.find(f => f.v === (v || 'cover')) || FIT_MODES[0]).l
+}
 
 // Días de la semana en formato JS Date.getDay(): 0=domingo ... 6=sábado.
 // El selector se muestra empezando por lunes (convención local).
@@ -36,9 +47,9 @@ function scheduleLabel(item: { schedule_days: number[] | null; schedule_start: s
   return `🕐 ${parts.join(' · ')}`
 }
 
-function ImageSlide({ url, duration, onDone }: { url: string; duration: number; onDone: () => void }) {
+function ImageSlide({ url, duration, onDone, fit }: { url: string; duration: number; onDone: () => void; fit: string }) {
   useEffect(() => { const t = setTimeout(onDone, duration); return () => clearTimeout(t) }, [url])
-  return <img src={url} style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }} />
+  return <img src={url} style={{ width: '100%', height: '100%', objectFit: fit as any, position: 'absolute', inset: 0 }} />
 }
 
 export default function ZoneEditor({ programId, onBack }: Props) {
@@ -61,6 +72,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   const [w, setW] = useState(960)
   const [h, setH] = useState(540)
   const [color, setColor] = useState('#E2E8F0')
+  const [fit, setFit] = useState('cover')
   const [isUnlimited, setIsUnlimited] = useState(true)
   const [freq, setFreq] = useState(10)
 
@@ -103,6 +115,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   const [editZoneW, setEditZoneW] = useState(0)
   const [editZoneH, setEditZoneH] = useState(0)
   const [editZoneColor, setEditZoneColor] = useState('#E2E8F0')
+  const [editZoneFit, setEditZoneFit] = useState('cover')
 
   // Replace
   const [replacingItem, setReplacingItem] = useState<MediaItem | null>(null)
@@ -214,15 +227,15 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   async function handleCreateZone() {
     if (!name.trim()) { setError('El nombre es requerido.'); return }
     setSaving(true); setError(null)
-    const { error } = await supabase.from('zones').insert({ program_id: programId, name: name.trim(), x, y, width: w, height: h, background_color: color, is_unlimited: isUnlimited, daily_frequency: isUnlimited ? null : freq, sort_order: zones.length })
+    const { error } = await supabase.from('zones').insert({ program_id: programId, name: name.trim(), x, y, width: w, height: h, background_color: color, fit_mode: fit, is_unlimited: isUnlimited, daily_frequency: isUnlimited ? null : freq, sort_order: zones.length })
     setSaving(false)
     if (error) { setError(error.message); return }
-    setName(''); setX(0); setY(0); setW(960); setH(540); setShowZoneForm(false); load()
+    setName(''); setX(0); setY(0); setW(960); setH(540); setFit('cover'); setShowZoneForm(false); load()
   }
 
   async function handleSaveZone() {
     if (!editingZone) return
-    await supabase.from('zones').update({ name: editZoneName.trim(), x: editZoneX, y: editZoneY, width: editZoneW, height: editZoneH, background_color: editZoneColor }).eq('id', editingZone.id)
+    await supabase.from('zones').update({ name: editZoneName.trim(), x: editZoneX, y: editZoneY, width: editZoneW, height: editZoneH, background_color: editZoneColor, fit_mode: editZoneFit }).eq('id', editingZone.id)
     setEditingZone(null); load()
   }
 
@@ -434,6 +447,12 @@ export default function ZoneEditor({ programId, onBack }: Props) {
               <label style={s.label}>Color</label>
               <div style={{ display: 'flex', gap: '0.4rem' }}>{COLORS.map(c => <div key={c} onClick={() => setColor(c)} style={{ width: '22px', height: '22px', borderRadius: '4px', background: c, cursor: 'pointer', border: color === c ? '2px solid #3B82F6' : '2px solid #E2E8F0' }} />)}</div>
             </div>
+            <div style={s.formGroup}>
+              <label style={s.label}>Ajuste del video</label>
+              <select style={s.input} value={fit} onChange={e => setFit(e.target.value)}>
+                {FIT_MODES.map(f => <option key={f.v} value={f.v}>{f.l} — {f.d}</option>)}
+              </select>
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
             <label style={s.label}>Frecuencia:</label>
@@ -462,9 +481,10 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                     const item = previewPlaylist[idx]
                     const url = getPublicUrl(item.storage_path)
                     const next = () => setPlayIndex(i => i + 1)
+                    const zFit = z.fit_mode || 'cover'
                     if (item.type === 'url') return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#DBEAFE', color: '#2563EB', fontSize: '0.7rem' }}>🌐 {item.name}</div>
-                    if (item.type === 'image') return <ImageSlide key={item.id + idx} url={url} duration={(item.duration_seconds ?? 10) * 1000} onDone={next} />
-                    return <video key={item.id + idx} src={url} style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }} muted autoPlay onEnded={next} />
+                    if (item.type === 'image') return <ImageSlide key={item.id + idx} url={url} duration={(item.duration_seconds ?? 10) * 1000} onDone={next} fit={zFit} />
+                    return <video key={item.id + idx} src={url} style={{ width: '100%', height: '100%', objectFit: zFit as any, position: 'absolute', inset: 0 }} muted autoPlay onEnded={next} />
                   })() : <span style={{ color: '#fff', fontSize: `${Math.max(9, 11 * scale)}px`, opacity: 0.8, fontWeight: 600 }}>{z.name}</span>}
                 </div>
               ))}
@@ -486,11 +506,11 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                     <span style={{ color: '#0F172A', fontWeight: 600, fontSize: '0.875rem' }}>{z.name}</span>
                   </div>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button style={s.btnSm} onClick={e => { e.stopPropagation(); setEditingZone(z); setEditZoneName(z.name); setEditZoneX(z.x); setEditZoneY(z.y); setEditZoneW(z.width); setEditZoneH(z.height); setEditZoneColor(z.background_color) }}>Editar</button>
+                    <button style={s.btnSm} onClick={e => { e.stopPropagation(); setEditingZone(z); setEditZoneName(z.name); setEditZoneX(z.x); setEditZoneY(z.y); setEditZoneW(z.width); setEditZoneH(z.height); setEditZoneColor(z.background_color); setEditZoneFit(z.fit_mode || 'cover') }}>Editar</button>
                     <button style={s.btnSmDanger} onClick={e => { e.stopPropagation(); handleDeleteZone(z.id) }}>Eliminar</button>
                   </div>
                 </div>
-                <div style={{ color: '#94A3B8', fontSize: '0.75rem', marginTop: '0.2rem' }}>{z.x},{z.y} · {z.width}×{z.height}px</div>
+                <div style={{ color: '#94A3B8', fontSize: '0.75rem', marginTop: '0.2rem' }}>{z.x},{z.y} · {z.width}×{z.height}px · 🎬 {fitLabel(z.fit_mode)}</div>
                 {editingZone?.id === z.id && (
                   <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} onClick={e => e.stopPropagation()}>
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -500,6 +520,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                       <div style={s.formGroup}><label style={s.label}>Ancho</label><input style={{ ...s.input, width: '75px' }} type="number" value={editZoneW} onChange={e => setEditZoneW(+e.target.value)} /></div>
                       <div style={s.formGroup}><label style={s.label}>Alto</label><input style={{ ...s.input, width: '75px' }} type="number" value={editZoneH} onChange={e => setEditZoneH(+e.target.value)} /></div>
                       <div style={s.formGroup}><label style={s.label}>Color</label><div style={{ display: 'flex', gap: '0.3rem' }}>{COLORS.map(c => <div key={c} onClick={() => setEditZoneColor(c)} style={{ width: '20px', height: '20px', borderRadius: '3px', background: c, cursor: 'pointer', border: editZoneColor === c ? '2px solid #3B82F6' : '2px solid #E2E8F0' }} />)}</div></div>
+                      <div style={s.formGroup}><label style={s.label}>Ajuste del video</label><select style={s.input} value={editZoneFit} onChange={e => setEditZoneFit(e.target.value)}>{FIT_MODES.map(f => <option key={f.v} value={f.v}>{f.l} — {f.d}</option>)}</select></div>
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button style={s.btnPrimary} onClick={handleSaveZone}>Guardar</button>
