@@ -648,6 +648,56 @@
     }
 
     // ════════════════════════════════════════════════════════════
+    //  PROGRAMACIÓN POR DÍAS Y HORAS
+    //  Se evalúa con la hora LOCAL del dispositivo (funciona offline).
+    //  schedule_days: array formato Date.getDay() (0=domingo ... 6=sábado)
+    //  schedule_start / schedule_end: 'HH:MM' o 'HH:MM:SS'
+    //  Sin restricciones => siempre activo (comportamiento por defecto).
+    // ════════════════════════════════════════════════════════════
+
+    function parseTimeToMinutes(t) {
+      if (!t) return null
+      var parts = String(t).split(':')
+      if (parts.length < 2) return null
+      var h = parseInt(parts[0], 10)
+      var m = parseInt(parts[1], 10)
+      if (isNaN(h) || isNaN(m)) return null
+      return h * 60 + m
+    }
+
+    function isWithinSchedule(item) {
+      if (!item) return true
+      var days  = item.schedule_days
+      var start = item.schedule_start
+      var end   = item.schedule_end
+
+      var hasDays = days && days.length
+      var hasTime = start && end
+      if (!hasDays && !hasTime) return true   // sin restricción
+
+      var now = new Date()
+
+      // Días de la semana (hora local del dispositivo)
+      if (hasDays && days.indexOf(now.getDay()) === -1) return false
+
+      // Rango horario
+      if (hasTime) {
+        var s = parseTimeToMinutes(start)
+        var e = parseTimeToMinutes(end)
+        if (s === null || e === null) return true
+        var mins = now.getHours() * 60 + now.getMinutes()
+        if (s <= e) {
+          // Rango normal dentro del mismo día (ej. 06:00 a 22:00)
+          if (mins < s || mins >= e) return false
+        } else {
+          // Rango que cruza la medianoche (ej. 22:00 a 06:00)
+          if (mins < s && mins >= e) return false
+        }
+      }
+      return true
+    }
+
+    // ════════════════════════════════════════════════════════════
     //  ALGORITMO DE PLAYLIST
     // ════════════════════════════════════════════════════════════
 
@@ -666,6 +716,8 @@
 
         if (entry.kind === 'item') {
           var item = entry.item
+          // Fuera de su horario programado → saltar a la siguiente entrada.
+          if (!isWithinSchedule(item)) continue
           if (!item.is_unlimited && item.daily_frequency) {
             var played = state.dailyCounts[item.id] || 0
             if (played >= item.daily_frequency) continue
@@ -689,6 +741,8 @@
           }
           var subItem = subItems[entry.subIndex % subItems.length]
           entry.subIndex++
+          // Si el video elegido está fuera de su horario, saltar esta ronda.
+          if (!isWithinSchedule(subItem)) continue
           return { item: subItem, subName: sub.name }
         }
       }
@@ -704,7 +758,11 @@
     async function playNext(zoneId) {
       var result = getNextItem(zoneId)
       if (!result) {
-        setTimeout(function() { playNext(zoneId) }, 5000)
+        // Nada reproducible ahora mismo (todo fuera de horario o con su cuota
+        // diaria cumplida). No se congela: espera 60s y reintenta, de modo que
+        // cuando se abra la ventana horaria el contenido reanuda solo.
+        dlog('Zona ' + zoneId.slice(0,6) + ': sin contenido en horario, reintento en 60s', 'info')
+        setTimeout(function() { playNext(zoneId) }, 60000)
         return
       }
       var item    = result.item

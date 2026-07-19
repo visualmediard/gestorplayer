@@ -8,12 +8,33 @@ import { useAuth } from '../auth/AuthContext'
 type Program = { id: string; name: string; width: number; height: number }
 type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean }
 type SubPlaylist = { id: string; name: string; sort_order: number; is_unlimited: boolean; daily_frequency: number | null }
-type MediaItem = { id: string; name: string; type: 'image' | 'video' | 'url'; storage_path: string; url?: string; duration_seconds: number | null; sort_order: number; daily_frequency: number | null; is_unlimited: boolean; sub_playlist_id: string | null; expires_at: string | null }
+type MediaItem = { id: string; name: string; type: 'image' | 'video' | 'url'; storage_path: string; url?: string; duration_seconds: number | null; sort_order: number; daily_frequency: number | null; is_unlimited: boolean; sub_playlist_id: string | null; expires_at: string | null; schedule_days: number[] | null; schedule_start: string | null; schedule_end: string | null }
 type PlaylistEntry = { kind: 'item'; item: MediaItem } | { kind: 'sub'; sub: SubPlaylist; items: MediaItem[] }
 type Props = { programId: string; onBack: () => void }
 
 const COLORS = ['#E2E8F0', '#DBEAFE', '#D1FAE5', '#FEE2E2', '#EDE9FE', '#FEF3C7']
 const OPERATING_HOURS = 20
+
+// Días de la semana en formato JS Date.getDay(): 0=domingo ... 6=sábado.
+// El selector se muestra empezando por lunes (convención local).
+const DAY_LABELS = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
+const DAY_PICKER = [
+  { n: 1, l: 'L' }, { n: 2, l: 'M' }, { n: 3, l: 'X' }, { n: 4, l: 'J' },
+  { n: 5, l: 'V' }, { n: 6, l: 'S' }, { n: 0, l: 'D' },
+]
+
+function fmtTime(t: string | null) { return t ? String(t).slice(0, 5) : '' }
+
+function scheduleLabel(item: { schedule_days: number[] | null; schedule_start: string | null; schedule_end: string | null }) {
+  const hasDays = !!(item.schedule_days && item.schedule_days.length)
+  const hasTime = !!(item.schedule_start && item.schedule_end)
+  if (!hasDays && !hasTime) return '🕐 Siempre activo'
+  const parts: string[] = []
+  if (hasDays) parts.push([...item.schedule_days!].sort((a, b) => a - b).map(d => DAY_LABELS[d]).join(' '))
+  else parts.push('Todos los días')
+  if (hasTime) parts.push(`${fmtTime(item.schedule_start)} a ${fmtTime(item.schedule_end)}`)
+  return `🕐 ${parts.join(' · ')}`
+}
 
 function ImageSlide({ url, duration, onDone }: { url: string; duration: number; onDone: () => void }) {
   useEffect(() => { const t = setTimeout(onDone, duration); return () => clearTimeout(t) }, [url])
@@ -70,6 +91,11 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   const [editUrlDuration, setEditUrlDuration] = useState(30)
   const [editingExpiry, setEditingExpiry] = useState<string | null>(null)
   const [expiryValue, setExpiryValue] = useState('')
+  const [editingSchedule, setEditingSchedule] = useState<string | null>(null)
+  const [schedEnabled, setSchedEnabled] = useState(false)
+  const [schedDays, setSchedDays] = useState<number[]>([])
+  const [schedStart, setSchedStart] = useState('06:00')
+  const [schedEnd, setSchedEnd] = useState('22:00')
   const [editingZone, setEditingZone] = useState<Zone | null>(null)
   const [editZoneName, setEditZoneName] = useState('')
   const [editZoneX, setEditZoneX] = useState(0)
@@ -207,6 +233,31 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   async function handleSaveExpiry(itemId: string) {
     await supabase.from('media_content').update({ expires_at: expiryValue || null }).eq('id', itemId)
     setEditingExpiry(null); loadEntries(selectedZone!)
+  }
+
+  function openScheduleEditor(item: MediaItem) {
+    const hasSchedule = !!((item.schedule_days && item.schedule_days.length) || (item.schedule_start && item.schedule_end))
+    setEditingSchedule(item.id)
+    setSchedEnabled(hasSchedule)
+    setSchedDays(item.schedule_days ?? [])
+    setSchedStart(fmtTime(item.schedule_start) || '06:00')
+    setSchedEnd(fmtTime(item.schedule_end) || '22:00')
+  }
+
+  function toggleSchedDay(day: number) {
+    setSchedDays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])
+  }
+
+  async function handleSaveSchedule(itemId: string) {
+    const payload = schedEnabled
+      ? {
+          schedule_days: schedDays.length ? [...schedDays].sort((a, b) => a - b) : null,
+          schedule_start: schedStart || null,
+          schedule_end: schedEnd || null,
+        }
+      : { schedule_days: null, schedule_start: null, schedule_end: null }
+    await supabase.from('media_content').update(payload).eq('id', itemId)
+    setEditingSchedule(null); loadEntries(selectedZone!)
   }
 
   async function handleCreateSub() {
@@ -658,6 +709,43 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                                 {item.expires_at ? expired ? `⛔ Venció: ${new Date(item.expires_at).toLocaleDateString('es-DO')}` : `📅 Vence: ${new Date(item.expires_at).toLocaleDateString('es-DO')}` : '📅 Sin vencimiento'}
                               </button>
                             )}
+                            {editingSchedule === item.id ? (
+                              <div style={s.scheduleBox} onClick={e => e.stopPropagation()}>
+                                <label style={s.schedToggle}>
+                                  <input type="checkbox" checked={schedEnabled} onChange={e => setSchedEnabled(e.target.checked)} />
+                                  <span>Activar horario</span>
+                                </label>
+                                {schedEnabled && (
+                                  <>
+                                    <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                                      {DAY_PICKER.map(d => (
+                                        <button key={d.n} type="button" onClick={() => toggleSchedDay(d.n)}
+                                          style={{ ...s.dayChip, background: schedDays.includes(d.n) ? '#3B82F6' : '#fff', color: schedDays.includes(d.n) ? '#fff' : '#64748B', borderColor: schedDays.includes(d.n) ? '#3B82F6' : '#E2E8F0' }}>
+                                          {d.l}
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <div style={{ fontSize: '0.68rem', color: '#94A3B8', marginTop: '0.2rem' }}>
+                                      {schedDays.length === 0 ? 'Sin días marcados = todos los días' : ''}
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                                      <input type="time" value={schedStart} onChange={e => setSchedStart(e.target.value)} style={{ ...s.input, padding: '0.2rem 0.4rem', fontSize: '0.8rem' }} />
+                                      <span style={{ color: '#64748B', fontSize: '0.75rem' }}>a</span>
+                                      <input type="time" value={schedEnd} onChange={e => setSchedEnd(e.target.value)} style={{ ...s.input, padding: '0.2rem 0.4rem', fontSize: '0.8rem' }} />
+                                    </div>
+                                  </>
+                                )}
+                                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}>
+                                  <button style={{ ...s.btnPrimary, padding: '0.25rem 0.6rem', fontSize: '0.75rem' }} onClick={() => handleSaveSchedule(item.id)}>Guardar</button>
+                                  <button style={{ ...s.btnOutline, padding: '0.25rem 0.6rem', fontSize: '0.75rem' }} onClick={() => setEditingSchedule(null)}>✕</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button onClick={() => openScheduleEditor(item)}
+                                style={{ marginTop: '0.2rem', marginLeft: '0.3rem', background: 'transparent', border: '1px solid #E2E8F0', borderRadius: '4px', fontSize: '0.72rem', padding: '0.15rem 0.5rem', cursor: 'pointer', color: (item.schedule_days?.length || (item.schedule_start && item.schedule_end)) ? '#7C3AED' : '#94A3B8' }}>
+                                {scheduleLabel(item)}
+                              </button>
+                            )}
                           </div>
                           <button style={s.btnSmDanger} onClick={() => handleDeleteItem(item)}>✕</button>
                         </div>
@@ -750,4 +838,7 @@ const s: Record<string, React.CSSProperties> = {
   thumb: { width: '64px', height: '40px', borderRadius: '4px', overflow: 'hidden', background: '#F1F5F9', flexShrink: 0 },
   freqBtn: { marginTop: '0.2rem', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '4px', color: '#3B82F6', fontSize: '0.72rem', padding: '0.15rem 0.5rem', cursor: 'pointer' },
   dragHandle: { color: '#CBD5E1', fontSize: '1.1rem', cursor: 'grab', flexShrink: 0, userSelect: 'none' as const },
+  scheduleBox: { marginTop: '0.35rem', padding: '0.5rem 0.6rem', background: '#FAF5FF', border: '1px solid #E9D5FF', borderRadius: '8px' },
+  schedToggle: { display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#0F172A', fontSize: '0.78rem', cursor: 'pointer', fontWeight: 500 },
+  dayChip: { width: '26px', height: '26px', borderRadius: '6px', border: '1px solid #E2E8F0', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', padding: 0 },
 }
