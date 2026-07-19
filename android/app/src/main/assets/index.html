@@ -591,6 +591,8 @@
           published_at: program.published_at, updated_at: program.updated_at,
         },
         publishedAt: program.published_at || program.updated_at,
+        operating_start: screenData.operating_start || null,
+        operating_end:   screenData.operating_end   || null,
         savedAt: Date.now(),
       }).catch(function(e) { dlog('No se pudo guardar snapshot (meta): ' + e.message, 'warn') })
 
@@ -614,6 +616,17 @@
         rows.forEach(function(r) {
           if (!validIds[r.zoneId]) idbDelete('zones', r.zoneId).catch(function() {})
         })
+      }).catch(function() {})
+    }
+
+    // Actualiza solo el horario operativo dentro del snapshot meta, sin
+    // reescribir el programa. Se llama al detectar un cambio en caliente.
+    function persistScreenMeta() {
+      idbGet('meta', 'state').then(function(row) {
+        if (!row) return
+        row.operating_start = screenData.operating_start || null
+        row.operating_end   = screenData.operating_end   || null
+        idbPut('meta', row).catch(function() {})
       }).catch(function() {})
     }
 
@@ -1295,13 +1308,19 @@
 
           if (res.data) {
             var latest = res.data.published_at
-            if (lastPublishedAt === null) { lastPublishedAt = latest; return }
-            if (latest && latest !== lastPublishedAt) {
+            if (lastPublishedAt === null) { lastPublishedAt = latest }
+            else if (latest && latest !== lastPublishedAt) {
               dlog('Nueva publicación detectada → recargando', 'ok')
               log('🔄 Publicación detectada · recargando...')
               setTimeout(function() { window.location.reload() }, 1000)
+              return
             }
           }
+
+          // Cambios de la pantalla (horario operativo) NO tocan programs, así
+          // que se vigilan aparte y se aplican en caliente sin recargar ni
+          // requerir re-publicar la zona.
+          await checkScreenSettingsChange()
         } catch(e) {
           if (isOnline) {
             setConnStatus(false)
@@ -1309,6 +1328,32 @@
           }
         }
       }, 15000)
+    }
+
+    // Relee el horario operativo de la pantalla y, si cambió, lo aplica al
+    // instante: actualiza screenData, refresca el snapshot y transiciona
+    // pantalla negra ↔ reproducción según corresponda.
+    function checkScreenSettingsChange() {
+      return sb.from('screens')
+        .select('operating_start, operating_end, operating_hours')
+        .eq('id', screenData.id)
+        .single()
+        .then(function(r) {
+          if (r.error || !r.data) return
+          var newStart = r.data.operating_start || null
+          var newEnd   = r.data.operating_end   || null
+          var curStart = screenData.operating_start || null
+          var curEnd   = screenData.operating_end   || null
+          if (newStart === curStart && newEnd === curEnd) return
+
+          dlog('Horario operativo actualizado: ' +
+               (newStart || '—') + ' a ' + (newEnd || '—') + ' → aplicando', 'ok')
+          screenData.operating_start = newStart
+          screenData.operating_end   = newEnd
+          if (r.data.operating_hours != null) screenData.operating_hours = r.data.operating_hours
+          persistScreenMeta()
+          applyOperatingState()
+        }, function() { /* fallo silencioso: se reintenta en el próximo ciclo */ })
     }
 
     // ════════════════════════════════════════════════════════════
