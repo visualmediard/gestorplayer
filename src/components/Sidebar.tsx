@@ -1,5 +1,6 @@
 import { useAuth } from '../auth/AuthContext'
 import logoNegro from '../assets/logo/logo-negro.png'
+import logoIcon from '../assets/logo/icon.png'
 
 type Props = {
   current: string
@@ -59,35 +60,30 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
         flexShrink: 0,
       }}>
         {(!isMobile && collapsed) ? (
-          <div style={s.logoIcon}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <g stroke="#fff" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6.5 9V7.6A1.1 1.1 0 0 1 7.6 6.5H9" />
-                <path d="M17.5 9V7.6A1.1 1.1 0 0 0 16.4 6.5H15" />
-                <path d="M6.5 15v1.4A1.1 1.1 0 0 0 7.6 17.5H9" />
-                <path d="M17.5 15v1.4A1.1 1.1 0 0 1 16.4 17.5H15" />
-              </g>
-              <path d="M10 8.5 16 12l-6 3.5z" fill="#fff" />
-            </svg>
-          </div>
+          // Colapsado: el ícono real del logo es el botón para expandir (sin
+          // botón flotante encima, que antes lo tapaba).
+          <button onClick={onToggle} title="Expandir menú" aria-label="Expandir menú"
+            style={{ border: 'none', padding: 0, background: 'transparent', cursor: 'pointer', display: 'flex' }}>
+            <img src={logoIcon} alt="GestPlayer" style={{ width: '34px', height: '34px' }} />
+          </button>
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <img src={logoNegro} alt="GestPlayer" style={{ height: '46px', width: 'auto' }} />
-            <span style={s.betaBadge}>BETA</span>
-          </div>
-        )}
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <img src={logoNegro} alt="GestPlayer" style={{ height: '46px', width: 'auto' }} />
+              <span style={s.betaBadge}>BETA</span>
+            </div>
 
-        <button onClick={onToggle} style={{ ...s.toggleBtn, position: 'absolute', right: '0.75rem' }} aria-label={isMobile ? 'Cerrar menú' : (collapsed ? 'Expandir' : 'Colapsar')}>
-          {isMobile ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          ) : collapsed ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-          )}
-        </button>
+            <button onClick={onToggle} style={{ ...s.toggleBtn, position: 'absolute', right: '0.75rem' }} aria-label={isMobile ? 'Cerrar menú' : 'Colapsar'}>
+              {isMobile ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+              )}
+            </button>
+          </>
+        )}
       </div>
 
       {/* Nav */}
