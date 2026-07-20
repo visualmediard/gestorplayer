@@ -114,6 +114,7 @@ export default function Screens() {
   const [hoursValue, setHoursValue] = useState(20)
   const [copied, setCopied] = useState<string | null>(null)
   const [preview, setPreview] = useState<Screen | null>(null)
+  const [releasing, setReleasing] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [editScreen, setEditScreen] = useState<Screen | null>(null)
   const [editName, setEditName] = useState('')
@@ -218,6 +219,17 @@ export default function Screens() {
     setCopied(token); setTimeout(() => setCopied(null), 2000)
   }
 
+  // Libera el dispositivo vinculado a la pantalla (borra device_fingerprint).
+  // El próximo equipo que abra el player con este token quedará vinculado.
+  async function handleRelease(sc: Screen) {
+    if (!confirm(`¿Liberar el dispositivo de "${sc.name}"?\n\nEl próximo equipo que se conecte con este token quedará vinculado. Úsalo si cambiaste, reparaste o reinstalaste la pantalla física.`)) return
+    setReleasing(sc.id)
+    const { error } = await supabase.rpc('release_screen_device', { p_screen_id: sc.id })
+    setReleasing(null)
+    if (error) { alert('No se pudo liberar el dispositivo: ' + error.message); return }
+    load()
+  }
+
   return (
     <div>
       <div style={s.topbar} className="page-topbar">
@@ -300,6 +312,22 @@ export default function Screens() {
                         <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: '#64748B' }}>{sc.device_token.slice(0, 16)}...</span>
                         <button onClick={() => copyToken(sc.device_token!)} style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '4px', color: '#2563EB', fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer' }}>
                           {copied === sc.device_token ? '✓' : 'Copiar'}
+                        </button>
+                      </div>
+                    )}
+
+                    {sc.device_fingerprint && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.2rem' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', color: '#059669' }}>
+                          🔒 Dispositivo vinculado
+                        </span>
+                        <button
+                          onClick={() => handleRelease(sc)}
+                          disabled={releasing === sc.id}
+                          title="Borra la vinculación para que otro equipo pueda usar este token"
+                          style={{ background: '#FFF5F5', border: '1px solid #FECACA', borderRadius: '4px', color: '#EF4444', fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer', opacity: releasing === sc.id ? 0.6 : 1 }}
+                        >
+                          {releasing === sc.id ? 'Liberando…' : 'Liberar'}
                         </button>
                       </div>
                     )}
