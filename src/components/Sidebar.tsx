@@ -60,7 +60,15 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
       }}>
         {(!isMobile && collapsed) ? (
           <div style={s.logoIcon}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <g stroke="#fff" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6.5 9V7.6A1.1 1.1 0 0 1 7.6 6.5H9" />
+                <path d="M17.5 9V7.6A1.1 1.1 0 0 0 16.4 6.5H15" />
+                <path d="M6.5 15v1.4A1.1 1.1 0 0 0 7.6 17.5H9" />
+                <path d="M17.5 15v1.4A1.1 1.1 0 0 1 16.4 17.5H15" />
+              </g>
+              <path d="M10 8.5 16 12l-6 3.5z" fill="#fff" />
+            </svg>
           </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
