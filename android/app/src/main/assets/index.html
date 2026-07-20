@@ -484,7 +484,7 @@
     // ════════════════════════════════════════════════════════════
 
     var IDB_NAME    = 'gp_offline_db'
-    var IDB_VERSION = 1
+    var IDB_VERSION = 2   // v2: store 'media' para blobs de video/imagen
     var idbPromise  = null
 
     function idbOpen() {
@@ -498,6 +498,9 @@
           if (!db.objectStoreNames.contains('zones'))  db.createObjectStore('zones', { keyPath: 'zoneId' })
           if (!db.objectStoreNames.contains('counts')) db.createObjectStore('counts', { keyPath: 'zoneId' })
           if (!db.objectStoreNames.contains('events')) db.createObjectStore('events', { keyPath: 'id', autoIncrement: true })
+          // Blobs de medios. IndexedDB SÍ persiste en WebView con file://
+          // (a diferencia de la Cache API), garantizando caché entre recargas.
+          if (!db.objectStoreNames.contains('media'))  db.createObjectStore('media', { keyPath: 'url' })
         }
         req.onsuccess = function(e) { resolve(e.target.result) }
         req.onerror   = function(e) { reject((e.target && e.target.error) || new Error('IDB open error')) }
@@ -541,6 +544,17 @@
       })
     }
 
+    // Solo las claves (sin traer los blobs completos → barato en memoria).
+    function idbGetAllKeys(storeName) {
+      return idbStore(storeName, 'readonly').then(function(store) {
+        return new Promise(function(resolve, reject) {
+          var r = store.getAllKeys()
+          r.onsuccess = function() { resolve(r.result || []) }
+          r.onerror   = function() { reject(r.error) }
+        })
+      })
+    }
+
     function idbDelete(storeName, key) {
       return idbStore(storeName, 'readwrite').then(function(store) {
         return new Promise(function(resolve, reject) {
@@ -562,10 +576,16 @@
     }
 
     // ════════════════════════════════════════════════════════════
-    //  CACHÉ DE MEDIOS — CACHE API (sin Service Worker)
-    //  Descarga cada video/imagen a disco local para reproducirlo
-    //  100% offline. Se usa la Cache Storage directamente desde la
-    //  página (no requiere registrar un Service Worker).
+    //  CACHÉ DE MEDIOS — IndexedDB (primario) + Cache API (compat)
+    //
+    //  Cada video/imagen se descarga UNA sola vez y se guarda como Blob
+    //  en IndexedDB (store 'media'), que persiste en WebView con file://
+    //  a diferencia de la Cache API. En cada reproducción se sirve desde
+    //  ese blob local → el único egress de red es la primera descarga.
+    //
+    //  La Cache API vieja ('gp-media-v1') se sigue LEYENDO como respaldo
+    //  para material ya cacheado por la versión anterior (y se migra a
+    //  IndexedDB al leerlo), pero ya NO se escribe nada nuevo en ella.
     // ════════════════════════════════════════════════════════════
 
     var MEDIA_CACHE_NAME     = 'gp-media-v1'
@@ -575,8 +595,8 @@
     var downloadQueueSet     = {}
     var activeDownloads      = 0
 
-    // Busca el archivo en caché y devuelve su Blob, o null si no está.
-    function cacheHasBlob(url) {
+    // Lectura de la Cache API vieja (solo respaldo/migración).
+    function cacheApiGetBlob(url) {
       if (!CACHE_API_OK) return Promise.resolve(null)
       return caches.open(MEDIA_CACHE_NAME).then(function(cache) {
         return cache.match(url)
@@ -585,22 +605,71 @@
       }).catch(function() { return null })
     }
 
-    async function downloadOne(url) {
-      try {
-        var cache = await caches.open(MEDIA_CACHE_NAME)
-        var hit = await cache.match(url)
-        if (hit) return
-        var res = await fetch(url)
+    // ¿El asset ya está en IndexedDB?
+    function mediaHas(url) {
+      return idbGet('media', url).then(function(row) {
+        return !!(row && row.blob)
+      }).catch(function() { return false })
+    }
+
+    // Devuelve el Blob local del asset o null. Orden: IndexedDB → Cache API
+    // (migrando a IDB si se encuentra allí) → null.
+    function mediaGetBlob(url) {
+      return idbGet('media', url).then(function(row) {
+        if (row && row.blob) return row.blob
+        return cacheApiGetBlob(url).then(function(blob) {
+          if (blob) {
+            idbPut('media', { url: url, blob: blob, savedAt: Date.now() }).catch(function() {})
+            dlog('Migrado de Cache API → IDB: ...' + url.slice(-32), 'info')
+          }
+          return blob
+        })
+      }).catch(function() { return null })
+    }
+
+    // Descargas en vuelo, para que el prefetch en segundo plano y el playNext
+    // bajo demanda NO descarguen el mismo archivo dos veces: comparten la misma
+    // promesa. Clave para el objetivo "cada video se descarga UNA sola vez".
+    var inflightDownloads = {}
+
+    // Descarga UNA vez y guarda el Blob en IndexedDB. Devuelve el Blob o null.
+    function mediaDownloadAndStore(url) {
+      if (inflightDownloads[url]) return inflightDownloads[url]
+
+      var p = fetch(url).then(function(res) {
         if (!res || !res.ok) throw new Error('HTTP ' + (res && res.status))
-        await cache.put(url, res.clone())
-        dlog('Cacheado OK: ...' + url.slice(-40), 'ok')
-      } catch(e) {
-        dlog('No se pudo cachear (' + e.message + '): ...' + url.slice(-40), 'warn')
-      }
+        return res.blob()
+      }).then(function(blob) {
+        return idbPut('media', { url: url, blob: blob, savedAt: Date.now() })
+          .then(function() {
+            dlog('Descargado y guardado (IDB): ...' + url.slice(-40), 'ok')
+            return blob
+          }, function(e) {
+            // Si el guardado falla (cuota), igual devolvemos el blob para
+            // reproducir ahora; se reintentará guardar en la próxima.
+            dlog('Descarga OK pero no se guardó (' + e.message + '): ...' + url.slice(-32), 'warn')
+            return blob
+          })
+      }).catch(function(e) {
+        dlog('Descarga falló (' + e.message + '): ...' + url.slice(-40), 'warn')
+        return null
+      })
+
+      // Limpiar el registro al terminar (éxito o fallo) para permitir reintentos.
+      inflightDownloads[url] = p
+      p.then(function() { delete inflightDownloads[url] }, function() { delete inflightDownloads[url] })
+      return p
+    }
+
+    // Precarga en segundo plano: descarga solo lo que aún no está en IDB.
+    async function downloadOne(url) {
+      var has = await mediaHas(url)
+      if (has) return
+      await mediaDownloadAndStore(url)
     }
 
     function enqueueDownload(url) {
-      if (!CACHE_API_OK || !url || downloadQueueSet[url]) return
+      if (!url || downloadQueueSet[url]) return
       downloadQueueSet[url] = true
       downloadQueue.push(url)
       pumpDownloadQueue()
@@ -646,27 +715,48 @@
       return Object.keys(urls)
     }
 
-    // Descarga en segundo plano todo lo requerido y, al terminar, borra del
-    // caché lo que ya no se use (contenido reemplazado o eliminado).
+    // Descarga en segundo plano solo lo NUEVO y, al terminar, purga del caché
+    // (IDB + Cache API) lo que ya no se use.
     function enqueueAllMedia(zoneEntriesMap) {
-      if (!CACHE_API_OK) return
       var urls = collectMediaUrls(zoneEntriesMap)
-      dlog('Assets requeridos para este programa: ' + urls.length, 'info')
+
+      // PRIORIDAD 4 — diagnóstico de storage: cuántos assets siguen en
+      // Supabase Storage (egress pago) vs R2/externo (egress gratis).
+      var supa = 0, r2 = 0
+      urls.forEach(function(u) {
+        if (/supabase\.co\/storage\//i.test(u)) supa++; else r2++
+      })
+      dlog('Assets del programa: ' + urls.length + ' · Supabase Storage: ' + supa +
+           ' · R2/externo: ' + r2, supa > 0 ? 'warn' : 'ok')
+      if (supa > 0) dlog('⚠ ' + supa + ' asset(s) aún en Supabase Storage: re-subirlos a R2 para eliminar ese egress', 'warn')
+
       urls.forEach(function(u) { enqueueDownload(u) })
-      waitForDownloadQueueIdle(function() { purgeStaleCache(urls) })
+      waitForDownloadQueueIdle(function() { purgeStaleMedia(urls) })
     }
 
-    function purgeStaleCache(validUrls) {
-      var validSet = {}
-      validUrls.forEach(function(u) { validSet[u] = true })
-      caches.open(MEDIA_CACHE_NAME).then(function(cache) {
-        return cache.keys().then(function(reqs) {
-          var toDelete = reqs.filter(function(r) { return !validSet[r.url] })
-          if (!toDelete.length) return
-          dlog('Purgando ' + toDelete.length + ' archivo(s) obsoleto(s) del caché', 'info')
-          return Promise.all(toDelete.map(function(r) { return cache.delete(r) }))
-        })
-      }).catch(function(e) { dlog('Purga de caché falló: ' + e.message, 'warn') })
+    // Borra de IndexedDB (y de la Cache API vieja) los assets que ya no
+    // pertenecen a la playlist actual. Devuelve una promesa que resuelve
+    // cuando todas las eliminaciones terminaron.
+    function purgeStaleMedia(validUrls) {
+      var valid = {}
+      validUrls.forEach(function(u) { valid[u] = true })
+
+      var idbP = idbGetAllKeys('media').then(function(keys) {
+        var stale = keys.filter(function(k) { return !valid[k] })
+        if (stale.length) dlog('Purgando ' + stale.length + ' asset(s) obsoleto(s) de IDB', 'info')
+        return Promise.all(stale.map(function(k) { return idbDelete('media', k).catch(function() {}) }))
+      }).catch(function() {})
+
+      var cacheP = Promise.resolve()
+      if (CACHE_API_OK) {
+        cacheP = caches.open(MEDIA_CACHE_NAME).then(function(cache) {
+          return cache.keys().then(function(reqs) {
+            return Promise.all(reqs.map(function(r) { return valid[r.url] ? null : cache.delete(r) }))
+          })
+        }).catch(function() {})
+      }
+
+      return Promise.all([idbP, cacheP])
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1003,8 +1093,12 @@
     }
 
     // Detiene y limpia toda reproducción (videos/imágenes) de todas las zonas.
+    // Incrementa la generación de cada zona para invalidar cualquier cadena
+    // pendiente (timeouts/onended): al reanudar con resumeAllZones se arranca
+    // una sola cadena limpia por zona, sin riesgo de reproducción doble.
     function stopAllZonesPlayback() {
       Object.keys(zoneStates).forEach(function(zoneId) {
+        if (zoneStates[zoneId]) zoneStates[zoneId].gen = (zoneStates[zoneId].gen || 0) + 1
         clearVideoWatchdog(zoneId)
         if (zoneObjectUrls[zoneId]) {
           URL.revokeObjectURL(zoneObjectUrls[zoneId])
@@ -1106,22 +1200,46 @@
     }
 
     // ════════════════════════════════════════════════════════════
-    //  REPRODUCCIÓN — resuelve la fuente local (caché) antes que la
-    //  remota, y nunca se queda esperando: si no hay caché ni red,
-    //  salta al siguiente ítem en vez de congelarse.
+    //  REPRODUCCIÓN — sirve SIEMPRE desde el blob local (IndexedDB).
+    //
+    //  Regla de egress (una sola descarga por video):
+    //    · En caché  → se sirve el blob local (sin red).
+    //    · Sin caché + online → UNA descarga vía fetch, se guarda en IDB,
+    //      y recién entonces se asigna el blob a video.src. Nunca se hace
+    //      streaming directo desde Storage a video.src.
+    //    · Sin caché + offline → se salta al siguiente ítem.
+    //
+    //  Guardia de "generación": cada zona tiene un contador `gen`. Toda
+    //  continuación de la cadena (timeouts, onended, watchdog) verifica que
+    //  la generación siga vigente. Así una resincronización suave puede
+    //  matar cadenas viejas sin recargar la página (evita reproducción doble).
     // ════════════════════════════════════════════════════════════
 
+    function zoneAlive(zoneId, gen) {
+      return !!(zoneStates[zoneId] && zoneStates[zoneId].gen === gen)
+    }
+
+    // Programa la próxima reproducción solo si la generación sigue vigente.
+    function laterPlayNext(zoneId, gen, ms) {
+      setTimeout(function() { if (zoneAlive(zoneId, gen)) playNext(zoneId) }, ms)
+    }
+
     async function playNext(zoneId) {
+      var state = zoneStates[zoneId]
+      if (!state) return               // zona eliminada por una resync
+      var gen = state.gen
+
       // Fuera del horario operativo la cadena se detiene aquí; applyOperatingState
       // la reanuda con resumeAllZones() cuando vuelve a estar dentro de horario.
       if (!operatingActive) return
+
       var result = getNextItem(zoneId)
       if (!result) {
         // Nada reproducible ahora mismo (todo fuera de horario o con su cuota
         // diaria cumplida). No se congela: espera 60s y reintenta, de modo que
         // cuando se abra la ventana horaria el contenido reanuda solo.
         dlog('Zona ' + zoneId.slice(0,6) + ': sin contenido en horario, reintento en 60s', 'info')
-        setTimeout(function() { playNext(zoneId) }, 60000)
+        laterPlayNext(zoneId, gen, 60000)
         return
       }
       var item    = result.item
@@ -1130,45 +1248,43 @@
       // Los streams tipo URL no se cachean (son contenido en vivo/externo).
       if (item.type === 'url') {
         zoneFailStreak[zoneId] = 0
-        renderItem(zoneId, item, subName, item.url || '')
+        renderItem(zoneId, item, subName, item.url || '', gen)
         return
       }
 
-      var publicUrl = item.storage_path
-        ? resolveMediaUrl(item.storage_path)
-        : null
-      var localBlobUrl = null
+      var publicUrl = item.storage_path ? resolveMediaUrl(item.storage_path) : null
+      if (!publicUrl) { laterPlayNext(zoneId, gen, 500); return }
 
-      if (publicUrl && CACHE_API_OK) {
-        try {
-          var blob = await cacheHasBlob(publicUrl)
-          if (blob) localBlobUrl = URL.createObjectURL(blob)
-        } catch(e) {
-          dlog('Lectura de caché falló: ' + e.message, 'warn')
-        }
+      // 1) ¿Está ya en local (IndexedDB → Cache API)?
+      var blob = await mediaGetBlob(publicUrl)
+      if (!zoneAlive(zoneId, gen)) return   // una resync ocurrió durante el await
+
+      // 2) No está y hay red: UNA sola descarga → guardar → servir el blob.
+      if (!blob && isOnline) {
+        dlog('Primera vez sin caché → descargando: ' + item.name, 'info')
+        blob = await mediaDownloadAndStore(publicUrl)
+        if (!zoneAlive(zoneId, gen)) return
       }
 
-      if (!localBlobUrl && !isOnline) {
-        // Nada local y sin conexión: no hay forma de mostrarlo, saltar.
-        dlog('Sin caché y sin conexión, saltando: ' + item.name, 'warn')
+      if (!blob) {
+        // Sin local y (offline o la descarga falló): saltar al siguiente.
+        dlog('Sin blob local para "' + item.name + '" (offline o descarga falló), saltando', 'warn')
         zoneFailStreak[zoneId] = (zoneFailStreak[zoneId] || 0) + 1
-        var wait = zoneFailStreak[zoneId] > 3 ? 5000 : 300
-        setTimeout(function() { playNext(zoneId) }, wait)
+        var wait = zoneFailStreak[zoneId] > 3 ? 5000 : 500
+        laterPlayNext(zoneId, gen, wait)
         return
       }
 
       zoneFailStreak[zoneId] = 0
-      renderItem(zoneId, item, subName, localBlobUrl || publicUrl)
-
-      // Si se sirvió desde la red, dejarlo descargándose para la próxima vez.
-      if (!localBlobUrl && isOnline && publicUrl) enqueueDownload(publicUrl)
+      renderItem(zoneId, item, subName, URL.createObjectURL(blob), gen)
     }
 
-    function renderItem(zoneId, item, subName, srcUrl) {
+    function renderItem(zoneId, item, subName, srcUrl, gen) {
       var zoneEl = document.getElementById('zone-' + zoneId)
-      if (!zoneEl) return
+      if (!zoneEl) { if (srcUrl && srcUrl.indexOf('blob:') === 0) URL.revokeObjectURL(srcUrl); return }
 
       var state = zoneStates[zoneId]
+      if (!state) { if (srcUrl && srcUrl.indexOf('blob:') === 0) URL.revokeObjectURL(srcUrl); return }
       var url   = srcUrl
 
       state.dailyCounts[item.id]  = (state.dailyCounts[item.id] || 0) + 1
@@ -1187,7 +1303,7 @@
       var played  = state.dailyCounts[item.id]
       var cuota   = item.daily_frequency ? item.daily_frequency : '∞'
       log('▶ ' + label + '\n' + played + '/' + cuota + ' reproducciones' + (isLocal ? ' · 💾 local' : ''))
-      dlog('Reproduciendo: ' + item.name + ' tipo=' + item.type + (isLocal ? ' (caché local)' : ' (red)'), 'ok')
+      dlog('Reproduciendo: ' + item.name + ' tipo=' + item.type + (isLocal ? ' (blob local)' : ' (red/externo)'), 'ok')
 
       // Limpiar el vigilante y la blob URL de la reproducción anterior.
       clearVideoWatchdog(zoneId)
@@ -1208,14 +1324,14 @@
         iframe.allow        = 'autoplay; fullscreen; encrypted-media'
         iframe.setAttribute('allowfullscreen', '')
         zoneEl.appendChild(iframe)
-        setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 30) * 1000)
+        laterPlayNext(zoneId, gen, (item.duration_seconds || 30) * 1000)
       } else if (item.type === 'image') {
         var img     = document.createElement('img')
         img.style.objectFit = (state && state.fitMode) || 'cover'
-        img.onload  = function() { setTimeout(function() { playNext(zoneId) }, (item.duration_seconds || 10) * 1000) }
+        img.onload  = function() { laterPlayNext(zoneId, gen, (item.duration_seconds || 10) * 1000) }
         img.onerror = function() {
           dlog('Error cargando imagen: ' + (url || '').slice(0, 60), 'err')
-          setTimeout(function() { playNext(zoneId) }, 500)
+          laterPlayNext(zoneId, gen, 500)
         }
         img.src = url
         zoneEl.appendChild(img)
@@ -1227,18 +1343,18 @@
         video.style.objectFit = (state && state.fitMode) || 'cover'
         video.setAttribute('webkit-playsinline', '')
         video.setAttribute('disableremoteplayback', '')
-        video.onended = function() { clearVideoWatchdog(zoneId); playNext(zoneId) }
+        video.onended = function() { clearVideoWatchdog(zoneId); if (zoneAlive(zoneId, gen)) playNext(zoneId) }
         video.onerror = function() {
           dlog('Error reproduciendo video: ' + (url || '').slice(0, 60), 'err')
           clearVideoWatchdog(zoneId)
-          setTimeout(function() { playNext(zoneId) }, 500)
+          laterPlayNext(zoneId, gen, 500)
         }
         video.src = url
         zoneEl.appendChild(video)
         video.play().catch(function(e) {
           dlog('video.play() rechazado: ' + e.message, 'warn')
         })
-        armVideoWatchdog(zoneId, video)
+        armVideoWatchdog(zoneId, video, gen)
       }
     }
 
@@ -1246,7 +1362,7 @@
     // currentTime no avanza) más de 8s mientras debería estar reproduciendo
     // — típico cuando se cae la red a mitad de un stream en vivo — se salta
     // al siguiente ítem en vez de dejar la pantalla congelada.
-    function armVideoWatchdog(zoneId, videoEl) {
+    function armVideoWatchdog(zoneId, videoEl, gen) {
       clearVideoWatchdog(zoneId)
       var lastTime     = -1
       var stalledSince = null
@@ -1258,7 +1374,7 @@
           else if (Date.now() - stalledSince > 8000) {
             dlog('Video atascado en zona ' + zoneId.slice(0,6) + ' → saltando', 'warn')
             clearVideoWatchdog(zoneId)
-            playNext(zoneId)
+            if (zoneAlive(zoneId, gen)) playNext(zoneId)
             return
           }
         } else {
@@ -1302,7 +1418,17 @@
     //  LAYOUT
     // ════════════════════════════════════════════════════════════
 
+    // Última estructura renderizada, para que softResync detecte si el layout
+    // cambió (zonas añadidas/removidas/movidas/redimensionadas o dimensiones
+    // del programa) y decida si reconstruir el DOM o solo refrescar contenido.
+    var renderedProgram = null
+    var renderedZones   = []
+
     function buildLayout(program, zones) {
+      renderedProgram = { width: program.width, height: program.height }
+      renderedZones   = zones.map(function(z) {
+        return { id: z.id, x: z.x, y: z.y, width: z.width, height: z.height, background_color: z.background_color || '' }
+      })
       screenEl.innerHTML = ''
       var screenW    = window.screen.width
       var screenH    = window.screen.height
@@ -1401,9 +1527,8 @@
             var latest = res.data.published_at
             if (lastPublishedAt === null) { lastPublishedAt = latest }
             else if (latest && latest !== lastPublishedAt) {
-              dlog('Nueva publicación detectada → recargando', 'ok')
-              log('🔄 Publicación detectada · recargando...')
-              setTimeout(function() { window.location.reload() }, 1000)
+              dlog('Nueva publicación detectada → resync suave', 'ok')
+              await softResync()
               return
             }
           }
@@ -1458,9 +1583,8 @@
             event: 'UPDATE', schema: 'public', table: 'programs',
             filter: 'id=eq.' + screenData.current_program_id
           }, function() {
-            dlog('Realtime: cambio detectado → recargando', 'ok')
-            log('🔄 Publicado · recargando...')
-            setTimeout(function() { window.location.reload() }, 2000)
+            dlog('Realtime: cambio detectado → resync suave', 'ok')
+            softResync()
           })
           .subscribe(function(status) {
             dlog('Realtime status: ' + status, status === 'SUBSCRIBED' ? 'ok' : 'warn')
@@ -1487,6 +1611,59 @@
     //  seguir reproduciendo sin interrupción.
     // ════════════════════════════════════════════════════════════
 
+    // Construye las entradas (items directos + sub-playlists ordenadas) de una zona.
+    async function fetchZoneEntries(zone) {
+      var itemsRes = await sb.from('media_content').select('*')
+        .eq('zone_id', zone.id).is('sub_playlist_id', null).is('archived_at', null).order('sort_order')
+      var subsRes  = await sb.from('sub_playlists').select('*')
+        .eq('zone_id', zone.id).is('archived_at', null).order('sort_order')
+
+      if (itemsRes.error) dlog('Error cargando media zona ' + zone.id.slice(0,8) + ': ' + itemsRes.error.message, 'err')
+      if (subsRes.error)  dlog('Error cargando sub-playlists: ' + subsRes.error.message, 'err')
+
+      var subs       = subsRes.data || []
+      var subEntries = []
+      for (var j = 0; j < subs.length; j++) {
+        var sub   = subs[j]
+        var siRes = await sb.from('media_content').select('*')
+          .eq('sub_playlist_id', sub.id).is('archived_at', null).order('sort_order')
+        if (siRes.error) dlog('Error sub-playlist ' + sub.id.slice(0,8) + ': ' + siRes.error.message, 'err')
+        subEntries.push({ kind: 'sub', sub: sub, items: siRes.data || [], subIndex: 0 })
+      }
+
+      var directEntries = (itemsRes.data || []).map(function(item) {
+        return { kind: 'item', item: item, sort_order: item.sort_order }
+      })
+      var subEntriesOrdered = subEntries.map(function(e) {
+        return Object.assign({}, e, { sort_order: e.sub.sort_order })
+      })
+      var combined = directEntries.concat(subEntriesOrdered)
+      combined.sort(function(a, b) { return a.sort_order - b.sort_order })
+      return combined
+    }
+
+    // Trae en vivo desde Supabase el programa, sus zonas, contadores y
+    // entradas de cada zona. Lanza excepción si algo falla. Reutilizado por
+    // loadProgram (arranque) y softResync (recarga suave sin reload).
+    async function fetchProgramData() {
+      var progRes = await sb.from('programs').select('*').eq('id', screenData.current_program_id).single()
+      if (progRes.error) throw new Error(progRes.error.message)
+      var program = progRes.data
+
+      var zonesRes = await sb.from('zones').select('*').eq('program_id', program.id).order('sort_order')
+      if (zonesRes.error) throw new Error(zonesRes.error.message)
+      var zones = zonesRes.data || []
+
+      var remoteCounts = await loadCounts()
+
+      var zoneEntriesMap = {}
+      for (var i = 0; i < zones.length; i++) {
+        zoneEntriesMap[zones[i].id] = await fetchZoneEntries(zones[i])
+        dlog('Zona ' + zones[i].id.slice(0,8) + ': ' + zoneEntriesMap[zones[i].id].length + ' entradas', 'ok')
+      }
+      return { program: program, zones: zones, zoneEntriesMap: zoneEntriesMap, remoteCounts: remoteCounts }
+    }
+
     async function loadProgram() {
       if (!screenData.current_program_id) {
         dlog('Sin programa asignado a esta pantalla', 'warn')
@@ -1504,14 +1681,13 @@
 
       if (isOnline) {
         try {
-          var progRes = await sb.from('programs').select('*').eq('id', screenData.current_program_id).single()
-          if (progRes.error) throw new Error(progRes.error.message)
-          program = progRes.data
+          log('Cargando historial de reproducciones...')
+          var data = await fetchProgramData()
+          program        = data.program
+          zones          = data.zones
+          zoneEntriesMap = data.zoneEntriesMap
+          remoteCounts   = data.remoteCounts
           dlog('Programa OK: ' + program.name, 'ok')
-
-          var zonesRes = await sb.from('zones').select('*').eq('program_id', program.id).order('sort_order')
-          if (zonesRes.error) throw new Error(zonesRes.error.message)
-          zones = zonesRes.data || []
 
           if (!zones.length) {
             dlog('El programa no tiene zonas configuradas', 'warn')
@@ -1519,43 +1695,6 @@
             return
           }
           dlog('Zonas cargadas: ' + zones.length, 'ok')
-
-          log('Cargando historial de reproducciones...')
-          remoteCounts = await loadCounts()
-
-          for (var i = 0; i < zones.length; i++) {
-            var zone     = zones[i]
-            var itemsRes = await sb.from('media_content').select('*')
-              .eq('zone_id', zone.id).is('sub_playlist_id', null).is('archived_at', null).order('sort_order')
-            var subsRes  = await sb.from('sub_playlists').select('*')
-              .eq('zone_id', zone.id).is('archived_at', null).order('sort_order')
-
-            if (itemsRes.error) dlog('Error cargando media zona ' + zone.id.slice(0,8) + ': ' + itemsRes.error.message, 'err')
-            if (subsRes.error)  dlog('Error cargando sub-playlists: ' + subsRes.error.message, 'err')
-
-            var subs       = subsRes.data || []
-            var subEntries = []
-
-            for (var j = 0; j < subs.length; j++) {
-              var sub   = subs[j]
-              var siRes = await sb.from('media_content').select('*')
-                .eq('sub_playlist_id', sub.id).is('archived_at', null).order('sort_order')
-              if (siRes.error) dlog('Error sub-playlist ' + sub.id.slice(0,8) + ': ' + siRes.error.message, 'err')
-              subEntries.push({ kind: 'sub', sub: sub, items: siRes.data || [], subIndex: 0 })
-            }
-
-            var directEntries = (itemsRes.data || []).map(function(item) {
-              return { kind: 'item', item: item, sort_order: item.sort_order }
-            })
-            var subEntriesOrdered = subEntries.map(function(e) {
-              return Object.assign({}, e, { sort_order: e.sub.sort_order })
-            })
-            var combined = directEntries.concat(subEntriesOrdered)
-            combined.sort(function(a, b) { return a.sort_order - b.sort_order })
-
-            dlog('Zona ' + zone.id.slice(0,8) + ': ' + combined.length + ' entradas de contenido', 'ok')
-            zoneEntriesMap[zone.id] = combined
-          }
 
           lastPublishedAt = program.published_at || program.updated_at
           onlineLoadOk    = true
@@ -1601,6 +1740,7 @@
           currentIndex: 0,
           startTime:    Date.now(),
           fitMode:      zone.fit_mode || 'cover',
+          gen:          0,
         }
       })
 
@@ -1625,6 +1765,123 @@
 
       // Ya hay contenido en pantalla: oculta indicadores de estado/conexión.
       document.body.classList.remove('booting')
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  RESINCRONIZACIÓN SUAVE (sin window.location.reload)
+    //
+    //  Al detectar una nueva publicación, en vez de recargar toda la página
+    //  (lo que re-descargaba TODA la biblioteca), se refresca la playlist en
+    //  caliente:
+    //    · Se descargan SOLO los videos nuevos (los ya cacheados no se tocan).
+    //    · Se purga del caché solo lo que ya no está en la playlist.
+    //    · Si el layout no cambió, las zonas siguen reproduciendo sin corte y
+    //      toman el contenido nuevo en su próxima transición natural.
+    //    · Si el layout cambió, se reconstruye el DOM y se reinician las
+    //      cadenas (la generación mata las viejas para evitar doble reproducción).
+    // ════════════════════════════════════════════════════════════
+
+    var resyncing = false
+
+    // ¿Cambió la estructura visual respecto a lo último renderizado?
+    function layoutChanged(program, newZones) {
+      if (!renderedProgram) return true
+      if (renderedProgram.width !== program.width || renderedProgram.height !== program.height) return true
+      if (renderedZones.length !== newZones.length) return true
+      var byId = {}
+      renderedZones.forEach(function(z) { byId[z.id] = z })
+      for (var i = 0; i < newZones.length; i++) {
+        var n = newZones[i], o = byId[n.id]
+        if (!o) return true
+        if (o.x !== n.x || o.y !== n.y || o.width !== n.width || o.height !== n.height) return true
+        if ((o.background_color || '') !== (n.background_color || '')) return true
+      }
+      return false
+    }
+
+    async function softResync() {
+      if (resyncing) return
+      if (!isOnline || !sb || !screenData || !screenData.current_program_id) return
+      resyncing = true
+      try {
+        var data
+        try {
+          data = await fetchProgramData()
+        } catch (e) {
+          dlog('Resync falló (' + e.message + '), se reintentará en el próximo ciclo', 'warn')
+          return
+        }
+        if (!data.zones.length) { dlog('Resync: programa sin zonas, ignorado', 'warn'); return }
+
+        var program        = data.program
+        var newZones       = data.zones
+        var zoneEntriesMap = data.zoneEntriesMap
+
+        lastPublishedAt = program.published_at || program.updated_at
+        persistSnapshot(program, newZones, zoneEntriesMap)
+
+        var changed = layoutChanged(program, newZones)
+        dlog('Resync suave: ' + (changed ? 'layout cambió → reconstruyendo DOM' : 'solo contenido → sin cortar reproducción'), 'ok')
+        log('🔄 Actualizando contenido...')
+
+        // Si el layout cambia, invalidar las cadenas actuales (nueva generación)
+        // y limpiar sus recursos antes de reconstruir.
+        if (changed) {
+          Object.keys(zoneStates).forEach(function(zid) {
+            zoneStates[zid].gen = (zoneStates[zid].gen || 0) + 1
+            clearVideoWatchdog(zid)
+            if (zoneObjectUrls[zid]) { URL.revokeObjectURL(zoneObjectUrls[zid]); zoneObjectUrls[zid] = null }
+          })
+        }
+
+        // Crear/actualizar estados de zona preservando contadores del día.
+        var newIds = {}
+        newZones.forEach(function(zone) {
+          newIds[zone.id] = true
+          var prev = zoneStates[zone.id]
+          zoneStates[zone.id] = {
+            entries:      zoneEntriesMap[zone.id] || [],
+            dailyCounts:  prev ? prev.dailyCounts  : Object.assign({}, data.remoteCounts.counts),
+            lastPlayedAt: prev ? prev.lastPlayedAt : Object.assign({}, data.remoteCounts.lastPlayed),
+            currentIndex: prev ? prev.currentIndex : 0,
+            startTime:    prev ? prev.startTime : Date.now(),
+            fitMode:      zone.fit_mode || 'cover',
+            gen:          prev ? prev.gen : 0,   // ya incrementado arriba si changed
+          }
+        })
+
+        // Eliminar zonas que ya no existen (matar sus cadenas + limpiar).
+        Object.keys(zoneStates).forEach(function(zid) {
+          if (!newIds[zid]) {
+            zoneStates[zid].gen = (zoneStates[zid].gen || 0) + 1
+            clearVideoWatchdog(zid)
+            if (zoneObjectUrls[zid]) { URL.revokeObjectURL(zoneObjectUrls[zid]); zoneObjectUrls[zid] = null }
+            delete zoneStates[zid]
+          }
+        })
+
+        // Descargar SOLO lo nuevo y purgar del caché lo que ya no se use.
+        enqueueAllMedia(zoneEntriesMap)
+
+        if (changed) {
+          buildLayout(program, newZones)
+          // Arrancar cadenas nuevas (una por zona) con la generación vigente.
+          newZones.forEach(function(zone, idx) {
+            (function(zoneId, delay) {
+              setTimeout(function() {
+                if (operatingActive && zoneStates[zoneId] && zoneStates[zoneId].entries.length > 0) playNext(zoneId)
+              }, delay)
+            })(zone.id, idx * 300)
+          })
+        }
+        // Si NO cambió el layout: las cadenas existentes siguen vivas y toman
+        // las nuevas entries en su próximo getNextItem. No arrancamos nada
+        // nuevo → sin reproducción doble.
+
+        log('▶ ' + program.name + ' · ' + newZones.length + ' zona(s)')
+      } finally {
+        resyncing = false
+      }
     }
 
     // ════════════════════════════════════════════════════════════
