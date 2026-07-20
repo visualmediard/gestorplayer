@@ -84,7 +84,7 @@ export default function DashboardHome({
       <div style={s.pageHeader}>
         <div>
           <h1 style={s.title}>Bienvenido, {profile?.full_name} 👋</h1>
-          <p style={s.sub}>{(profile as any)?.organization_name ?? 'GestorPlayer'} · Panel de control</p>
+          <p style={s.sub}>{(profile as any)?.organization_name ?? 'GestPlayer'} · Panel de control</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <div style={s.statPill}>

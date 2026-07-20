@@ -57,7 +57,7 @@ export default function Player() {
 
   if (status === 'loading') return <Center><Spinner /><p style={msg}>Conectando…</p></Center>
   if (status === 'no-token') return <Center>
-    <h1 style={title}>Reproductor GestorPlayer</h1>
+    <h1 style={title}>Reproductor GestPlayer</h1>
     <p style={msg}>Falta el token de la pantalla en la URL.</p>
     <p style={{ ...msg, opacity: 0.7 }}>Usa: <code style={code}>/play?token=TU_TOKEN</code></p>
     <p style={{ ...msg, opacity: 0.7 }}>Copia el token desde <b>Pantallas</b> en el panel.</p>

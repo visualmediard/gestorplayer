@@ -64,7 +64,7 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
           </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <img src={logoNegro} alt="GestorPlayer" style={{ height: '46px', width: 'auto' }} />
+            <img src={logoNegro} alt="GestPlayer" style={{ height: '46px', width: 'auto' }} />
             <span style={s.betaBadge}>BETA</span>
           </div>
         )}

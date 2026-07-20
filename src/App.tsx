@@ -11,6 +11,7 @@ import Campaigns from './pages/Campaigns'
 import Sidebar from './components/Sidebar'
 import Pair from './pages/Pair'
 import Player from './pages/Player'
+import logoNegro from './assets/logo/logo-negro.png'
 
 type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns'
 
@@ -86,11 +87,9 @@ function Gate() {
   }
 
   if (loading) return (
-    <div style={{ minHeight: '100vh', background: '#F0F4F8', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem' }}>
-      <div style={{ width: '36px', height: '36px', background: 'linear-gradient(135deg, #3B82F6, #2563EB)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
-      </div>
-      <div style={{ color: '#94A3B8', fontSize: '0.875rem' }}>Cargando GestorPlayer...</div>
+    <div style={{ minHeight: '100vh', background: '#F0F4F8', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1.25rem' }}>
+      <img src={logoNegro} alt="GestPlayer" style={{ height: '52px', width: 'auto' }} />
+      <div style={{ color: '#94A3B8', fontSize: '0.875rem' }}>Cargando...</div>
     </div>
   )
 

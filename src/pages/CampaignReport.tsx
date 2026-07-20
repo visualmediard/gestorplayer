@@ -140,7 +140,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     doc.setTextColor(255, 255, 255)
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(20)
-    doc.text('GestorPlayer', 14, 15)
+    doc.text('GestPlayer', 14, 15)
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(10)
     doc.text(orgName || 'Digital Signage Platform', 14, 22)
@@ -209,7 +209,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     doc.line(14, pageH - 18, pageW - 14, pageH - 18)
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(148, 163, 184)
     doc.text(`Generado: ${new Date().toLocaleDateString('es-DO')} ${new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' })}`, 14, pageH - 12)
-    doc.text('Powered by GestorPlayer', pageW - 14, pageH - 12, { align: 'right' })
+    doc.text('Powered by GestPlayer', pageW - 14, pageH - 12, { align: 'right' })
 
     doc.save(`reporte-${camp.name.replace(/\s+/g, '-').toLowerCase()}.pdf`)
   }

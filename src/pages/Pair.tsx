@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
+import logoNegro from '../assets/logo/logo-negro.png'
 
 // La página /pair sirve dos flujos:
 //
@@ -279,11 +280,8 @@ function Shell({ children, wide }: { children: React.ReactNode; wide?: boolean }
 
 function Logo() {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.75rem' }}>
-      <div style={{ width: '36px', height: '36px', background: '#3B82F6', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21" /></svg>
-      </div>
-      <span style={{ fontWeight: 800, fontSize: '1.2rem', color: '#0F172A' }}>GestorPlayer</span>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1.75rem' }}>
+      <img src={logoNegro} alt="GestPlayer" style={{ height: '44px', width: 'auto' }} />
     </div>
   )
 }
