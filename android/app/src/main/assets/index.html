@@ -264,7 +264,15 @@
         var url  = BASE + '/' + self._t + '?' + params.join('&')
         var xhdr = {}
         if (self._sngl) xhdr['Accept'] = 'application/vnd.pgrst.object+json'
-        if (self._meth === 'POST' || self._meth === 'PATCH') xhdr['Prefer'] = 'return=representation'
+        // INSERT (POST) usa return=minimal: NO pide devolver la fila insertada,
+        // porque eso exigiría permiso SELECT sobre la tabla. En playback_events
+        // el rol anónimo tiene INSERT pero NO SELECT (política solo para el
+        // equipo), así que representation hacía fallar y descartar el insert.
+        // minimal iguala el comportamiento del SDK web (que sí cuenta).
+        if (self._meth === 'POST')  xhdr['Prefer'] = 'return=minimal'
+        // PATCH (update) sí puede devolver la fila (screens tiene SELECT anon);
+        // se mantiene representation por compatibilidad con el código existente.
+        if (self._meth === 'PATCH') xhdr['Prefer'] = 'return=representation'
         if (self._meth === 'DELETE') xhdr['Prefer'] = 'return=minimal'
 
         return request(self._meth, url, self._body, xhdr).then(function(result) {
