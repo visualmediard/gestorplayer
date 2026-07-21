@@ -30,12 +30,13 @@ export default function Content() {
   const [durations, setDurations] = useState<Record<string, number>>({})
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // A file can be placed in several zones (each placement is its own row).
-  // The library view shows each unique file once, so identical placements
-  // don't look like duplicates. URLs are unique per row.
+  // A file can be placed in several zones (each placement es su propia fila) y
+  // cada subida/colocación puede generar una URL distinta en R2. Para que la
+  // biblioteca muestre cada archivo UNA sola vez, se deduplica por nombre+tipo
+  // (no por storage_path, que varía entre copias del mismo archivo).
   function dedupKey(m: MediaItem) {
     if (m.type === 'url') return `url:${m.id}`
-    return m.storage_path ? `path:${m.storage_path}` : `id:${m.id}`
+    return `name:${m.type}:${m.name.trim().toLowerCase()}`
   }
 
   async function load() {
@@ -85,12 +86,14 @@ export default function Content() {
 
   async function handleDelete(item: MediaItem) {
     if (!confirm(`¿Eliminar "${item.name}" de la biblioteca?\n\nSe quitará de la biblioteca y de las zonas donde esté, pero permanecerá en Estadísticas hasta que lo elimines definitivamente desde allí.`)) return
-    // Soft delete every placement of this file (rows share the same storage_path)
-    // so it fully disappears from the deduped library; stats survive via archived_at.
+    // Soft delete todas las copias de este archivo. Como la biblioteca ahora
+    // deduplica por nombre+tipo, archivamos por nombre+tipo (no por storage_path)
+    // para que desaparezcan TODAS las copias/colocaciones, aunque tengan URLs
+    // distintas. Las estadísticas sobreviven vía archived_at.
     const now = new Date().toISOString()
     const q = supabase.from('media_content').update({ archived_at: now }).is('campaign_id', null)
-    if (item.type !== 'url' && item.storage_path) await q.eq('storage_path', item.storage_path)
-    else await q.eq('id', item.id)
+    if (item.type === 'url') await q.eq('id', item.id)
+    else await q.eq('name', item.name).eq('type', item.type)
     load()
   }
 
