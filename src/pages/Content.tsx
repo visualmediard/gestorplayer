@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { uploadToR2 } from '../lib/uploadToR2'
 import { resolveMediaUrl } from '../lib/mediaUrl'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
+import { dedupeMedia } from '../lib/dedupeMedia'
 import { useAuth } from '../auth/AuthContext'
 
 type MediaItem = {
@@ -30,31 +31,12 @@ export default function Content() {
   const [durations, setDurations] = useState<Record<string, number>>({})
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // A file can be placed in several zones (each placement es su propia fila) y
-  // cada subida/colocación puede generar una URL distinta en R2. Para que la
-  // biblioteca muestre cada archivo UNA sola vez, se deduplica por nombre+tipo
-  // (no por storage_path, que varía entre copias del mismo archivo).
-  function dedupKey(m: MediaItem) {
-    if (m.type === 'url') return `url:${m.id}`
-    return `name:${m.type}:${m.name.trim().toLowerCase()}`
-  }
 
   async function load() {
     setLoading(true)
     const { data: mediaData } = await supabase.from('media_content').select('*').is('campaign_id', null).is('archived_at', null).order('created_at', { ascending: false })
     const { data: zoneData } = await supabase.from('zones').select('id, name, programs(name)')
-    if (mediaData) {
-      // Collapse rows that point to the same file into one entry, preferring
-      // the library master (zone_id null) as the representative.
-      const byKey = new Map<string, MediaItem>()
-      for (const row of (mediaData as MediaItem[])) {
-        const key = dedupKey(row)
-        const existing = byKey.get(key)
-        if (!existing) { byKey.set(key, row); continue }
-        if (!row.zone_id && existing.zone_id) byKey.set(key, row) // prefer library master
-      }
-      setItems(Array.from(byKey.values()))
-    }
+    if (mediaData) setItems(dedupeMedia(mediaData as MediaItem[]))
     if (zoneData) setZones(zoneData.map((z: any) => ({ id: z.id, name: z.name, program_name: z.programs?.name ?? '' })))
     setLoading(false)
   }

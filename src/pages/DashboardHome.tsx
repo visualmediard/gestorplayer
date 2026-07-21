@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { resolveMediaUrl } from '../lib/mediaUrl'
+import { dedupeMedia } from '../lib/dedupeMedia'
 import { useAuth } from '../auth/AuthContext'
 
-type MediaItem = { id: string; name: string; type: string; storage_path: string; created_at: string }
+type MediaItem = { id: string; name: string; type: string; storage_path: string; created_at: string; zone_id?: string | null }
 type Program = { id: string; name: string; thumbnail_url: string | null; published_at: string | null }
 type Screen = { id: string; name: string; last_heartbeat: string | null; current_program_id: string | null; is_active: boolean }
 type ProgramMap = Record<string, string>
@@ -40,12 +41,12 @@ export default function DashboardHome({
     const orgId = profileData?.organization_id
 
     const [{ data: mediaData }, { data: progData }, { data: screenData }] = await Promise.all([
-      supabase.from('media_content').select('id, name, type, storage_path, created_at').is('archived_at', null).order('created_at', { ascending: false }).limit(8),
+      supabase.from('media_content').select('id, name, type, storage_path, created_at, zone_id').is('archived_at', null).order('created_at', { ascending: false }).limit(60),
       supabase.from('programs').select('id, name, thumbnail_url, published_at').eq('organization_id', orgId ?? '').order('created_at', { ascending: false }).limit(8),
       supabase.from('screens').select('id, name, last_heartbeat, current_program_id, is_active').eq('organization_id', orgId ?? '').order('name'),
     ])
 
-    if (mediaData) setMedia(mediaData as MediaItem[])
+    if (mediaData) setMedia(dedupeMedia(mediaData as MediaItem[]).slice(0, 8))
     if (progData) setPrograms(progData as Program[])
     if (screenData) setScreens(screenData as Screen[])
 

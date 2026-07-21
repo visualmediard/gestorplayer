@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { uploadToR2 } from '../lib/uploadToR2'
 import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
 import { fileTooLargeMessage } from '../lib/fileLimit'
+import { dedupeMedia } from '../lib/dedupeMedia'
 import { useAuth } from '../auth/AuthContext'
 
 type Program = { id: string; name: string; width: number; height: number }
@@ -166,7 +167,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   async function loadLibrary() {
     setLibraryLoading(true)
     const { data } = await supabase.from('media_content').select('*').is('archived_at', null).order('created_at', { ascending: false })
-    if (data) setLibrary(data as MediaItem[])
+    if (data) setLibrary(dedupeMedia(data as MediaItem[]))
     setLibraryLoading(false)
   }
 
