@@ -153,6 +153,15 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.2rem', flexWrap: 'wrap' }}>
             <p style={s.sub}>Reproducciones acumuladas por pantalla</p>
             {lastUpdate && <span style={{ color: '#94A3B8', fontSize: '0.75rem' }}>· Actualizado: {lastUpdate.toLocaleTimeString('es-DO')}</span>}
+            {/* Con el batching los contadores suben en bloque cada ~10 min:
+                este aviso evita que parezca que las estadísticas se congelaron. */}
+            <span
+              title="Los reproductores acumulan las reproducciones y las envían en lotes cada 10 minutos. Por eso los contadores suben en bloque."
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: '#F1F5F9', color: '#64748B', fontSize: '0.7rem', fontWeight: 600, padding: '2px 8px', borderRadius: '20px', border: '1px solid #E2E8F0', cursor: 'help' }}
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              Sincroniza cada 10 min
+            </span>
             {liveCount > 0 && (
               <span style={{ background: '#2563EB', color: '#fff', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '20px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 <span style={{ width: '6px', height: '6px', background: '#fff', borderRadius: '50%', display: 'inline-block' }} />
