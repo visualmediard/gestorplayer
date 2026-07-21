@@ -622,6 +622,11 @@
         publishedAt: program.published_at || program.updated_at,
         operating_start: screenData.operating_start || null,
         operating_end:   screenData.operating_end   || null,
+        // Datos mínimos para poder arrancar sin conexión tras un corte de luz
+        // (startPlayerFromSnapshot los usa para reconstruir screenData).
+        deviceToken:     lsGet('device_token') || null,
+        screenName:      screenData.name || null,
+        operating_hours: screenData.operating_hours || 20,
         savedAt: Date.now(),
       }).catch(function(e) { dlog('No se pudo guardar snapshot (meta): ' + e.message, 'warn') })
 
@@ -1784,23 +1789,86 @@
     //  INICIO DEL PLAYER
     // ════════════════════════════════════════════════════════════
 
+    // Arranque offline: reconstruye screenData desde el snapshot local para
+    // poder reproducir el contenido ya cacheado sin conexión. Devuelve true
+    // si había snapshot utilizable para este token.
+    async function startPlayerFromSnapshot(token) {
+      var metaRow = await idbGet('meta', 'state').catch(function() { return null })
+      if (!metaRow || !metaRow.screenId) return false
+      // El snapshot es de esta pantalla solo si el token coincide (o si es de
+      // una versión antigua que no lo guardaba: se acepta por compatibilidad).
+      if (metaRow.deviceToken && metaRow.deviceToken !== token) return false
+
+      screenData = {
+        id: metaRow.screenId,
+        name: metaRow.screenName || 'Pantalla',
+        current_program_id: (metaRow.program && metaRow.program.id) || null,
+        operating_hours: metaRow.operating_hours || 20,
+        operating_start: metaRow.operating_start || null,
+        operating_end:   metaRow.operating_end   || null,
+        device_fingerprint: null,
+      }
+      dlog('Arranque OFFLINE desde snapshot: ' + screenData.name, 'warn')
+      log('📴 Sin conexión · reproduciendo contenido guardado')
+      return true
+    }
+
     async function startPlayer(token) {
       log('Identificando pantalla...')
       dlog('Buscando pantalla con token: ' + token.slice(0,12) + '...', 'info')
 
-      var res
+      var res = null
+      var networkFailed = false
       try {
         res = await sb.from('screens').select('*').eq('device_token', token).single()
       } catch(e) {
-        dlog('Excepción en consulta screens: ' + e.message, 'err')
-        log('❌ Error de red consultando pantalla')
-        return
+        dlog('Excepción en consulta screens: ' + e.message, 'warn')
+        networkFailed = true
       }
 
-      if (res.error) {
-        dlog('Error Supabase screens: ' + res.error.message + ' | code=' + res.error.code + ' | details=' + JSON.stringify(res.error.details), 'err')
-        log('❌ Pantalla no encontrada · recarga la página')
-        lsDel('device_token')
+      // Distinguir SIN RED de TOKEN INVÁLIDO. Un fallo de red NO debe borrar
+      // el token ni mandar al QR: se arranca offline con lo cacheado y se
+      // valida cuando vuelva la conexión (fail-open, igual que el locking).
+      if (!networkFailed && res && res.error) {
+        var code = res.error.code || ''
+        var msg  = res.error.message || ''
+        // PGRST116 = 0 filas: el servidor respondió y el token no existe.
+        var tokenReallyInvalid = (code === 'PGRST116') || /0 rows|not found/i.test(msg)
+        if (tokenReallyInvalid) {
+          dlog('El servidor confirma que el token no existe → pidiendo vinculación', 'err')
+          log('❌ Pantalla no encontrada · vuelve a vincular')
+          lsDel('device_token')
+          setTimeout(function() { location.reload() }, 1500)
+          return
+        }
+        dlog('Error consultando screens (' + msg + ') → intentando arranque offline', 'warn')
+        networkFailed = true
+      }
+
+      if (networkFailed || !res || !res.data) {
+        // Sin respuesta utilizable del servidor: arrancar con el snapshot.
+        var ok = await startPlayerFromSnapshot(token)
+        if (!ok) {
+          // Nunca se sincronizó esta pantalla en este equipo: no hay nada que
+          // reproducir. Se conserva el token y se reintenta solo.
+          dlog('Sin conexión y sin snapshot local → reintentando en 10s', 'err')
+          log('📴 Sin conexión · esperando red...')
+          setTimeout(function() { startPlayer(token) }, 10000)
+          return
+        }
+        setConnStatus(false)
+        watchConnection()
+        startEventSync()
+        initOperatingState()
+        await loadProgram()      // usa el snapshot y el caché de videos
+        startOperatingWatch()
+        // Al recuperar la red, el propio watchConnection dispara la
+        // sincronización; recargamos para validar y retomar el ciclo normal.
+        window.addEventListener('online', function onBack() {
+          window.removeEventListener('online', onBack)
+          dlog('Conexión recuperada tras arranque offline → revalidando', 'ok')
+          setTimeout(function() { location.reload() }, 2000)
+        })
         return
       }
 

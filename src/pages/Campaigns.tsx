@@ -335,6 +335,20 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   const totalPairs = assigns.reduce((sum, a) => sum + a.zones.length, 0)
   const subPairs = subs.reduce((sum, s) => sum + s.zones.length, 0)
 
+  // Avisa a los reproductores de que el contenido de esas zonas cambió.
+  // El player detecta cambios SOLO por programs.published_at (polling 15s +
+  // realtime) y aplica un softResync sin recargar ni re-descargar lo cacheado.
+  // Sin esto, publicar/eliminar una campaña dejaba el contenido en la base
+  // pero el player nunca se enteraba (había que publicar la zona a mano).
+  async function notifyPlayers(zoneIds: string[]) {
+    const ids = [...new Set(zoneIds.filter(Boolean))]
+    if (ids.length === 0) return
+    const { data: zs } = await supabase.from('zones').select('program_id').in('id', ids)
+    const programIds = [...new Set((zs ?? []).map(z => z.program_id).filter(Boolean))] as string[]
+    if (programIds.length === 0) return
+    await supabase.from('programs').update({ published_at: new Date().toISOString() }).in('id', programIds)
+  }
+
   async function publish() {
     setPublishing(true); setWizardError(null)
     const { data: pd } = await supabase.from('profiles').select('organization_id').eq('id', profile?.id ?? '').single()
@@ -344,6 +358,9 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     const cover    = assigns[0]?.media_id ?? subs.find(s => s.media_ids.length > 0)?.media_ids[0] ?? null
 
     let campId = editingId
+    // Zonas donde la campaña YA estaba (al editar): hay que avisarles también,
+    // porque su contenido viejo se archiva y deben dejar de mostrarlo.
+    let previousZoneIds: string[] = []
     if (editingId) {
       const { error } = await supabase.from('campaigns').update({
         name: w1.name.trim(), client_name: w1.client.trim(),
@@ -354,6 +371,10 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
       // Archive the previous placements instead of deleting them, so their
       // statistics survive; then insert the new set fresh. media_content and
       // sub_playlists are filtered by archived_at everywhere they're read.
+      const { data: prevRows } = await supabase
+        .from('media_content').select('zone_id')
+        .eq('campaign_id', editingId).is('archived_at', null)
+      previousZoneIds = (prevRows ?? []).map(r => r.zone_id).filter(Boolean) as string[]
       const archivedAt = new Date().toISOString()
       await supabase.from('media_content').update({ archived_at: archivedAt }).eq('campaign_id', editingId).is('archived_at', null)
       await supabase.from('sub_playlists').update({ archived_at: archivedAt }).eq('campaign_id', editingId).is('archived_at', null)
@@ -412,17 +433,34 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
       }
     }
 
+    // Avisar a los reproductores: incluye las zonas nuevas y —al editar— las
+    // que quedaron archivadas, para que también dejen de mostrar lo viejo.
+    const touchedZones = [
+      ...assigns.flatMap(a => a.zones),
+      ...subs.flatMap(s => s.zones),
+      ...previousZoneIds,
+    ]
+    await notifyPlayers(touchedZones)
+
     setPublishing(false); setWizardOpen(false); load()
   }
 
   async function deleteCampaign(id: string, name: string) {
     if (!confirm(`¿Eliminar la campaña "${name}"?\n\nSe quitará su contenido de las zonas, pero sus reproducciones permanecerán en Estadísticas hasta que las elimines definitivamente desde allí.`)) return
     const now = new Date().toISOString()
+    // Zonas afectadas ANTES de archivar, para avisarles después.
+    const { data: prevRows } = await supabase
+      .from('media_content').select('zone_id')
+      .eq('campaign_id', id).is('archived_at', null)
+    const touchedZones = (prevRows ?? []).map(r => r.zone_id).filter(Boolean) as string[]
+
     await supabase.from('campaigns').update({ deleted_at: now, status: 'ended' }).eq('id', id)
     // Soft delete the injected media so campaign stats survive in Estadísticas.
     await supabase.from('media_content').update({ archived_at: now }).eq('campaign_id', id)
     // Hide the round-robin groups from the zone editor too.
     await supabase.from('sub_playlists').update({ archived_at: now }).eq('campaign_id', id)
+    // Avisar a los reproductores para que dejen de mostrar el contenido.
+    await notifyPlayers(touchedZones)
     load()
   }
 
