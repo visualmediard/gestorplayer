@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
+import { resolveMediaUrl } from '../lib/mediaUrl'
+import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
 import ContentReport from './ContentReport'
 
 type Stat = {
@@ -124,13 +125,11 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
   async function handleDeleteStat(row: ContentRow) {
     if (!confirm(`¿Eliminar definitivamente "${row.name}" de las estadísticas?\n\nSe borrará su registro de reproducciones. Esta acción no se puede deshacer.`)) return
     setDeleting(row.content_id)
+    const path = row.storage_path ?? null
     await supabase.from('media_content').delete().eq('id', row.content_id)
-    // Solo intentamos borrar de Supabase Storage los archivos legacy; los de R2
-    // no se borran desde el cliente (el archivo queda huérfano, aceptable).
-    if (row.storage_path && !isRemoteUrl(row.storage_path)) {
-      const { data: others } = await supabase.from('media_content').select('id').eq('storage_path', row.storage_path).limit(1)
-      if (!others || others.length === 0) await supabase.storage.from('media').remove([row.storage_path])
-    }
+    // Borra el archivo físico (R2 vía Edge Function o Supabase legacy) solo
+    // si ninguna otra fila activa lo sigue usando.
+    await deleteMediaFileIfUnused(path)
     setDeleting(null)
     load()
   }

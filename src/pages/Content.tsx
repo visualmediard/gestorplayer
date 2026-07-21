@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { uploadToR2 } from '../lib/uploadToR2'
 import { resolveMediaUrl } from '../lib/mediaUrl'
+import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { dedupeMedia } from '../lib/dedupeMedia'
 import { useAuth } from '../auth/AuthContext'
@@ -67,15 +68,54 @@ export default function Content() {
   }
 
   async function handleDelete(item: MediaItem) {
-    if (!confirm(`¿Eliminar "${item.name}" de la biblioteca?\n\nSe quitará de la biblioteca y de las zonas donde esté, pero permanecerá en Estadísticas hasta que lo elimines definitivamente desde allí.`)) return
-    // Soft delete todas las copias de este archivo. Como la biblioteca ahora
-    // deduplica por nombre+tipo, archivamos por nombre+tipo (no por storage_path)
-    // para que desaparezcan TODAS las copias/colocaciones, aunque tengan URLs
-    // distintas. Las estadísticas sobreviven vía archived_at.
+    if (!confirm(`¿Eliminar "${item.name}" de la biblioteca?\n\nSe quitará de la biblioteca y de las zonas donde esté, y el archivo se eliminará del almacenamiento. Las reproducciones ya registradas se conservan en Estadísticas.`)) return
     const now = new Date().toISOString()
-    const q = supabase.from('media_content').update({ archived_at: now }).is('campaign_id', null)
-    if (item.type === 'url') await q.eq('id', item.id)
-    else await q.eq('name', item.name).eq('type', item.type)
+
+    // Los ítems tipo URL no tienen archivo físico: solo se archivan.
+    if (item.type === 'url') {
+      await supabase.from('media_content').update({ archived_at: now }).is('campaign_id', null).eq('id', item.id)
+      load()
+      return
+    }
+
+    // 1) Todas las copias no-campaña de este archivo (la biblioteca deduplica
+    //    por nombre+tipo, así que el borrado también agrupa por nombre+tipo).
+    const { data: copies } = await supabase
+      .from('media_content')
+      .select('id, storage_path')
+      .is('campaign_id', null)
+      .eq('name', item.name)
+      .eq('type', item.type)
+    const rows = copies ?? []
+    if (rows.length === 0) { load(); return }
+    const ids = rows.map(r => r.id)
+    const paths = [...new Set(rows.map(r => r.storage_path).filter(Boolean))] as string[]
+
+    // 2) ¿Qué copias tienen reproducciones registradas? (una sola consulta a
+    //    la vista agregada; las copias solo-biblioteca no aparecen = sin stats)
+    const { data: stats } = await supabase
+      .from('content_stats')
+      .select('content_id, total_reproductions')
+      .in('content_id', ids)
+    const withStats = new Set((stats ?? []).filter(s => Number(s.total_reproductions) > 0).map(s => s.content_id))
+    const keepIds = ids.filter(id => withStats.has(id))
+    const dropIds = ids.filter(id => !withStats.has(id))
+
+    // 3) Soft-delete respetado: las copias CON estadísticas se conservan
+    //    (archivadas, sin archivo) para que reportes sigan mostrando el
+    //    nombre; las copias SIN estadísticas se borran del todo.
+    if (keepIds.length > 0) {
+      await supabase.from('media_content')
+        .update({ archived_at: now, storage_path: null }).in('id', keepIds)
+    }
+    if (dropIds.length > 0) {
+      await supabase.from('media_content').delete().in('id', dropIds)
+    }
+
+    // 4) Borrar el archivo físico (R2 o Supabase legacy) si ya nadie más lo
+    //    usa — copias de campaña activas lo bloquean automáticamente.
+    for (const p of paths) await deleteMediaFileIfUnused(p)
+
     load()
   }
 
