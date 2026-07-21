@@ -390,6 +390,12 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
       campId = camp.id
     }
 
+    // Horario diario de la campaña → schedule_start/end del contenido. Son los
+    // campos que el player sabe leer; sin copiarlos, una campaña configurada
+    // para ciertas horas se reproducía las 24 horas.
+    const schedStart = w1.tStart || null
+    const schedEnd   = w1.tEnd   || null
+
     // Insert one media_content row per (media, zone) pair.
     // Frequency is per-media and applies to every zone it's shown in.
     for (const a of assigns) {
@@ -402,6 +408,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
           uploaded_by: profile?.id, campaign_id: campId,
           daily_frequency: a.frequency === 0 ? null : a.frequency,
           is_unlimited: a.frequency === 0, expires_at: endsAt,
+          schedule_start: schedStart, schedule_end: schedEnd,
         })
         if (insErr) console.warn('Insert pair', a.media_id, zoneId, insErr)
       }
@@ -427,6 +434,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
             type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds,
             uploaded_by: profile?.id, campaign_id: campId,
             is_unlimited: true, daily_frequency: null, sort_order: order++, expires_at: endsAt,
+            schedule_start: schedStart, schedule_end: schedEnd,
           })
           if (insErr) console.warn('Insert sub item', mediaId, zoneId, insErr)
         }
