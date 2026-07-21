@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
+import ContentReport from './ContentReport'
 
 type Stat = {
   content_id: string; name: string; type: string
@@ -41,6 +42,7 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
   const [liveCount, setLiveCount] = useState(0)
   const [search, setSearch] = useState('')
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [report, setReport] = useState<{ name: string; type: string } | null>(null)
   const channelRef = useRef<any>(null)
 
   async function load(silent = false) {
@@ -141,6 +143,8 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
       r.program_name.toLowerCase().includes(term) ||
       r.zone_name.toLowerCase().includes(term)
   })
+
+  if (report) return <ContentReport name={report.name} type={report.type} onBack={() => setReport(null)} />
 
   return (
     <div>
@@ -271,13 +275,22 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
                       {row.last_reproduction ? new Date(row.last_reproduction).toLocaleString('es-DO') : '—'}
                     </td>
                     <td style={{ ...s.td, textAlign: 'right' }}>
-                      <button
-                        onClick={() => handleDeleteStat(row)}
-                        disabled={deleting === row.content_id}
-                        title="Eliminar de estadísticas"
-                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', opacity: deleting === row.content_id ? 0.5 : 1 }}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-                      </button>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <button
+                          onClick={() => setReport({ name: row.name, type: row.type })}
+                          title="Ver reporte de repeticiones"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.3rem 0.6rem', borderRadius: '7px', border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#2563EB', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                          Ver reporte
+                        </button>
+                        <button
+                          onClick={() => handleDeleteStat(row)}
+                          disabled={deleting === row.content_id}
+                          title="Eliminar de estadísticas"
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', opacity: deleting === row.content_id ? 0.5 : 1 }}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )
