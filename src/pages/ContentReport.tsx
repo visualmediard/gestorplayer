@@ -101,14 +101,16 @@ export default function ContentReport({
       since.setHours(0, 0, 0, 0)
       const { data: evs } = await supabase
         .from('playback_events')
-        .select('played_at')
+        .select('played_at, count')
         .in('content_id', ids)
         .gte('played_at', since.toISOString())
       const byDay: Record<string, number> = {}
       for (const e of (evs ?? [])) {
         const d = new Date(e.played_at)
         const key = `${d.getDate()}/${d.getMonth() + 1}`
-        byDay[key] = (byDay[key] ?? 0) + 1
+        // Con el batching una fila representa N reproducciones: hay que sumar
+        // `count`, no contar filas (antes subcontaba ~15x).
+        byDay[key] = (byDay[key] ?? 0) + (Number(e.count) || 1)
       }
       const days: { date: string; plays: number }[] = []
       for (let i = 13; i >= 0; i--) {

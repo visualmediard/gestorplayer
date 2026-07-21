@@ -22,12 +22,36 @@ type Detail = {
   media_name?: string
 }
 
+// ── Rango de fechas del reporte ────────────────────────────────────────
+// Los totales salen de playback_events acotado al rango (vía RPC que agrega
+// en el servidor con SUM(count)), no de las vistas históricas.
+type RangeMode = '14d' | '30d' | 'custom'
+
+function isoDay(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+function fmtDay(iso: string) {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('es-DO')
+}
+
 export default function CampaignReport({ campaignId, onBack }: { campaignId: string; onBack: () => void }) {
   const { profile } = useAuth()
   const [camp, setCamp] = useState<Campaign | null>(null)
   const [details, setDetails] = useState<Detail[]>([])
   const [orgName, setOrgName] = useState('')
   const [loading, setLoading] = useState(true)
+
+  // Rango: por defecto últimos 14 días (igual que el reporte de contenido).
+  const [rangeMode, setRangeMode] = useState<RangeMode>('14d')
+  const [customFrom, setCustomFrom] = useState(isoDay(new Date(Date.now() - 13 * 864e5)))
+  const [customTo, setCustomTo] = useState(isoDay(new Date()))
+  const [daily, setDaily] = useState<{ date: string; plays: number }[]>([])
+  const [byScreenRange, setByScreenRange] = useState<{ screen_name: string; zone_name: string; plays: number }[]>([])
+
+  // Límites del rango activo (fechas locales, inclusive).
+  const fromIso = rangeMode === 'custom' ? customFrom : isoDay(new Date(Date.now() - (rangeMode === '30d' ? 29 : 13) * 864e5))
+  const toIso   = rangeMode === 'custom' ? customTo   : isoDay(new Date())
 
   async function load() {
     setLoading(true)
@@ -112,22 +136,65 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
   }
   useEffect(() => { load() }, [campaignId])
 
-  // Deduplicate by zone so plays aren't counted once per video in the same zone
-  const uniqueZones = new Map<string, Detail>()
-  details.forEach(d => { if (!uniqueZones.has(d.zone_id)) uniqueZones.set(d.zone_id, d) })
-  const totalPlays = Array.from(uniqueZones.values()).reduce((s, d) => s + Number(d.total_plays), 0)
-  const todayPlays = Array.from(uniqueZones.values()).reduce((s, d) => s + Number(d.today_plays), 0)
-  const totalZones = uniqueZones.size
+  // Carga las cifras del RANGO desde playback_events (RPC que agrega en el
+  // servidor con SUM(count), respetando el batching). Se recarga al cambiar
+  // el rango — evento del usuario, no polling.
+  async function loadRange() {
+    if (!fromIso || !toIso || fromIso > toIso) return
+    const [y1, m1, d1] = fromIso.split('-').map(Number)
+    const [y2, m2, d2] = toIso.split('-').map(Number)
+    const from = new Date(y1, m1 - 1, d1, 0, 0, 0, 0)
+    const toEx = new Date(y2, m2 - 1, d2 + 1, 0, 0, 0, 0)   // fin exclusivo
+
+    const [{ data: dayRows }, { data: scrRows }] = await Promise.all([
+      supabase.rpc('campaign_daily_plays', {
+        p_campaign_id: campaignId, p_from: from.toISOString(), p_to: toEx.toISOString(),
+      }),
+      supabase.rpc('campaign_screen_plays', {
+        p_campaign_id: campaignId, p_from: from.toISOString(), p_to: toEx.toISOString(),
+      }),
+    ])
+
+    // Serie continua: incluye los días sin reproducciones como 0.
+    const byDay: Record<string, number> = {}
+    for (const r of (dayRows ?? [])) byDay[r.day as string] = Number(r.plays) || 0
+    const series: { date: string; plays: number }[] = []
+    for (let t = new Date(from); t < toEx; t = new Date(t.getTime() + 864e5)) {
+      series.push({ date: `${t.getDate()}/${t.getMonth() + 1}`, plays: byDay[isoDay(t)] ?? 0 })
+    }
+    setDaily(series)
+    setByScreenRange((scrRows ?? []).map((r: any) => ({
+      screen_name: r.screen_name, zone_name: r.zone_name, plays: Number(r.plays) || 0,
+    })))
+  }
+  useEffect(() => { loadRange() }, [campaignId, fromIso, toIso]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Totales DEL RANGO seleccionado.
+  const totalPlays = daily.reduce((s, d) => s + d.plays, 0)
+  const todayKey = `${new Date().getDate()}/${new Date().getMonth() + 1}`
+  const todayPlays = daily.find(d => d.date === todayKey)?.plays ?? 0
+  const totalZones = new Set(byScreenRange.map(r => `${r.screen_name}|${r.zone_name}`)).size
 
   const daysLeft = camp ? Math.max(0, Math.ceil((new Date(camp.ends_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : 0
 
-  // Group by screen for chart (unique zones only)
+  // Gráfico por pantalla — también acotado al rango.
   const byScreen = new Map<string, number>()
-  Array.from(uniqueZones.values()).forEach(d => {
-    const key = d.screen_name ?? 'Sin pantalla'
-    byScreen.set(key, (byScreen.get(key) ?? 0) + Number(d.total_plays))
+  byScreenRange.forEach(r => {
+    byScreen.set(r.screen_name, (byScreen.get(r.screen_name) ?? 0) + r.plays)
   })
   const chartData = Array.from(byScreen.entries()).map(([name, plays]) => ({ name, plays }))
+
+  // Detalle por zona: configuración (rep/día, publicidad) de la vista +
+  // reproducciones del rango.
+  const playsByZone = new Map<string, number>()
+  byScreenRange.forEach(r => {
+    const k = `${r.screen_name}|${r.zone_name}`
+    playsByZone.set(k, (playsByZone.get(k) ?? 0) + r.plays)
+  })
+  const detailRows = details.map(d => ({
+    ...d,
+    range_plays: playsByZone.get(`${d.screen_name ?? '—'}|${d.zone_name}`) ?? 0,
+  }))
 
   function downloadPDF() {
     if (!camp) return
@@ -170,6 +237,8 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     line('Campaña:',  camp.name)
     line('Cliente:',  camp.client_name ?? '—')
     line('Período:',  `${new Date(camp.starts_at).toLocaleDateString('es-DO')} - ${new Date(camp.ends_at).toLocaleDateString('es-DO')}`)
+    // Rango del reporte: las cifras de abajo corresponden solo a este rango.
+    line('Reporte del:', `${fmtDay(fromIso)} al ${fmtDay(toIso)}`)
     if (camp.daily_start_time && camp.daily_end_time) {
       line('Horario:', `${camp.daily_start_time.slice(0,5)} - ${camp.daily_end_time.slice(0,5)}`)
     }
@@ -178,13 +247,13 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     // Table
     autoTable(doc, {
       startY: y + 6,
-      head: [['Pantalla', 'Publicidad', 'Zona', 'Rep/día', 'Total']],
-      body: details.map(d => [
+      head: [['Pantalla', 'Publicidad', 'Zona', 'Rep/día', 'Reproducciones']],
+      body: detailRows.map(d => [
         d.screen_name ?? '—',
         d.media_name ?? d.program_name,
         d.zone_name,
         d.reps_per_day === 0 ? 'Ilimitado' : String(d.reps_per_day ?? '—'),
-        Number(d.total_plays).toLocaleString(),
+        d.range_plays.toLocaleString(),
       ]),
       headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold', fontSize: 9 },
       bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
@@ -238,6 +307,34 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
         </button>
       </div>
 
+      {/* Selector de rango — las cifras de abajo corresponden a este rango */}
+      <div style={{ ...s.card, padding: '0.875rem 1.25rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <span style={{ color: '#64748B', fontSize: '0.82rem', fontWeight: 600 }}>Rango:</span>
+        {([['14d', 'Últimos 14 días'], ['30d', 'Últimos 30 días'], ['custom', 'Personalizado']] as [RangeMode, string][]).map(([mode, label]) => (
+          <button
+            key={mode}
+            onClick={() => setRangeMode(mode)}
+            style={{
+              padding: '0.4rem 0.85rem', borderRadius: '7px', fontSize: '0.82rem', cursor: 'pointer',
+              fontWeight: rangeMode === mode ? 700 : 500,
+              border: `1px solid ${rangeMode === mode ? '#2563EB' : '#E2E8F0'}`,
+              background: rangeMode === mode ? '#EFF6FF' : '#fff',
+              color: rangeMode === mode ? '#2563EB' : '#64748B',
+            }}
+          >{label}</button>
+        ))}
+        {rangeMode === 'custom' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <input type="date" value={customFrom} max={customTo} onChange={e => setCustomFrom(e.target.value)} style={s.dateInput} />
+            <span style={{ color: '#94A3B8', fontSize: '0.82rem' }}>al</span>
+            <input type="date" value={customTo} min={customFrom} onChange={e => setCustomTo(e.target.value)} style={s.dateInput} />
+          </div>
+        )}
+        <span style={{ marginLeft: 'auto', color: '#94A3B8', fontSize: '0.78rem' }}>
+          Del {fmtDay(fromIso)} al {fmtDay(toIso)}
+        </span>
+      </div>
+
       {/* Stat cards */}
       <div style={s.statGrid}>
         <div style={{ ...s.statCard, background: 'linear-gradient(135deg, #EFF6FF, #DBEAFE)', borderColor: '#BFDBFE' }}>
@@ -246,7 +343,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
           </div>
           <div>
             <div style={s.statVal}>{totalZones}</div>
-            <div style={s.statLbl}>Zonas activas</div>
+            <div style={s.statLbl}>Zonas con reproducciones</div>
           </div>
         </div>
 
@@ -256,7 +353,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
           </div>
           <div>
             <div style={s.statVal}>{totalPlays.toLocaleString()}</div>
-            <div style={s.statLbl}>Reproducciones totales</div>
+            <div style={s.statLbl}>Reproducciones del rango</div>
           </div>
         </div>
 
@@ -281,11 +378,36 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
         </div>
       </div>
 
-      {/* Chart */}
+      {/* Chart por día */}
+      <div style={{ ...s.card, marginBottom: '1.25rem' }}>
+        <div style={{ marginBottom: '1rem' }}>
+          <h3 style={s.cardTitle}>Reproducciones por día</h3>
+          <p style={s.cardSub}>Del {fmtDay(fromIso)} al {fmtDay(toIso)}</p>
+        </div>
+        {daily.length === 0 || daily.every(d => d.plays === 0) ? (
+          <p style={{ color: '#94A3B8', fontSize: '0.9rem', textAlign: 'center', padding: '3rem 0' }}>Sin reproducciones en este rango.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={daily}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+              <XAxis dataKey="date" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={{ stroke: '#E2E8F0' }} tickLine={false} />
+              <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={{ stroke: '#E2E8F0' }} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                contentStyle={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: '8px', fontSize: '0.85rem', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+                labelStyle={{ color: '#0F172A', fontWeight: 700 }}
+                cursor={{ fill: '#EFF6FF' }}
+              />
+              <Bar dataKey="plays" fill="#2563EB" radius={[6, 6, 0, 0]} name="Reproducciones" />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* Chart por pantalla */}
       <div style={s.card}>
         <div style={{ marginBottom: '1rem' }}>
           <h3 style={s.cardTitle}>Reproducciones por pantalla</h3>
-          <p style={s.cardSub}>Distribución total en el período de la campaña</p>
+          <p style={s.cardSub}>Distribución en el rango seleccionado</p>
         </div>
         {chartData.length === 0 ? (
           <p style={{ color: '#94A3B8', fontSize: '0.9rem', textAlign: 'center', padding: '3rem 0' }}>Sin reproducciones registradas todavía.</p>
@@ -310,7 +432,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
       <div style={{ ...s.card, marginTop: '1.25rem' }}>
         <div style={{ marginBottom: '1rem' }}>
           <h3 style={s.cardTitle}>Detalle por zona</h3>
-          <p style={s.cardSub}>Reproducciones registradas en cada punto</p>
+          <p style={s.cardSub}>Reproducciones del {fmtDay(fromIso)} al {fmtDay(toIso)}</p>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -320,15 +442,14 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
                 <th style={s.th}>Publicidad</th>
                 <th style={s.th}>Zona</th>
                 <th style={{ ...s.th, textAlign: 'right' }}>Rep/día</th>
-                <th style={{ ...s.th, textAlign: 'right' }}>Total</th>
-                <th style={{ ...s.th, textAlign: 'right' }}>Hoy</th>
+                <th style={{ ...s.th, textAlign: 'right' }}>Reproducciones</th>
               </tr>
             </thead>
             <tbody>
-              {details.length === 0 ? (
-                <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: '#94A3B8' }}>Sin datos.</td></tr>
-              ) : details.map((d, i) => {
-                const showScreen = i === 0 || details[i - 1].screen_id !== d.screen_id
+              {detailRows.length === 0 ? (
+                <tr><td colSpan={5} style={{ padding: '2rem', textAlign: 'center', color: '#94A3B8' }}>Sin datos.</td></tr>
+              ) : detailRows.map((d, i) => {
+                const showScreen = i === 0 || detailRows[i - 1].screen_id !== d.screen_id
                 return (
                   <tr key={i} className="table-row" style={{ borderBottom: '1px solid #F8FAFC' }}>
                     <td style={s.td}>
@@ -340,8 +461,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
                     <td style={{ ...s.td, color: '#0F172A' }}>{d.media_name ?? '—'}</td>
                     <td style={{ ...s.td, color: '#64748B' }}>{d.zone_name}</td>
                     <td style={{ ...s.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{d.reps_per_day === 0 ? '∞' : (d.reps_per_day ?? '—')}</td>
-                    <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{Number(d.total_plays).toLocaleString()}</td>
-                    <td style={{ ...s.td, textAlign: 'right', color: '#059669', fontVariantNumeric: 'tabular-nums' }}>{Number(d.today_plays).toLocaleString()}</td>
+                    <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{d.range_plays.toLocaleString()}</td>
                   </tr>
                 )
               })}
@@ -369,6 +489,7 @@ const s: Record<string, React.CSSProperties> = {
   card:       { background: '#fff', border: '1px solid #E2E8F0', borderRadius: '14px', padding: '1.5rem', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' },
   cardTitle:  { fontSize: '1rem', fontWeight: 700, color: '#0F172A' },
   cardSub:    { fontSize: '0.8rem', color: '#94A3B8', marginTop: '2px' },
+  dateInput:  { padding: '0.38rem 0.6rem', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#0F172A', fontSize: '0.82rem', outline: 'none' },
   th:         { padding: '0.75rem 1rem', textAlign: 'left' as const, color: '#94A3B8', fontSize: '0.72rem', fontWeight: 700, borderBottom: '1px solid #F1F5F9', background: '#FAFBFC', textTransform: 'uppercase' as const, letterSpacing: '0.05em', whiteSpace: 'nowrap' as const },
   td:         { padding: '0.75rem 1rem', color: '#0F172A', fontSize: '0.85rem' },
 }
