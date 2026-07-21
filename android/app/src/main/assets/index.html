@@ -1536,9 +1536,14 @@
         sb.from('screens')
           .update({ last_heartbeat: new Date().toISOString() })
           .eq('id', screenData.id)
+          // Piggyback: el UPDATE ya devuelve la fila (return=representation),
+          // así que leer la huella aquí cuesta CERO requests extra.
+          .select('device_fingerprint')
           .then(function(res) {
-            if (res.error) dlog('Heartbeat error: ' + res.error.message, 'warn')
-            else dlog('Heartbeat OK', 'ok')
+            if (res.error) { dlog('Heartbeat error: ' + res.error.message, 'warn'); return }
+            dlog('Heartbeat OK', 'ok')
+            var row = (res.data && res.data.length) ? res.data[0] : null
+            if (row) checkDeviceStillOwner(row.device_fingerprint || null)
           })
       }
       beat()
@@ -1986,6 +1991,34 @@
       startOperatingWatch()  // vigila la ventana horaria cada 30s
     }
 
+    // ── Despareo remoto ("Liberar dispositivo" desde el panel) ─────
+    // deviceLockClaimed: true solo cuando este equipo confirmó ser el dueño
+    // del token (reclamó la pantalla o su huella coincide). Sin este flag,
+    // un fail-open (huella no registrada por red/RLS) se desparearía en
+    // bucle al ver NULL en la base.
+    var deviceLockClaimed = false
+    var unpairing         = false
+
+    // Llamado desde el heartbeat (piggyback en la respuesta que YA llega:
+    // cero requests extra). Si el panel liberó la pantalla (huella NULL) u
+    // otro equipo la reclamó (huella distinta), este player se desparea:
+    // detiene todo, borra el token local y reinicia hacia la pantalla de
+    // vinculación (QR). El reload es un evento único disparado por acción
+    // del admin — mismo camino que el botón manual "cambiar pantalla" — y
+    // con el caché en IndexedDB no re-descarga ningún video.
+    function checkDeviceStillOwner(dbFingerprint) {
+      if (!deviceLockClaimed || unpairing) return
+      var localId = lsGet('device_id')
+      if (!localId) return
+      if (dbFingerprint === localId) return   // seguimos siendo los dueños
+      unpairing = true
+      dlog('Dispositivo liberado desde el panel → volviendo a vinculación', 'warn')
+      log('🔓 Pantalla liberada · re-vinculación...')
+      stopAllZonesPlayback()
+      lsDel('device_token')
+      setTimeout(function() { location.reload() }, 800)
+    }
+
     // Devuelve true si este dispositivo puede usar el token, false si está
     // bloqueado. Reclama la pantalla si aún no tiene dueño.
     async function enforceDeviceLock() {
@@ -2010,15 +2043,19 @@
         if (r && r.error) {
           // Si no se pudo registrar (RLS/red), permitimos igualmente para no
           // dejar la pantalla muerta; el próximo arranque reintentará.
+          // OJO: deviceLockClaimed queda en false → el despareo remoto no
+          // actúa (evita desparearse en bucle sin ser dueño confirmado).
           dlog('No se pudo registrar fingerprint: ' + r.error.message + ' → acceso permitido', 'warn')
         } else {
           screenData.device_fingerprint = deviceId
+          deviceLockClaimed = true
         }
         return true
       }
 
       if (stored === deviceId) {
         dlog('Dispositivo reconocido (mismo equipo) → acceso permitido', 'ok')
+        deviceLockClaimed = true
         return true
       }
 

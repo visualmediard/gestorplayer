@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import ScreenStage from '../components/ScreenStage'
 
@@ -112,17 +112,71 @@ if (import.meta.env.DEV) {
     { batchMap, addToBatch, flushBatch, restorePendingBatch, persistBatchNow }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+//  DEVICE LOCKING (paridad con el player Android): un token solo reproduce
+//  en el equipo que lo reclamó primero. La identidad del navegador es un
+//  id estable en localStorage. Si localStorage no está disponible, se
+//  devuelve '' y el locking se omite (fail-open, igual que Android).
+// ─────────────────────────────────────────────────────────────────────────
+function getWebDeviceId(): string {
+  try {
+    let id = localStorage.getItem('gp_device_id')
+    if (!id) {
+      id = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      localStorage.setItem('gp_device_id', id)
+    }
+    return id
+  } catch { return '' }
+}
+
 export default function Player() {
   const token = new URLSearchParams(window.location.search).get('token') || ''
-  const [status, setStatus] = useState<'loading' | 'no-token' | 'invalid' | 'no-program' | 'playing'>('loading')
+  const [status, setStatus] = useState<'loading' | 'no-token' | 'invalid' | 'no-program' | 'playing' | 'locked' | 'released'>('loading')
   const [screen, setScreen] = useState<{ id: string; name: string } | null>(null)
   const [programId, setProgramId] = useState<string | null>(null)
+  // true solo cuando este navegador confirmó ser el dueño del token (reclamó
+  // la pantalla o su huella coincide). Evita desparearse sin ser dueño.
+  const claimedRef = useRef(false)
 
   async function checkScreen() {
     if (!token) { setStatus('no-token'); return }
     const { data: sc } = await supabase.from('screens')
-      .select('id, name, current_program_id').eq('device_token', token).maybeSingle()
+      .select('id, name, current_program_id, device_fingerprint').eq('device_token', token).maybeSingle()
     if (!sc) { setStatus('invalid'); return }
+
+    // ── Device locking: se evalúa ANTES de arrancar reproducción ──
+    // El check corre dentro de checkScreen (cada 60s, consulta que YA
+    // existía — cero requests periódicos nuevos).
+    const myId = getWebDeviceId()
+    const dbFp = (sc.device_fingerprint ?? null) as string | null
+    if (myId) {
+      if (!claimedRef.current) {
+        if (dbFp && dbFp !== myId) {
+          // Otro equipo es el dueño → bloqueado (no reproducir, no insistir).
+          setScreen(null); setProgramId(null); setStatus('locked')
+          return
+        }
+        if (!dbFp) {
+          // Pantalla libre → reclamarla (única request extra, solo una vez).
+          const { error } = await supabase.from('screens')
+            .update({ device_fingerprint: myId, last_seen_at: new Date().toISOString() } as any)
+            .eq('id', sc.id)
+          if (!error) claimedRef.current = true
+          // Con error: fail-open — reproduce sin lock; se reintenta luego.
+        } else {
+          claimedRef.current = true   // dbFp === myId: mismo navegador
+        }
+      } else if (dbFp !== myId) {
+        // Éramos dueños y ya no (liberada desde el panel u otro equipo la
+        // reclamó) → detener y pedir re-vinculación.
+        claimedRef.current = false
+        setScreen(null); setProgramId(null); setStatus('released')
+        return
+      }
+    }
+
     setScreen({ id: sc.id, name: sc.name })
     if (!sc.current_program_id) { setProgramId(null); setStatus('no-program'); return }
     setProgramId(sc.current_program_id)   // same value → ScreenStage won't reload
@@ -196,6 +250,17 @@ export default function Player() {
     <p style={msg}>Sin programa asignado. Asígnale uno desde <b>Pantallas</b>.</p>
     <p style={{ ...msg, opacity: 0.6, fontSize: '0.8rem' }}>Se conectará automáticamente cuando lo asignes.</p>
   </Center>
+  if (status === 'locked') return <Center>
+    <div style={{ fontSize: '3rem' }}>🔒</div>
+    <h1 style={title}>Este token ya está activo en otro dispositivo.</h1>
+    <p style={msg}>Contacta a tu administrador para liberar el acceso.</p>
+  </Center>
+  if (status === 'released') return <Center>
+    <div style={{ fontSize: '3rem' }}>🔓</div>
+    <h1 style={title}>Pantalla liberada</h1>
+    <p style={msg}>Esta pantalla fue liberada desde el panel de administración.</p>
+    <button onClick={() => window.location.reload()} style={btnRelink}>Volver a vincular</button>
+  </Center>
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', cursor: 'none' }}>
@@ -214,3 +279,4 @@ function Spinner() {
 const title: React.CSSProperties = { fontSize: '1.4rem', fontWeight: 700, margin: '0.5rem 0 0' }
 const msg: React.CSSProperties = { color: '#CBD5E1', fontSize: '0.95rem', margin: 0 }
 const code: React.CSSProperties = { background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: 4, fontFamily: 'monospace' }
+const btnRelink: React.CSSProperties = { marginTop: '1rem', padding: '0.65rem 1.4rem', borderRadius: 8, border: 'none', background: '#3B82F6', color: '#fff', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer' }
