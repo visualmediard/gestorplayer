@@ -319,7 +319,9 @@
       if (dot) dot.className = online ? 'online' : ''
       log(online ? '🟢 Conectado' : '🔴 Sin conexión')
       dlog('Conexión: ' + (online ? 'ONLINE' : 'OFFLINE'), online ? 'ok' : 'warn')
-      if (online) flushEventQueue()
+      // Al recuperar conexión se envía el lote acumulado de inmediato,
+      // sin esperar al ciclo de 10 minutos.
+      if (online) flushBatch()
     }
 
     // ════════════════════════════════════════════════════════════
@@ -676,71 +678,125 @@
     }
 
     // ════════════════════════════════════════════════════════════
-    //  COLA DE EVENTOS OFFLINE (heartbeat + reproducciones)
+    //  BATCHING DE REPRODUCCIONES
+    //  En vez de un INSERT por reproducción, se acumulan en memoria
+    //  (agrupadas por content|zone con un contador) y se envían en UN
+    //  solo INSERT cada 10 minutos, al volver online o al ocultar la app.
+    //  El lote se espeja en IndexedDB (escritura local, sin red) para que
+    //  un corte de luz no pierda nada aunque nunca dispare beforeunload.
+    //  Requiere la columna playback_events.count (migración 20260721).
     // ════════════════════════════════════════════════════════════
 
-    var MAX_QUEUE   = 5000
-    var flushingNow = false
+    var FLUSH_INTERVAL_MS = 10 * 60 * 1000
+    var batchMap       = {}    // 'content|zone' → {screen_id, zone_id, content_id, played_at, count}
+    var batchSaveTimer = null
+    var flushingNow    = false
 
-    function queueEvent(evt) {
-      idbPut('events', evt).then(function() {
-        trimQueueIfNeeded()
-      }).catch(function(e) { dlog('No se pudo encolar evento offline: ' + e.message, 'err') })
+    function addToBatch(evt) {
+      var key = evt.content_id + '|' + evt.zone_id
+      var row = batchMap[key]
+      if (row) {
+        row.count    += 1
+        row.played_at = evt.played_at   // se conserva la última reproducción
+      } else {
+        batchMap[key] = {
+          screen_id: evt.screen_id, zone_id: evt.zone_id,
+          content_id: evt.content_id, played_at: evt.played_at, count: 1,
+        }
+      }
+      persistBatchDebounced()
     }
 
-    function trimQueueIfNeeded() {
-      idbCount('events').then(function(count) {
-        if (count <= MAX_QUEUE) return
-        idbStore('events', 'readwrite').then(function(store) {
-          var toDelete = count - MAX_QUEUE
-          var deleted  = 0
-          var cursorReq = store.openCursor()
-          cursorReq.onsuccess = function(e) {
-            var cursor = e.target.result
-            if (cursor && deleted < toDelete) {
-              cursor.delete()
-              deleted++
-              cursor.continue()
-            }
-          }
-        })
-      }).catch(function() {})
+    // Espejo local del lote en IndexedDB (debounce 2s para no escribir en
+    // cada reproducción). Es disco local: no genera tráfico de red.
+    function persistBatchNow() {
+      var rows = Object.keys(batchMap).map(function(k) { return batchMap[k] })
+      return idbPut('meta', { key: 'pending_batch', rows: rows, savedAt: Date.now() })
+        .catch(function(e) { dlog('No se pudo persistir el lote: ' + e.message, 'warn') })
     }
 
-    function flushEventQueue() {
+    function persistBatchDebounced() {
+      if (batchSaveTimer) return
+      batchSaveTimer = setTimeout(function() { batchSaveTimer = null; persistBatchNow() }, 2000)
+    }
+
+    // Envía todo el lote acumulado en UN solo INSERT. Si falla, el lote se
+    // conserva intacto y se reintenta en el próximo ciclo / evento online.
+    function flushBatch() {
       if (flushingNow || !isOnline || !sb) return
+      var keys = Object.keys(batchMap)
+      if (!keys.length) return
       flushingNow = true
-      idbGetAll('events').then(function(rows) {
-        if (!rows.length) { flushingNow = false; return }
-        dlog('Sincronizando ' + rows.length + ' evento(s) pendiente(s)...', 'info')
-        var BATCH   = 100
-        var batch   = rows.slice(0, BATCH)
-        var payload = batch.map(function(r) {
-          return { screen_id: r.screen_id, zone_id: r.zone_id, content_id: r.content_id, played_at: r.played_at }
-        })
-        sb.from('playback_events').insert(payload).then(function(res) {
-          if (res.error) {
-            dlog('Sincronización de eventos falló: ' + res.error.message, 'warn')
-            flushingNow = false
-            return
-          }
-          Promise.all(batch.map(function(r) { return idbDelete('events', r.id) })).then(function() {
-            dlog('Sincronizados ' + batch.length + ' evento(s) OK', 'ok')
-            flushingNow = false
-            if (rows.length > BATCH) flushEventQueue()
-          }).catch(function() { flushingNow = false })
-        }).catch(function(e) {
-          dlog('Sincronización de eventos: excepción ' + e.message, 'warn')
+      var payload = keys.map(function(k) {
+        var r = batchMap[k]
+        return { screen_id: r.screen_id, zone_id: r.zone_id, content_id: r.content_id, played_at: r.played_at, count: r.count }
+      })
+      dlog('Enviando lote de reproducciones: ' + payload.length + ' fila(s)...', 'info')
+      sb.from('playback_events').insert(payload).then(function(res) {
+        if (res.error) {
+          dlog('Lote falló (' + res.error.message + ') — se conserva para reintentar', 'warn')
           flushingNow = false
+          return
+        }
+        // Descuenta lo enviado; lo reproducido DURANTE el envío queda para
+        // el próximo lote (no se pierde ni se duplica).
+        payload.forEach(function(p) {
+          var key = p.content_id + '|' + p.zone_id
+          var row = batchMap[key]
+          if (!row) return
+          if (row.count <= p.count) delete batchMap[key]
+          else row.count -= p.count
         })
+        persistBatchNow()
+        dlog('Lote sincronizado OK (' + payload.length + ' fila(s))', 'ok')
+        flushingNow = false
       }).catch(function(e) {
-        dlog('No se pudo leer la cola de eventos: ' + e.message, 'err')
+        dlog('Lote: excepción ' + e.message + ' — se conserva', 'warn')
         flushingNow = false
       })
     }
 
+    // Al arrancar: recupera el lote persistido del arranque anterior y migra
+    // la cola antigua del store 'events' (versiones previas del player).
+    function restorePendingBatch() {
+      return idbGet('meta', 'pending_batch').then(function(row) {
+        var rows = (row && row.rows) || []
+        rows.forEach(function(r) {
+          var key = r.content_id + '|' + r.zone_id
+          var ex  = batchMap[key]
+          if (ex) {
+            ex.count += (r.count || 1)
+            if ((r.played_at || '') > (ex.played_at || '')) ex.played_at = r.played_at
+          } else {
+            batchMap[key] = {
+              screen_id: r.screen_id, zone_id: r.zone_id,
+              content_id: r.content_id, played_at: r.played_at, count: r.count || 1,
+            }
+          }
+        })
+        if (rows.length) dlog('Lote pendiente recuperado: ' + rows.length + ' fila(s)', 'info')
+      }).catch(function() {}).then(function() {
+        return idbGetAll('events').catch(function() { return [] })
+      }).then(function(old) {
+        if (!old || !old.length) return
+        dlog('Migrando cola antigua al lote: ' + old.length + ' evento(s)', 'info')
+        old.forEach(function(o) {
+          addToBatch({ screen_id: o.screen_id, zone_id: o.zone_id, content_id: o.content_id, played_at: o.played_at })
+        })
+        return Promise.all(old.map(function(o) { return idbDelete('events', o.id) })).catch(function() {})
+      }).catch(function() {})
+    }
+
     function startEventSync() {
-      setInterval(function() { if (isOnline) flushEventQueue() }, 20000)
+      // Pendientes del arranque anterior → envío inicial único.
+      restorePendingBatch().then(function() { flushBatch() })
+      // Único intervalo de red del batching: un lote cada 10 minutos.
+      setInterval(flushBatch, FLUSH_INTERVAL_MS)
+      // Al ocultar/cerrar la app: persistir de inmediato e intentar enviar.
+      document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'hidden') { persistBatchNow(); flushBatch() }
+      })
+      window.addEventListener('beforeunload', function() { persistBatchNow() })
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1239,25 +1295,14 @@
 
     function logPlayback(zoneId, contentId) {
       // Fuera del horario operativo NO se cuentan estadísticas (ni online ni en
-      // la cola offline, para que no se sincronicen luego).
+      // el lote, para que no se sincronicen luego).
       if (!isWithinOperatingHours()) return
-      var evt = {
+      // Batching: acumula en memoria (espejado a IndexedDB) — el envío real
+      // ocurre en lotes cada 10 min / al volver online / al ocultar la app.
+      addToBatch({
         screen_id: screenData.id, zone_id: zoneId, content_id: contentId,
         played_at: new Date().toISOString(),
-      }
-      if (isOnline && sb) {
-        sb.from('playback_events').insert(evt).then(function(res) {
-          if (res.error) {
-            dlog('Playback insert falló, encolando: ' + res.error.message, 'warn')
-            queueEvent(evt)
-          }
-        }).catch(function(e) {
-          dlog('Playback insert excepción, encolando: ' + e.message, 'warn')
-          queueEvent(evt)
-        })
-      } else {
-        queueEvent(evt)
-      }
+      })
     }
 
     // ════════════════════════════════════════════════════════════
