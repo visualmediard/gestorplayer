@@ -7,12 +7,17 @@ import autoTable from 'jspdf-autotable'
 
 // Reporte de repeticiones para un video/imagen SUELTO (no de campaña).
 // Agrupa todas las colocaciones del mismo archivo (por nombre) y muestra:
-// totales, reproducciones por día, y el detalle por programa → zona.
+// totales, reproducciones por día, y el detalle por pantalla → zona.
+//
+// La pantalla se resuelve con la cadena contenido → zona → programa →
+// screens.current_program_id. Solo se listan filas con pantalla asignada
+// (colocaciones históricas sin pantalla suman en los totales pero no se
+// muestran en la tabla).
 
 type Placement = {
   content_id: string
   zone_name: string
-  program_name: string
+  screen_name: string | null
   total: number
   today: number
   last: string | null
@@ -40,17 +45,53 @@ export default function ContentReport({
     // Todas las colocaciones (content_ids) de este archivo, por nombre.
     const { data: rows } = await supabase
       .from('content_stats')
-      .select('content_id, zone_name, program_name, total_reproductions, today_reproductions, last_reproduction')
+      .select('content_id, zone_name, total_reproductions, today_reproductions, last_reproduction')
       .eq('organization_id', orgId)
       .eq('name', name)
-    const pls: Placement[] = (rows ?? []).map((r: any) => ({
-      content_id: r.content_id,
-      zone_name: r.zone_name ?? '—',
-      program_name: r.program_name ?? '—',
-      total: Number(r.total_reproductions) || 0,
-      today: Number(r.today_reproductions) || 0,
-      last: r.last_reproduction ?? null,
-    }))
+
+    // Resolver la pantalla de cada colocación: contenido → zona → programa →
+    // pantalla (screens.current_program_id). Lecturas puntuales, sin loops.
+    const contentIds = (rows ?? []).map((r: any) => r.content_id)
+    const zoneOf: Record<string, string | null> = {}    // content_id → zone_id
+    const progOf: Record<string, string | null> = {}    // zone_id → program_id
+    const screensOf: Record<string, string[]> = {}      // program_id → nombres de pantalla
+    if (contentIds.length > 0) {
+      const { data: mc } = await supabase
+        .from('media_content').select('id, zone_id').in('id', contentIds)
+      for (const m of (mc ?? [])) zoneOf[m.id] = m.zone_id ?? null
+
+      const zoneIds = [...new Set(Object.values(zoneOf).filter(Boolean))] as string[]
+      if (zoneIds.length > 0) {
+        const { data: zs } = await supabase
+          .from('zones').select('id, program_id').in('id', zoneIds)
+        for (const z of (zs ?? [])) progOf[z.id] = z.program_id ?? null
+
+        const progIds = [...new Set(Object.values(progOf).filter(Boolean))] as string[]
+        if (progIds.length > 0) {
+          const { data: scs } = await supabase
+            .from('screens').select('name, current_program_id').in('current_program_id', progIds)
+          for (const sc of (scs ?? [])) {
+            if (!sc.current_program_id) continue
+            if (!screensOf[sc.current_program_id]) screensOf[sc.current_program_id] = []
+            screensOf[sc.current_program_id].push(sc.name)
+          }
+        }
+      }
+    }
+
+    const pls: Placement[] = (rows ?? []).map((r: any) => {
+      const zid = zoneOf[r.content_id] ?? null
+      const pid = zid ? (progOf[zid] ?? null) : null
+      const names = pid ? (screensOf[pid] ?? []) : []
+      return {
+        content_id: r.content_id,
+        zone_name: r.zone_name ?? '—',
+        screen_name: names.length > 0 ? names.join(', ') : null,
+        total: Number(r.total_reproductions) || 0,
+        today: Number(r.today_reproductions) || 0,
+        last: r.last_reproduction ?? null,
+      }
+    })
     setPlacements(pls)
 
     // Reproducciones por día (últimos 14 días) desde playback_events.
@@ -83,15 +124,19 @@ export default function ContentReport({
   }
   useEffect(() => { load() }, [name]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Agrupa por programa → zona para la tabla de detalle.
+  // Agrupa por pantalla → zona para la tabla de detalle. Solo se muestran
+  // filas con pantalla asignada (Opción A); las históricas sin pantalla
+  // siguen sumando en los totales de arriba.
   const byZone = new Map<string, Placement>()
   for (const p of placements) {
-    const key = `${p.program_name}|${p.zone_name}`
+    const key = `${p.screen_name ?? ''}|${p.zone_name}`
     const ex = byZone.get(key)
     if (!ex) byZone.set(key, { ...p })
     else { ex.total += p.total; ex.today += p.today; if ((p.last ?? '') > (ex.last ?? '')) ex.last = p.last }
   }
-  const zoneRows = Array.from(byZone.values()).sort((a, b) => b.total - a.total)
+  const zoneRows = Array.from(byZone.values())
+    .filter(z => z.screen_name)
+    .sort((a, b) => b.total - a.total)
 
   const totalPlays = placements.reduce((s, p) => s + p.total, 0)
   const todayPlays = placements.reduce((s, p) => s + p.today, 0)
@@ -130,9 +175,9 @@ export default function ContentReport({
 
     autoTable(doc, {
       startY: y + 6,
-      head: [['Programa', 'Zona', 'Total', 'Hoy']],
+      head: [['Pantalla', 'Zona', 'Total', 'Hoy']],
       body: zoneRows.map(z => [
-        z.program_name, z.zone_name, z.total.toLocaleString(), z.today.toLocaleString(),
+        z.screen_name ?? '—', z.zone_name, z.total.toLocaleString(), z.today.toLocaleString(),
       ]),
       headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold', fontSize: 9 },
       bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
@@ -238,14 +283,14 @@ export default function ContentReport({
       {/* Detalle por zona */}
       <div style={{ ...s.card, marginTop: '1.25rem' }}>
         <div style={{ marginBottom: '1rem' }}>
-          <h3 style={s.cardTitle}>Detalle por programa y zona</h3>
+          <h3 style={s.cardTitle}>Detalle por pantalla y zona</h3>
           <p style={s.cardSub}>Dónde se está reproduciendo este contenido</p>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={s.th}>Programa</th>
+                <th style={s.th}>Pantalla</th>
                 <th style={s.th}>Zona</th>
                 <th style={{ ...s.th, textAlign: 'right' }}>Total</th>
                 <th style={{ ...s.th, textAlign: 'right' }}>Hoy</th>
@@ -253,10 +298,10 @@ export default function ContentReport({
             </thead>
             <tbody>
               {zoneRows.length === 0 ? (
-                <tr><td colSpan={4} style={{ padding: '2rem', textAlign: 'center', color: '#94A3B8' }}>Sin datos.</td></tr>
+                <tr><td colSpan={4} style={{ padding: '2rem', textAlign: 'center', color: '#94A3B8' }}>Sin pantallas mostrando este contenido ahora mismo.</td></tr>
               ) : zoneRows.map((z, i) => (
                 <tr key={i} className="table-row" style={{ borderBottom: '1px solid #F8FAFC' }}>
-                  <td style={{ ...s.td, fontWeight: 600 }}>{z.program_name}</td>
+                  <td style={{ ...s.td, fontWeight: 600 }}>{z.screen_name}</td>
                   <td style={{ ...s.td, color: '#64748B' }}>{z.zone_name}</td>
                   <td style={{ ...s.td, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{z.total.toLocaleString()}</td>
                   <td style={{ ...s.td, textAlign: 'right', color: '#059669', fontVariantNumeric: 'tabular-nums' }}>{z.today.toLocaleString()}</td>
