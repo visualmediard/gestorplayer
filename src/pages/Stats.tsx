@@ -61,19 +61,26 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
 
     const enriched: StatEnriched[] = (data as Stat[]).map(r => ({ ...r, campaign_id: campaignIdMap[r.content_id] ?? null }))
 
-    // Fetch campaign names
+    // Fetch campaign names — solo campañas VIVAS (deleted_at IS NULL).
+    // Una campaña eliminada (o inexistente) no debe seguir apareciendo en las
+    // estadísticas aunque sus contenidos/reproducciones históricos existan.
     const campaignIds = [...new Set(enriched.filter(r => r.campaign_id).map(r => r.campaign_id as string))]
     const campaignNameMap: Record<string, string> = {}
     if (campaignIds.length > 0) {
-      const { data: camps } = await supabase.from('campaigns').select('id, name').in('id', campaignIds)
-      for (const c of (camps ?? [])) campaignNameMap[c.id] = c.name
+      const { data: camps } = await supabase.from('campaigns').select('id, name, deleted_at').in('id', campaignIds)
+      for (const c of (camps ?? [])) {
+        if (!c.deleted_at) campaignNameMap[c.id] = c.name   // omite las eliminadas
+      }
     }
 
-    // Group by campaign_id; non-campaign rows stay individual
+    // Group by campaign_id; non-campaign rows stay individual.
+    // El contenido cuya campaña fue eliminada (no está en campaignNameMap) se
+    // omite por completo de la tabla.
     const campaignGroups: Record<string, StatEnriched[]> = {}
     const contentItems: ContentRow[] = []
     for (const r of enriched) {
       if (r.campaign_id) {
+        if (!campaignNameMap[r.campaign_id]) continue   // campaña eliminada → ocultar
         if (!campaignGroups[r.campaign_id]) campaignGroups[r.campaign_id] = []
         campaignGroups[r.campaign_id].push(r)
       } else {
