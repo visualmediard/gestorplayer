@@ -15,6 +15,103 @@ const supabase = createClient(
 const HEARTBEAT_MS = 30_000      // ping "online" every 30s
 const RELOAD_MS = 60_000         // re-check the assigned program every 60s
 
+// ─────────────────────────────────────────────────────────────────────────
+//  BATCHING DE REPRODUCCIONES — misma lógica que player/index.html:
+//  en vez de un INSERT por reproducción, se acumulan en memoria (agrupadas
+//  por content|zone con un contador) y se envían en UN solo INSERT cada
+//  10 minutos, al volver online o al ocultar la pestaña. El lote se espeja
+//  en localStorage (escritura síncrona, fiable en beforeunload) para no
+//  perder nada al cerrar. Requiere playback_events.count (migración 20260721).
+// ─────────────────────────────────────────────────────────────────────────
+
+const FLUSH_INTERVAL_MS = 10 * 60 * 1000
+const BATCH_STORAGE_KEY = 'gp_pending_batch'
+
+type BatchRow = { screen_id: string; zone_id: string; content_id: string; played_at: string; count: number }
+
+// Estado a nivel de módulo: sobrevive re-renders y no depende del ciclo React.
+const batchMap = new Map<string, BatchRow>()
+let batchSaveTimer: ReturnType<typeof setTimeout> | null = null
+let flushingNow = false
+
+function addToBatch(evt: Omit<BatchRow, 'count'>) {
+  const key = evt.content_id + '|' + evt.zone_id
+  const row = batchMap.get(key)
+  if (row) {
+    row.count += 1
+    row.played_at = evt.played_at   // se conserva la última reproducción
+  } else {
+    batchMap.set(key, { ...evt, count: 1 })
+  }
+  persistBatchDebounced()
+}
+
+// Espejo local del lote (debounce 2s). localStorage es síncrono: la escritura
+// en beforeunload queda garantizada, a diferencia de IndexedDB.
+function persistBatchNow() {
+  try {
+    localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify([...batchMap.values()]))
+  } catch { /* storage lleno/bloqueado: el lote sigue en memoria */ }
+}
+
+function persistBatchDebounced() {
+  if (batchSaveTimer) return
+  batchSaveTimer = setTimeout(() => { batchSaveTimer = null; persistBatchNow() }, 2000)
+}
+
+// Envía todo el lote en UN solo INSERT. Si falla, se conserva intacto y se
+// reintenta en el próximo ciclo / evento online.
+async function flushBatch() {
+  if (flushingNow || !navigator.onLine || batchMap.size === 0) return
+  flushingNow = true
+  const payload = [...batchMap.values()].map(r => ({ ...r }))
+  try {
+    const { error } = await supabase.from('playback_events').insert(payload)
+    if (!error) {
+      // Descuenta solo lo enviado; lo reproducido DURANTE el envío queda
+      // para el próximo lote (no se pierde ni se duplica).
+      for (const p of payload) {
+        const key = p.content_id + '|' + p.zone_id
+        const row = batchMap.get(key)
+        if (!row) continue
+        if (row.count <= p.count) batchMap.delete(key)
+        else row.count -= p.count
+      }
+      persistBatchNow()
+    }
+  } catch { /* red caída: el lote se conserva */ }
+  flushingNow = false
+}
+
+// Al arrancar: recupera el lote persistido del cierre anterior. Las filas
+// llevan su propio screen_id, así que restaurar es seguro aunque la pestaña
+// se abra ahora con otro token.
+function restorePendingBatch() {
+  try {
+    const raw = localStorage.getItem(BATCH_STORAGE_KEY)
+    if (!raw) return
+    for (const r of JSON.parse(raw) as BatchRow[]) {
+      const key = r.content_id + '|' + r.zone_id
+      const ex = batchMap.get(key)
+      if (ex) {
+        ex.count += r.count || 1
+        if ((r.played_at || '') > (ex.played_at || '')) ex.played_at = r.played_at
+      } else {
+        batchMap.set(key, { ...r, count: r.count || 1 })
+      }
+    }
+  } catch {
+    // JSON corrupto: se descarta para no bloquear arranques futuros.
+    try { localStorage.removeItem(BATCH_STORAGE_KEY) } catch { /* noop */ }
+  }
+}
+
+// Solo en desarrollo: expone el batching para pruebas en consola.
+if (import.meta.env.DEV) {
+  ;(window as unknown as Record<string, unknown>).__gpBatch =
+    { batchMap, addToBatch, flushBatch, restorePendingBatch, persistBatchNow }
+}
+
 export default function Player() {
   const token = new URLSearchParams(window.location.search).get('token') || ''
   const [status, setStatus] = useState<'loading' | 'no-token' | 'invalid' | 'no-program' | 'playing'>('loading')
@@ -32,12 +129,14 @@ export default function Player() {
     setStatus('playing')
   }
 
-  // Fire-and-forget: record a play.
+  // Batching: acumula en memoria (espejo en localStorage) — el envío real
+  // ocurre en lotes cada 10 min / al volver online / al ocultar la pestaña.
   function logPlay(contentId: string, zoneId: string) {
     if (!screen) return
-    supabase.from('playback_events').insert({
-      screen_id: screen.id, content_id: contentId, zone_id: zoneId, played_at: new Date().toISOString(),
-    }).then(() => {}, () => {})
+    addToBatch({
+      screen_id: screen.id, zone_id: zoneId, content_id: contentId,
+      played_at: new Date().toISOString(),
+    })
   }
 
   async function heartbeat() {
@@ -46,6 +145,30 @@ export default function Player() {
   }
 
   useEffect(() => { checkScreen() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ciclo de vida del batching: restaurar pendientes + flush inicial,
+  // intervalo de 10 min (único intervalo de red nuevo), flush al volver
+  // online y al ocultar la pestaña, persistencia síncrona al cerrar.
+  useEffect(() => {
+    restorePendingBatch()
+    flushBatch()
+    const iv = setInterval(flushBatch, FLUSH_INTERVAL_MS)
+    const onOnline = () => { flushBatch() }
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') { persistBatchNow(); flushBatch() }
+    }
+    const onUnload = () => { persistBatchNow() }
+    window.addEventListener('online', onOnline)
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('beforeunload', onUnload)
+    return () => {
+      clearInterval(iv)
+      window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('beforeunload', onUnload)
+      persistBatchNow()
+    }
+  }, [])
 
   useEffect(() => {
     if (!screen) return
