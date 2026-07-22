@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { uploadToR2 } from '../lib/uploadToR2'
 import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
+import { isResting, scheduleRangeLabel } from '../lib/dailySchedule'
 import { useAuth } from '../auth/AuthContext'
 import CampaignReport from './CampaignReport'
 
@@ -38,9 +39,10 @@ const STATUS_LABEL: Record<string, string> = {
   draft: 'Borrador', active: 'Activa', paused: 'Pausada', ended: 'Finalizada'
 }
 const STATUS_COLOR: Record<string, { bg: string; color: string; border: string }> = {
-  draft:  { bg: '#F8FAFC', color: '#64748B', border: '#E2E8F0' },
-  active: { bg: '#ECFDF5', color: '#059669', border: '#A7F3D0' },
-  paused: { bg: '#FFF7ED', color: '#D97706', border: '#FDE68A' },
+  draft:   { bg: '#F8FAFC', color: '#64748B', border: '#E2E8F0' },
+  active:  { bg: '#ECFDF5', color: '#059669', border: '#A7F3D0' },
+  resting: { bg: '#F1F5F9', color: '#64748B', border: '#CBD5E1' },
+  paused:  { bg: '#FFF7ED', color: '#D97706', border: '#FDE68A' },
   ended:  { bg: '#FEF2F2', color: '#DC2626', border: '#FECACA' },
 }
 const DEFAULT_FREQ = 0 // 0 = ∞ Ilimitado (matches zone editor default)
@@ -54,6 +56,13 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   const [loading, setLoading]     = useState(true)
   const [search, setSearch]       = useState('')
   const [reportId, setReportId]   = useState<string | null>(initialReportId ?? null)
+  // Recalcula el badge "Activa/En reposo" al cruzar la hora, sin recargar ni
+  // consultar la base: solo fuerza un re-render cada minuto.
+  const [, setMinuteTick]         = useState(0)
+  useEffect(() => {
+    const iv = setInterval(() => setMinuteTick(t => t + 1), 60_000)
+    return () => clearInterval(iv)
+  }, [])
 
   // Wizard
   const [wizardOpen, setWizardOpen] = useState(false)
@@ -1004,8 +1013,20 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
           {filtered.map(camp => {
             const stat = getStat(camp.id)
-            const sc = STATUS_COLOR[camp.status]
             const mediaItem = getMedia(camp.media_content_id)
+            // "En reposo": campaña activa y vigente por fecha, pero fuera de su
+            // horario diario (no está saliendo ahora). Los demás estados
+            // (pausada, finalizada, vencida por fecha) se mantienen igual.
+            const dateValid = Date.now() >= new Date(camp.starts_at).getTime()
+              && Date.now() <= new Date(camp.ends_at).getTime()
+            const resting = camp.status === 'active' && dateValid
+              && isResting(camp.daily_start_time, camp.daily_end_time)
+            const badgeKey = resting ? 'resting' : camp.status
+            const sc = STATUS_COLOR[badgeKey]
+            const badgeLabel = resting ? 'En reposo' : STATUS_LABEL[camp.status]
+            const badgeTitle = resting
+              ? `Fuera de su horario diario (${scheduleRangeLabel(camp.daily_start_time, camp.daily_end_time)}) — no se está reproduciendo ahora`
+              : undefined
             const startTs = new Date(camp.starts_at).getTime()
             const endTs = new Date(camp.ends_at).getTime()
             const progress = Math.max(0, Math.min(100, ((Date.now() - startTs) / Math.max(1, endTs - startTs)) * 100))
@@ -1024,8 +1045,9 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
                     </div>
                   )}
-                  <span style={{ position: 'absolute', top: '8px', right: '8px', ...s.badge, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}` }}>
-                    {STATUS_LABEL[camp.status]}
+                  <span title={badgeTitle} style={{ position: 'absolute', top: '8px', right: '8px', ...s.badge, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}` }}>
+                    {resting && <span style={{ marginRight: '3px' }}>⏸</span>}
+                    {badgeLabel}
                   </span>
                 </div>
 

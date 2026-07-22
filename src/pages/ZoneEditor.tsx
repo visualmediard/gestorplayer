@@ -5,6 +5,7 @@ import { resolveMediaUrl } from '../lib/mediaUrl'
 import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
 import { fileTooLargeMessage } from '../lib/fileLimit'
 import { dedupeMedia } from '../lib/dedupeMedia'
+import { isResting, scheduleRangeLabel } from '../lib/dailySchedule'
 import { useAuth } from '../auth/AuthContext'
 
 type Program = { id: string; name: string; width: number; height: number }
@@ -60,6 +61,12 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   const [zones, setZones] = useState<Zone[]>([])
   const [selectedZone, setSelectedZone] = useState<string | null>(null)
   const [entries, setEntries] = useState<PlaylistEntry[]>([])
+  // Recalcula el indicador "En reposo" al cruzar la hora, sin recargar.
+  const [, setMinuteTick] = useState(0)
+  useEffect(() => {
+    const iv = setInterval(() => setMinuteTick(t => t + 1), 60_000)
+    return () => clearInterval(iv)
+  }, [])
   const [showZoneForm, setShowZoneForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
@@ -721,6 +728,12 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                               </div>
                             )}
                             <div style={{ color: '#94A3B8', fontSize: '0.75rem', marginTop: '0.1rem' }}>{itemMetaLabel(item, idx)}</div>
+                            {isResting(item.schedule_start, item.schedule_end) && (
+                              <span
+                                title={`Fuera de su horario diario (${scheduleRangeLabel(item.schedule_start, item.schedule_end)}) — no se está reproduciendo ahora`}
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.2rem', background: '#F1F5F9', color: '#64748B', border: '1px solid #CBD5E1', borderRadius: '20px', fontSize: '0.68rem', fontWeight: 600, padding: '1px 7px', width: 'fit-content' }}
+                              >⏸ En reposo</span>
+                            )}
                             {editingFreq === item.id ? (
                               <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <input type="number" min={0} value={freqValue} onChange={e => setFreqValue(+e.target.value)} style={{ ...s.input, width: '70px', padding: '0.2rem 0.4rem', fontSize: '0.8rem' }} />
