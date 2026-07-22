@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { resolveMediaUrl } from '../lib/mediaUrl'
 import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
+import { notifyStorageChanged } from '../lib/storage'
 import ContentReport from './ContentReport'
 
 type Stat = {
@@ -130,6 +131,7 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
     // Borra el archivo físico (R2 vía Edge Function o Supabase legacy) solo
     // si ninguna otra fila activa lo sigue usando.
     await deleteMediaFileIfUnused(path)
+    notifyStorageChanged()
     setDeleting(null)
     load()
   }

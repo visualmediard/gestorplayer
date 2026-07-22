@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
+import { fetchStorageUsage, onStorageChanged, formatBytes, type StorageUsage } from '../lib/storage'
 import logoNegro from '../assets/logo/logo-negro.png'
 import logoIcon from '../assets/logo/icon.png'
 
@@ -24,6 +26,22 @@ const nav = [
 export default function Sidebar({ current, onChange, collapsed, onToggle, isMobile, mobileOpen, onSignOut }: Props) {
   const { profile } = useAuth()
   const w = collapsed ? 64 : 260
+
+  // Consumo de almacenamiento: se carga al montar y se refresca cuando un
+  // flujo de subida/borrado emite el evento (sin polling).
+  const [usage, setUsage] = useState<StorageUsage | null>(null)
+  useEffect(() => {
+    let alive = true
+    const refresh = () => { fetchStorageUsage().then(u => { if (alive) setUsage(u) }) }
+    refresh()
+    const off = onStorageChanged(refresh)
+    return () => { alive = false; off() }
+  }, [])
+
+  const pct = usage && usage.limitBytes > 0
+    ? Math.min(100, (usage.usedBytes / usage.limitBytes) * 100)
+    : 0
+  const barColor = pct > 95 ? '#EF4444' : pct > 80 ? '#F59E0B' : '#3B82F6'
 
   const sidebarStyle: React.CSSProperties = {
     height: '100vh',
@@ -125,6 +143,43 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
           )
         })}
       </nav>
+
+      {/* Almacenamiento */}
+      {usage && (
+        (isMobile || !collapsed) ? (
+          <div style={{ padding: '0.75rem 0.75rem 0', flexShrink: 0 }}>
+            <div style={{ padding: '0.6rem 0.7rem', borderRadius: '10px', background: '#F8FAFC', border: '1px solid #F1F5F9' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', fontWeight: 600, color: '#64748B' }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                  Almacenamiento
+                </span>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: barColor }}>{Math.round(pct)}%</span>
+              </div>
+              <div style={{ height: '6px', background: '#E2E8F0', borderRadius: '999px', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: '999px', transition: 'width 0.3s, background 0.3s' }} />
+              </div>
+              <div style={{ marginTop: '0.35rem', fontSize: '0.68rem', color: '#94A3B8' }}>
+                {formatBytes(usage.usedBytes)} de {formatBytes(usage.limitBytes)}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: '0.75rem 0', display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+            <div title={`Almacenamiento: ${formatBytes(usage.usedBytes)} de ${formatBytes(usage.limitBytes)} (${Math.round(pct)}%)`}
+              style={{ position: 'relative', width: '34px', height: '34px' }}>
+              <svg width="34" height="34" viewBox="0 0 34 34" style={{ transform: 'rotate(-90deg)' }}>
+                <circle cx="17" cy="17" r="14" fill="none" stroke="#E2E8F0" strokeWidth="4" />
+                <circle cx="17" cy="17" r="14" fill="none" stroke={barColor} strokeWidth="4" strokeLinecap="round"
+                  strokeDasharray={`${(pct / 100) * (2 * Math.PI * 14)} ${2 * Math.PI * 14}`} />
+              </svg>
+              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.58rem', fontWeight: 700, color: barColor }}>
+                {Math.round(pct)}%
+              </span>
+            </div>
+          </div>
+        )
+      )}
 
       {/* User */}
       <div style={{ padding: (isMobile || !collapsed) ? '0.75rem' : '0.75rem 0', borderTop: '1px solid #F1F5F9', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>

@@ -14,10 +14,10 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 export async function uploadToR2(
   file: File,
   onProgress?: (percent: number) => void,
-): Promise<{ url: string | null; error: { message: string } | null }> {
+): Promise<{ url: string | null; size: number | null; error: { message: string } | null }> {
   const { data: sessionData } = await supabase.auth.getSession()
   const token = sessionData.session?.access_token
-  if (!token) return { url: null, error: { message: 'No hay sesión activa' } }
+  if (!token) return { url: null, size: null, error: { message: 'No hay sesión activa' } }
 
   const form = new FormData()
   form.append('file', file)
@@ -39,13 +39,14 @@ export async function uploadToR2(
       try { body = JSON.parse(xhr.responseText) } catch { /* ignore */ }
       if (xhr.status >= 200 && xhr.status < 300 && body?.url) {
         onProgress?.(100)
-        resolve({ url: body.url as string, error: null })
+        // El servidor devuelve `size`; si faltara, el llamador usa file.size.
+        resolve({ url: body.url as string, size: typeof body.size === 'number' ? body.size : file.size, error: null })
       } else {
         const message = body?.error || `Error ${xhr.status} al subir`
-        resolve({ url: null, error: { message } })
+        resolve({ url: null, size: null, error: { message } })
       }
     }
-    xhr.onerror = () => resolve({ url: null, error: { message: 'Error de red al subir el archivo' } })
+    xhr.onerror = () => resolve({ url: null, size: null, error: { message: 'Error de red al subir el archivo' } })
     xhr.send(form)
   })
 }

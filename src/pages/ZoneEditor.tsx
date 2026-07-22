@@ -6,6 +6,7 @@ import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
 import { fileTooLargeMessage } from '../lib/fileLimit'
 import { dedupeMedia } from '../lib/dedupeMedia'
 import { isResting, scheduleRangeLabel } from '../lib/dailySchedule'
+import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
 
 type Program = { id: string; name: string; width: number; height: number }
@@ -343,8 +344,10 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   async function handleReplaceFromFile(file: File) {
     if (!replacingItem) return
     setReplacing(true)
+    const fits = await checkStorageFits(file.size)
+    if (!fits.ok) { alert(fits.message ?? 'Sin espacio disponible.'); setReplacing(false); return }
     const isVideo = file.type.startsWith('video/')
-    const { url, error: storageError } = await uploadToR2(file, setReplaceProgress)
+    const { url, size, error: storageError } = await uploadToR2(file, setReplaceProgress)
     if (storageError || !url) { alert('Error: ' + (storageError?.message ?? 'desconocido')); setReplacing(false); return }
     // Primero se actualiza la fila al archivo nuevo; después se borra el
     // archivo viejo (R2 vía Edge Function o Supabase legacy) solo si ninguna
@@ -353,26 +356,31 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     await supabase.from('media_content').update({
       name: file.name, type: isVideo ? 'video' : 'image',
       storage_path: url, duration_seconds: isVideo ? null : (replacingItem.duration_seconds ?? 10),
+      file_size_bytes: size ?? file.size,
     }).eq('id', replacingItem.id)
     await deleteMediaFileIfUnused(oldPath)
     setReplacing(false); setReplaceProgress(0)
     setReplacingItem(null); setShowReplaceLibrary(false)
     if (replaceRef.current) replaceRef.current.value = ''
+    notifyStorageChanged()
     loadEntries(selectedZone!)
   }
 
   async function handleUpload() {
     if (!file || !uploadTarget) return
     setUploading(true); setError(null)
+    const fits = await checkStorageFits(file.size)
+    if (!fits.ok) { setError(fits.message ?? 'Sin espacio disponible.'); setUploading(false); return }
     const isVideo = file.type.startsWith('video/')
-    const { url, error: storageError } = await uploadToR2(file, setProgress)
+    const { url, size, error: storageError } = await uploadToR2(file, setProgress)
     if (storageError || !url) { setError('Error: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
-    const insertData: any = { name: file.name, type: isVideo ? 'video' : 'image', storage_path: url, duration_seconds: isVideo ? null : duration, uploaded_by: profile?.id, is_unlimited: true, daily_frequency: null }
+    const insertData: any = { name: file.name, type: isVideo ? 'video' : 'image', storage_path: url, duration_seconds: isVideo ? null : duration, uploaded_by: profile?.id, is_unlimited: true, daily_frequency: null, file_size_bytes: size ?? file.size }
     if (uploadTarget.type === 'zone') { insertData.zone_id = selectedZone; insertData.sort_order = entries.length; insertData.sub_playlist_id = null }
     else { const entry = entries.find(e => e.kind === 'sub' && e.sub.id === uploadTarget.id); const subItems = entry?.kind === 'sub' ? entry.items : []; insertData.zone_id = selectedZone; insertData.sub_playlist_id = uploadTarget.id; insertData.sort_order = subItems.length }
     await supabase.from('media_content').insert(insertData)
     setFile(null); setProgress(0); setUploading(false); setDuration(10); setUploadTarget(null); setShowLibrary(false)
-    if (fileRef.current) fileRef.current.value = ''; loadEntries(selectedZone!)
+    if (fileRef.current) fileRef.current.value = ''
+    notifyStorageChanged(); loadEntries(selectedZone!)
   }
 
   async function handleDeleteItem(item: MediaItem) {
@@ -380,6 +388,8 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     // Soft delete: keep the row (and its file) so statistics survive. The zone
     // editor and player already filter out archived_at rows.
     await supabase.from('media_content').update({ archived_at: new Date().toISOString() }).eq('id', item.id)
+    // Podría cambiar el consumo si era la última copia activa de ese archivo.
+    notifyStorageChanged()
     loadEntries(selectedZone!)
   }
 

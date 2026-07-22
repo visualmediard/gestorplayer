@@ -73,6 +73,25 @@ Deno.serve(async (req) => {
     return json({ error: `El archivo pesa ${mb} MB. El máximo permitido es 10 MB.` }, 413)
   }
 
+  // 3.5 Barrera de almacenamiento (no saltable desde el frontend): el archivo
+  // debe caber en el espacio disponible de la organización. Fail-open: si el
+  // RPC falla por un error transitorio, no se bloquea una subida legítima.
+  try {
+    const { data: usage, error: usageErr } = await supabase.rpc('org_storage_usage')
+    if (!usageErr && usage && usage.length > 0) {
+      const used  = Number(usage[0].used_bytes) || 0
+      const limit = (Number(usage[0].limit_mb) || 2048) * 1024 * 1024
+      if (used + file.size > limit) {
+        const limitGb = (limit / (1024 * 1024 * 1024)).toFixed(limit % (1024 ** 3) === 0 ? 0 : 1)
+        return json({
+          error: `Has alcanzado tu límite de almacenamiento (${limitGb} GB). ` +
+                 `Elimina videos que ya no estén corriendo en pantalla, o contacta a tu proveedor para ampliar tu espacio.`,
+          code: 'STORAGE_LIMIT',
+        }, 413)
+      }
+    }
+  } catch (_e) { /* fail-open: un error del chequeo no bloquea la subida */ }
+
   const isVideo = (file.type || '').startsWith('video/')
   const kind = isVideo ? 'video' : 'image'
   const safeName = (file.name || 'archivo').replace(/[^\w.\-]+/g, '_')
@@ -102,7 +121,7 @@ Deno.serve(async (req) => {
     return json({ error: `R2 rechazó la subida (${put.status}). ${text}`.trim() }, 502)
   }
 
-  // 5. Devolver la URL pública
+  // 5. Devolver la URL pública y el tamaño (para guardar file_size_bytes)
   const url = `${R2_PUBLIC_URL}/${key}`
-  return json({ url, key }, 200)
+  return json({ url, key, size: file.size }, 200)
 })

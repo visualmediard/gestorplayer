@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { uploadToR2 } from '../lib/uploadToR2'
 import { resolveMediaUrl } from '../lib/mediaUrl'
 import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
+import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { dedupeMedia } from '../lib/dedupeMedia'
 import { useAuth } from '../auth/AuthContext'
@@ -49,8 +50,11 @@ export default function Content() {
     const tooBig = fileTooLargeMessage(file)
     if (tooBig) { setError(tooBig); return }
     setUploading(true); setError(null)
+    // Chequeo previo de espacio (la barrera real es la Edge Function).
+    const fits = await checkStorageFits(file.size)
+    if (!fits.ok) { setError(fits.message ?? 'Sin espacio disponible.'); setUploading(false); return }
     const isVideo = file.type.startsWith('video/')
-    const { url, error: storageError } = await uploadToR2(file, setProgress)
+    const { url, size, error: storageError } = await uploadToR2(file, setProgress)
     if (storageError || !url) { setError('Error al subir: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
     const { error: insertError } = await supabase.from('media_content').insert({
       zone_id: selectedZone || null,
@@ -59,11 +63,13 @@ export default function Content() {
       storage_path: url,
       duration_seconds: isVideo ? null : duration,
       uploaded_by: profile?.id,
+      file_size_bytes: size ?? file.size,
     })
     if (insertError) { setError('Error al guardar: ' + insertError.message); setUploading(false); return }
     setFile(null); setProgress(0); setUploading(false); setDuration(10)
     setSelectedZone(''); setShowForm(false)
     if (fileRef.current) fileRef.current.value = ''
+    notifyStorageChanged()
     load()
   }
 
@@ -116,6 +122,7 @@ export default function Content() {
     //    usa — copias de campaña activas lo bloquean automáticamente.
     for (const p of paths) await deleteMediaFileIfUnused(p)
 
+    notifyStorageChanged()
     load()
   }
 

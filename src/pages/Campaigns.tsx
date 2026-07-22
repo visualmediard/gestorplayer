@@ -5,6 +5,7 @@ import { uploadToR2 } from '../lib/uploadToR2'
 import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { isResting, scheduleRangeLabel } from '../lib/dailySchedule'
+import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
 import CampaignReport from './CampaignReport'
 
@@ -168,13 +169,15 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   async function handleWizardUpload() {
     if (!uploadFile) return
     setUploading(true); setWizardError(null)
+    const fits = await checkStorageFits(uploadFile.size)
+    if (!fits.ok) { setWizardError(fits.message ?? 'Sin espacio disponible.'); setUploading(false); return }
     const isVideo = uploadFile.type.startsWith('video/')
-    const { url, error: storageError } = await uploadToR2(uploadFile, setUploadProgress)
+    const { url, size, error: storageError } = await uploadToR2(uploadFile, setUploadProgress)
     if (storageError || !url) { setWizardError('Error al subir: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
     const { data: inserted, error: insertError } = await supabase.from('media_content').insert({
       zone_id: null, name: uploadFile.name, type: isVideo ? 'video' : 'image',
       storage_path: url, duration_seconds: isVideo ? null : 10,
-      uploaded_by: profile?.id,
+      uploaded_by: profile?.id, file_size_bytes: size ?? uploadFile.size,
     }).select('id, name, type, storage_path, duration_seconds').single()
     if (insertError) { setWizardError('Error al guardar: ' + insertError.message); setUploading(false); return }
     if (inserted) {
@@ -183,6 +186,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     }
     setUploadFile(null); setUploadProgress(0); setUploading(false); setShowUploadForm(false)
     if (uploadRef.current) uploadRef.current.value = ''
+    notifyStorageChanged()
   }
 
   async function handleWizardAddUrl() {
@@ -206,18 +210,22 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     const m = media.find(mm => mm.id === replacingMediaId)
     if (!m) return
     setReplaceUploading(true)
+    const fits = await checkStorageFits(file.size)
+    if (!fits.ok) { alert(fits.message ?? 'Sin espacio disponible.'); setReplaceUploading(false); return }
     const isVideo = file.type.startsWith('video/')
-    const { url, error: storageError } = await uploadToR2(file, setReplaceProgress)
+    const { url, size, error: storageError } = await uploadToR2(file, setReplaceProgress)
     if (storageError || !url) { alert('Error: ' + (storageError?.message ?? 'desconocido')); setReplaceUploading(false); return }
     if (m.storage_path && !isRemoteUrl(m.storage_path)) await supabase.storage.from('media').remove([m.storage_path])
     await supabase.from('media_content').update({
       name: file.name, type: isVideo ? 'video' : 'image',
       storage_path: url, duration_seconds: isVideo ? null : (m.duration_seconds ?? 10),
+      file_size_bytes: size ?? file.size,
     }).eq('id', replacingMediaId)
     setMedia(prev => prev.map(mm => mm.id === replacingMediaId
       ? { ...mm, name: file.name, type: isVideo ? 'video' : 'image', storage_path: url } : mm))
     setReplaceUploading(false); setReplaceProgress(0); setReplacingMediaId(null)
     if (replaceRef.current) replaceRef.current.value = ''
+    notifyStorageChanged()
   }
 
   function openCreate() { resetWizard(); setWizardOpen(true) }
@@ -478,6 +486,8 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     await supabase.from('sub_playlists').update({ archived_at: now }).eq('campaign_id', id)
     // Avisar a los reproductores para que dejen de mostrar el contenido.
     await notifyPlayers(touchedZones)
+    // El consumo puede cambiar si algún archivo solo lo usaba esta campaña.
+    notifyStorageChanged()
     load()
   }
 
