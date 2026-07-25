@@ -933,6 +933,18 @@
       return new Date() > expiry
     }
 
+    // Un contenido con not_before futuro no se reproduce hasta que llegue ese día.
+    // Mismo parseo local que isExpired: not_before = inicio del día local (00:00:00).
+    function isNotStarted(item) {
+      if (!item || !item.not_before) return false
+      var parts = String(item.not_before).slice(0, 10).split('-')
+      if (parts.length < 3) return false
+      var y = parseInt(parts[0], 10), mo = parseInt(parts[1], 10) - 1, d = parseInt(parts[2], 10)
+      if (isNaN(y) || isNaN(mo) || isNaN(d)) return false
+      var debut = new Date(y, mo, d, 0, 0, 0, 0)
+      return new Date() < debut
+    }
+
     function isWithinSchedule(item) {
       if (!item) return true
       var days  = item.schedule_days
@@ -1070,8 +1082,9 @@
 
         if (entry.kind === 'item') {
           var item = entry.item
-          // Vencido → nunca se reproduce.
+          // Vencido o aún no empezado → nunca se reproduce.
           if (isExpired(item)) continue
+          if (isNotStarted(item)) continue
           // Fuera de su horario programado → saltar a la siguiente entrada.
           if (!isWithinSchedule(item)) continue
           if (!item.is_unlimited && item.daily_frequency) {
@@ -1097,8 +1110,9 @@
           }
           var subItem = subItems[entry.subIndex % subItems.length]
           entry.subIndex++
-          // Si el video elegido está vencido o fuera de su horario, saltar.
+          // Si el video elegido está vencido, aún no empieza, o fuera de su horario, saltar.
           if (isExpired(subItem)) continue
+          if (isNotStarted(subItem)) continue
           if (!isWithinSchedule(subItem)) continue
           return { item: subItem, subName: sub.name }
         }

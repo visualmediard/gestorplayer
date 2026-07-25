@@ -426,7 +426,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
           storage_path: m.storage_path, duration_seconds: m.duration_seconds,
           uploaded_by: profile?.id, campaign_id: campId,
           daily_frequency: a.frequency === 0 ? null : a.frequency,
-          is_unlimited: a.frequency === 0, expires_at: endsAt,
+          is_unlimited: a.frequency === 0, expires_at: endsAt, not_before: startsAt,
           schedule_start: schedStart, schedule_end: schedEnd,
         })
         if (insErr) console.warn('Insert pair', a.media_id, zoneId, insErr)
@@ -452,7 +452,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
             zone_id: zoneId, sub_playlist_id: spRow.id, name: m.name,
             type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds,
             uploaded_by: profile?.id, campaign_id: campId,
-            is_unlimited: true, daily_frequency: null, sort_order: order++, expires_at: endsAt,
+            is_unlimited: true, daily_frequency: null, sort_order: order++, expires_at: endsAt, not_before: startsAt,
             schedule_start: schedStart, schedule_end: schedEnd,
           })
           if (insErr) console.warn('Insert sub item', mediaId, zoneId, insErr)
