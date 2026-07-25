@@ -66,6 +66,8 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   // starts_at). El media_content inyectado guarda expires_at (fin) pero no el
   // inicio; esto permite marcar "Programada" los anuncios que aún no empiezan.
   const [campaignStart, setCampaignStart] = useState<Record<string, string>>({})
+  // Etiquetas de los ítems de zona (lookup desde la biblioteca por nombre+tipo).
+  const [zoneItemTagMap, setZoneItemTagMap] = useState<Record<string, { id: string; name: string; color: string }[]>>({})
   // Recalcula el indicador "En reposo" al cruzar la hora, sin recargar.
   const [, setMinuteTick] = useState(0)
   useEffect(() => {
@@ -189,6 +191,42 @@ export default function ZoneEditor({ programId, onBack }: Props) {
       setCampaignStart(map)
     } else {
       setCampaignStart({})
+    }
+
+    // Etiquetas: busca las filas de biblioteca (zone_id=null, campaign_id=null)
+    // que coincidan por nombre+tipo con los ítems no-campaña de esta zona, para
+    // mostrar chips visuales de a qué grupos pertenece cada anuncio.
+    const nonCampItems = [...((items ?? []) as MediaItem[]), ...Object.values(subItems).flat()]
+      .filter(i => !i.campaign_id)
+    const uniqueNames = [...new Set(nonCampItems.map(i => i.name))]
+    if (uniqueNames.length > 0) {
+      const { data: libRows } = await supabase
+        .from('media_content').select('id, name, type')
+        .is('zone_id', null).is('campaign_id', null).is('archived_at', null)
+        .in('name', uniqueNames)
+      const pairSet = new Set(nonCampItems.map(i => `${i.name}|${i.type}`))
+      const filtered = (libRows ?? []).filter(r => pairSet.has(`${r.name}|${r.type}`))
+      const libIds = filtered.map(r => r.id)
+      if (libIds.length > 0) {
+        const { data: tagLinks } = await supabase
+          .from('media_content_tags')
+          .select('media_content_id, media_tags(id, name, color)')
+          .in('media_content_id', libIds)
+        const libIdToKey: Record<string, string> = {}
+        for (const r of filtered) libIdToKey[r.id] = `${r.name}|${r.type}`
+        const newMap: Record<string, { id: string; name: string; color: string }[]> = {}
+        for (const link of (tagLinks ?? [])) {
+          const key = libIdToKey[link.media_content_id]
+          const tag = (link as any).media_tags
+          if (!key || !tag) continue
+          newMap[key] = [...(newMap[key] ?? []), tag]
+        }
+        setZoneItemTagMap(newMap)
+      } else {
+        setZoneItemTagMap({})
+      }
+    } else {
+      setZoneItemTagMap({})
     }
   }
 
@@ -752,6 +790,13 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                                   : scheduled
                                     ? <span style={{ fontSize: '0.65rem', background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE', padding: '1px 5px', borderRadius: '4px', flexShrink: 0 }}>📅 Programada</span>
                                     : null}
+                              {!item.campaign_id && (zoneItemTagMap[`${item.name}|${item.type}`] ?? []).map(t => (
+                                <span key={t.id} title={t.name}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', fontSize: '0.6rem', fontWeight: 600, color: t.color, background: t.color + '18', padding: '1px 5px', borderRadius: '4px', border: `1px solid ${t.color}30`, flexShrink: 0 }}>
+                                  <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: t.color, flexShrink: 0 }} />
+                                  {t.name}
+                                </span>
+                              ))}
                               {item.type !== 'url' && (
                                 <button onClick={() => { setReplacingItem(item); setShowReplaceLibrary(true); setReplaceLibrarySearch(''); setShowLibrary(false); setUploadTarget(null); loadLibrary() }}
                                   style={{ background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '4px', color: '#059669', fontSize: '0.65rem', padding: '1px 5px', cursor: 'pointer', flexShrink: 0 }}>
