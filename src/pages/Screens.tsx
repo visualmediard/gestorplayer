@@ -11,6 +11,7 @@ type Screen = {
   ad_capacity: number
   operating_start: string | null; operating_end: string | null
   device_fingerprint: string | null; last_seen_at: string | null
+  reset_requested_at: string | null
 }
 
 type AdCount = { program_id: string; total_ads: number }
@@ -166,6 +167,10 @@ export default function Screens() {
     setShowForm(false); load()
   }
 
+
+  async function handleReset(id: string) {
+    await supabase.from('screens').update({ reset_requested_at: new Date().toISOString() }).eq('id', id)
+  }
 
   async function handleDelete(id: string) {
     if (!confirm('¿Eliminar esta pantalla?')) return
@@ -383,6 +388,10 @@ export default function Screens() {
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                       Captura
                     </span>
+                  </button>
+                  <button style={s.btnAct} onClick={() => handleReset(sc.id)} title="Fuerza una re-sincronización remota del reproductor">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    Reiniciar
                   </button>
                   <button style={s.btnDel} onClick={() => handleDelete(sc.id)}>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>

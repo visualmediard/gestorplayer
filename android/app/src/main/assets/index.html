@@ -467,6 +467,7 @@
     var isOnline         = true
     var zoneStates       = {}
     var lastPublishedAt  = null
+    var playerBootedAt   = new Date().toISOString()
 
     // Estado adicional para reproducción offline
     var zoneObjectUrls  = {}   // zoneId -> última blob URL creada (para revocar)
@@ -1623,29 +1624,45 @@
       }, 15000)
     }
 
-    // Relee el horario operativo de la pantalla y, si cambió, lo aplica al
-    // instante: actualiza screenData, refresca el snapshot y transiciona
-    // pantalla negra ↔ reproducción según corresponda.
+    // Relee el horario operativo y el flag de reset de la pantalla, aplicando
+    // cambios en caliente sin recargar ni re-publicar.
     function checkScreenSettingsChange() {
       return sb.from('screens')
-        .select('operating_start, operating_end, operating_hours')
+        .select('operating_start, operating_end, operating_hours, reset_requested_at')
         .eq('id', screenData.id)
         .single()
-        .then(function(r) {
+        .then(async function(r) {
           if (r.error || !r.data) return
+
+          // ── Horario operativo ─────────────────────────────────
           var newStart = r.data.operating_start || null
           var newEnd   = r.data.operating_end   || null
           var curStart = screenData.operating_start || null
           var curEnd   = screenData.operating_end   || null
-          if (newStart === curStart && newEnd === curEnd) return
+          if (newStart !== curStart || newEnd !== curEnd) {
+            dlog('Horario operativo actualizado: ' +
+                 (newStart || '—') + ' a ' + (newEnd || '—') + ' → aplicando', 'ok')
+            screenData.operating_start = newStart
+            screenData.operating_end   = newEnd
+            if (r.data.operating_hours != null) screenData.operating_hours = r.data.operating_hours
+            persistScreenMeta()
+            applyOperatingState()
+          }
 
-          dlog('Horario operativo actualizado: ' +
-               (newStart || '—') + ' a ' + (newEnd || '—') + ' → aplicando', 'ok')
-          screenData.operating_start = newStart
-          screenData.operating_end   = newEnd
-          if (r.data.operating_hours != null) screenData.operating_hours = r.data.operating_hours
-          persistScreenMeta()
-          applyOperatingState()
+          // ── Reset remoto ──────────────────────────────────────
+          var resetAt = r.data.reset_requested_at || null
+          if (resetAt && resetAt > playerBootedAt) {
+            dlog('Reset remoto solicitado → verificando conexión...', 'ok')
+            var reallyOnline = await probeConn()
+            if (reallyOnline) {
+              sb.from('screens').update({ reset_requested_at: null }).eq('id', screenData.id)
+              if (!isOnline) setConnStatus(true)
+              dlog('Reset remoto: ejecutando resync suave', 'ok')
+              await softResync()
+            } else {
+              dlog('Reset remoto pendiente: sin conexión real, se reintentará', 'warn')
+            }
+          }
         }, function() { /* fallo silencioso: se reintenta en el próximo ciclo */ })
     }
 
@@ -1675,10 +1692,31 @@
     //  CONEXIÓN
     // ════════════════════════════════════════════════════════════
 
+    // Verificación real de conectividad: HEAD a Supabase (5 s de timeout).
+    // navigator.onLine miente en Android WebView; este probe no.
+    function probeConn() {
+      return new Promise(function(resolve) {
+        var done = false
+        function finish(v) { if (!done) { done = true; resolve(v) } }
+        var xhr = new XMLHttpRequest()
+        xhr.open('HEAD', SUPABASE_URL, true)
+        xhr.timeout = 5000
+        xhr.onload  = function() { finish(true) }
+        xhr.onerror = function() { finish(false) }
+        xhr.ontimeout = function() { finish(false) }
+        try { xhr.send() } catch(_) { finish(false) }
+        setTimeout(function() { finish(false) }, 5500)
+      })
+    }
+
     function watchConnection() {
-      window.addEventListener('online',  function() { setConnStatus(true);  dlog('Evento: online', 'ok') })
+      window.addEventListener('online',  function() {
+        dlog('Evento: online', 'ok')
+        probeConn().then(function(ok) { if (ok) setConnStatus(true) })
+      })
       window.addEventListener('offline', function() { setConnStatus(false); dlog('Evento: offline', 'err') })
-      setConnStatus(navigator.onLine)
+      // Arranque: verificación real en vez de navigator.onLine
+      probeConn().then(function(ok) { setConnStatus(ok) })
     }
 
     // ════════════════════════════════════════════════════════════
