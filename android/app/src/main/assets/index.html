@@ -1650,18 +1650,14 @@
           }
 
           // ── Reset remoto ──────────────────────────────────────
+          // Si llegamos aquí es porque el query a Supabase tuvo éxito,
+          // lo que prueba conectividad real. No necesitamos probeConn().
           var resetAt = r.data.reset_requested_at || null
           if (resetAt && resetAt > playerBootedAt) {
-            dlog('Reset remoto solicitado → verificando conexión...', 'ok')
-            var reallyOnline = await probeConn()
-            if (reallyOnline) {
-              sb.from('screens').update({ reset_requested_at: null }).eq('id', screenData.id)
-              if (!isOnline) setConnStatus(true)
-              dlog('Reset remoto: ejecutando resync suave', 'ok')
-              await softResync()
-            } else {
-              dlog('Reset remoto pendiente: sin conexión real, se reintentará', 'warn')
-            }
+            dlog('Reset remoto detectado → ejecutando resync suave', 'ok')
+            sb.from('screens').update({ reset_requested_at: null }).eq('id', screenData.id)
+            if (!isOnline) setConnStatus(true)
+            await softResync()
           }
         }, function() { /* fallo silencioso: se reintenta en el próximo ciclo */ })
     }
