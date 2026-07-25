@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
+import { campaignDateState } from '../lib/dailySchedule'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -41,6 +42,12 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
   const [details, setDetails] = useState<Detail[]>([])
   const [orgName, setOrgName] = useState('')
   const [loading, setLoading] = useState(true)
+  // Última reproducción de la campaña (para la 4ª tarjeta cuando ya finalizó).
+  const [lastPlay, setLastPlay] = useState<string | null>(null)
+  // Marca de tiempo del último refresco de las cifras del rango. Igual que
+  // Stats.tsx: las estadísticas llegan en lotes de 10 min, así que el refresco
+  // automático y este indicador van a ese mismo ciclo.
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
 
   // Rango: por defecto últimos 14 días (igual que el reporte de contenido).
   const [rangeMode, setRangeMode] = useState<RangeMode>('14d')
@@ -100,7 +107,15 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
         subFreqMap[s.id] = { freq: s.daily_frequency ?? 0, unlimited: s.is_unlimited ?? true }
     }
 
-    if (!campMedia || campMedia.length === 0) { setDetails([]); setLoading(false); return }
+    if (!campMedia || campMedia.length === 0) { setDetails([]); setLastPlay(null); setLoading(false); return }
+
+    // Última reproducción de la campaña (consulta puntual, sin loops): sirve
+    // para la 4ª tarjeta cuando la campaña ya finalizó.
+    const mediaIds = campMedia.map(m => m.id)
+    const { data: lastEv } = await supabase
+      .from('playback_events').select('played_at')
+      .in('content_id', mediaIds).order('played_at', { ascending: false }).limit(1)
+    setLastPlay(lastEv?.[0]?.played_at ?? null)
 
     // Resolve original name by storage_path (library records have campaign_id=null, zone_id=null)
     const paths = [...new Set(campMedia.map(m => m.storage_path).filter(Boolean))]
@@ -166,8 +181,17 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     setByScreenRange((scrRows ?? []).map((r: any) => ({
       screen_name: r.screen_name, zone_name: r.zone_name, plays: Number(r.plays) || 0,
     })))
+    setLastUpdate(new Date())
   }
   useEffect(() => { loadRange() }, [campaignId, fromIso, toIso]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresco automático de las cifras del rango cada 10 min, alineado con el
+  // ciclo de batching (igual que Stats.tsx). Solo recarga loadRange (datos que
+  // cambian), no load() (configuración estática que mostraría el skeleton).
+  useEffect(() => {
+    const iv = setInterval(() => { loadRange() }, 600_000)
+    return () => clearInterval(iv)
+  }, [campaignId, fromIso, toIso]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Totales DEL RANGO seleccionado.
   const totalPlays = daily.reduce((s, d) => s + d.plays, 0)
@@ -176,6 +200,9 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
   const totalZones = new Set(byScreenRange.map(r => `${r.screen_name}|${r.zone_name}`)).size
 
   const daysLeft = camp ? Math.max(0, Math.ceil((new Date(camp.ends_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : 0
+  // Campaña finalizada (por fecha): la 4ª tarjeta muestra la última
+  // reproducción en vez de los días restantes.
+  const finished = camp ? campaignDateState(camp.starts_at, camp.ends_at) === 'finished' : false
 
   // Gráfico por pantalla — también acotado al rango.
   const byScreen = new Map<string, number>()
@@ -330,35 +357,36 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
             <input type="date" value={customTo} min={customFrom} onChange={e => setCustomTo(e.target.value)} style={s.dateInput} />
           </div>
         )}
-        <span style={{ marginLeft: 'auto', color: '#94A3B8', fontSize: '0.78rem' }}>
-          Del {fmtDay(fromIso)} al {fmtDay(toIso)}
-        </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <span style={{ color: '#94A3B8', fontSize: '0.78rem' }}>Del {fmtDay(fromIso)} al {fmtDay(toIso)}</span>
+          {lastUpdate && <span style={{ color: '#94A3B8', fontSize: '0.75rem' }}>· Actualizado: {lastUpdate.toLocaleTimeString('es-DO')}</span>}
+          {/* Con el batching los contadores suben en bloque cada ~10 min. */}
+          <span
+            title="Los reproductores acumulan las reproducciones y las envían en lotes cada 10 minutos. Por eso los contadores suben en bloque."
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: '#F1F5F9', color: '#64748B', fontSize: '0.7rem', fontWeight: 600, padding: '2px 8px', borderRadius: '20px', border: '1px solid #E2E8F0', cursor: 'help' }}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Sincroniza cada 10 min
+          </span>
+        </div>
       </div>
 
-      {/* Stat cards */}
+      {/* Stat cards — mismo orden y colores que el reporte de contenido */}
       <div style={s.statGrid}>
-        <div style={{ ...s.statCard, background: 'linear-gradient(135deg, #EFF6FF, #DBEAFE)', borderColor: '#BFDBFE' }}>
-          <div style={{ ...s.statIcon, background: '#2563EB' }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-          </div>
-          <div>
-            <div style={s.statVal}>{totalZones}</div>
-            <div style={s.statLbl}>Zonas con reproducciones</div>
-          </div>
-        </div>
-
+        {/* 1ª · verde · Reproducciones totales del rango */}
         <div style={{ ...s.statCard, background: 'linear-gradient(135deg, #ECFDF5, #D1FAE5)', borderColor: '#A7F3D0' }}>
           <div style={{ ...s.statIcon, background: '#059669' }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><polygon points="5,3 19,12 5,21"/></svg>
           </div>
           <div>
             <div style={s.statVal}>{totalPlays.toLocaleString()}</div>
-            <div style={s.statLbl}>Reproducciones del rango</div>
+            <div style={s.statLbl}>Reproducciones totales</div>
           </div>
         </div>
 
-        <div style={{ ...s.statCard, background: 'linear-gradient(135deg, #FEF3C7, #FDE68A)', borderColor: '#FCD34D' }}>
-          <div style={{ ...s.statIcon, background: '#D97706' }}>
+        {/* 2ª · azul · Reproducciones hoy */}
+        <div style={{ ...s.statCard, background: 'linear-gradient(135deg, #EFF6FF, #DBEAFE)', borderColor: '#BFDBFE' }}>
+          <div style={{ ...s.statIcon, background: '#2563EB' }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           </div>
           <div>
@@ -367,13 +395,28 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
           </div>
         </div>
 
+        {/* 3ª · morado · Zonas con reproducciones */}
         <div style={{ ...s.statCard, background: 'linear-gradient(135deg, #F5F3FF, #EDE9FE)', borderColor: '#DDD6FE' }}>
           <div style={{ ...s.statIcon, background: '#7C3AED' }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/></svg>
           </div>
           <div>
-            <div style={s.statVal}>{daysLeft}</div>
-            <div style={s.statLbl}>Días restantes</div>
+            <div style={s.statVal}>{totalZones}</div>
+            <div style={s.statLbl}>Zonas con reproducciones</div>
+          </div>
+        </div>
+
+        {/* 4ª · amarillo · Días restantes (o Última reproducción si finalizó) */}
+        <div style={{ ...s.statCard, background: 'linear-gradient(135deg, #FEF3C7, #FDE68A)', borderColor: '#FCD34D' }}>
+          <div style={{ ...s.statIcon, background: '#D97706' }}>
+            {finished
+              ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
+          </div>
+          <div>
+            {finished
+              ? <><div style={{ ...s.statVal, fontSize: '1.1rem' }}>{lastPlay ? new Date(lastPlay).toLocaleDateString('es-DO') : '—'}</div><div style={s.statLbl}>Última reproducción</div></>
+              : <><div style={s.statVal}>{daysLeft}</div><div style={s.statLbl}>Días restantes</div></>}
           </div>
         </div>
       </div>
