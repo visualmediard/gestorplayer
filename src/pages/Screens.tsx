@@ -126,6 +126,7 @@ export default function Screens() {
   const [editSaving, setEditSaving] = useState(false)
   const [editOpEnabled, setEditOpEnabled] = useState(false)
   const [editOpStart, setEditOpStart] = useState('06:00')
+  const [resetSent, setResetSent] = useState<string | null>(null)
   const [editOpEnd, setEditOpEnd] = useState('00:00')
 
   async function load() {
@@ -169,6 +170,8 @@ export default function Screens() {
 
 
   async function handleReset(id: string) {
+    setResetSent(id)
+    setTimeout(() => setResetSent(null), 3000)
     await supabase.from('screens').update({ reset_requested_at: new Date().toISOString() }).eq('id', id)
   }
 
@@ -389,10 +392,16 @@ export default function Screens() {
                       Captura
                     </span>
                   </button>
-                  <button style={s.btnAct} onClick={() => handleReset(sc.id)} title="Fuerza una re-sincronización remota del reproductor">
+                  <button
+                    style={{ ...s.btnAct, ...(resetSent === sc.id ? { color: '#10B981', border: '1px solid #10B981' } : {}) }}
+                    onClick={() => handleReset(sc.id)}
+                    disabled={resetSent === sc.id}
+                    title="Fuerza una re-sincronización remota del reproductor">
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                      Reiniciar
+                      {resetSent === sc.id
+                        ? <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Señal enviada</>
+                        : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Reiniciar</>
+                      }
                     </span>
                   </button>
                   <button style={s.btnDel} onClick={() => handleDelete(sc.id)}>
