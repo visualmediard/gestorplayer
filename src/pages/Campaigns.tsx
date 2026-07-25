@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { uploadToR2 } from '../lib/uploadToR2'
 import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
-import { isResting, scheduleRangeLabel } from '../lib/dailySchedule'
+import { isResting, scheduleRangeLabel, campaignDateState } from '../lib/dailySchedule'
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
 import CampaignReport from './CampaignReport'
@@ -40,11 +40,13 @@ const STATUS_LABEL: Record<string, string> = {
   draft: 'Borrador', active: 'Activa', paused: 'Pausada', ended: 'Finalizada'
 }
 const STATUS_COLOR: Record<string, { bg: string; color: string; border: string }> = {
-  draft:   { bg: '#F8FAFC', color: '#64748B', border: '#E2E8F0' },
-  active:  { bg: '#ECFDF5', color: '#059669', border: '#A7F3D0' },
-  resting: { bg: '#F1F5F9', color: '#64748B', border: '#CBD5E1' },
-  paused:  { bg: '#FFF7ED', color: '#D97706', border: '#FDE68A' },
-  ended:  { bg: '#FEF2F2', color: '#DC2626', border: '#FECACA' },
+  draft:     { bg: '#F8FAFC', color: '#64748B', border: '#E2E8F0' },
+  active:    { bg: '#ECFDF5', color: '#059669', border: '#A7F3D0' },
+  scheduled: { bg: '#EFF6FF', color: '#2563EB', border: '#BFDBFE' },
+  resting:   { bg: '#F1F5F9', color: '#64748B', border: '#CBD5E1' },
+  paused:    { bg: '#FFF7ED', color: '#D97706', border: '#FDE68A' },
+  finished:  { bg: '#F1F5F9', color: '#334155', border: '#CBD5E1' },
+  ended:    { bg: '#FEF2F2', color: '#DC2626', border: '#FECACA' },
 }
 const DEFAULT_FREQ = 0 // 0 = ∞ Ilimitado (matches zone editor default)
 
@@ -1024,19 +1026,36 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
           {filtered.map(camp => {
             const stat = getStat(camp.id)
             const mediaItem = getMedia(camp.media_content_id)
-            // "En reposo": campaña activa y vigente por fecha, pero fuera de su
-            // horario diario (no está saliendo ahora). Los demás estados
-            // (pausada, finalizada, vencida por fecha) se mantienen igual.
-            const dateValid = Date.now() >= new Date(camp.starts_at).getTime()
-              && Date.now() <= new Date(camp.ends_at).getTime()
-            const resting = camp.status === 'active' && dateValid
+            // Jerarquía de badges (solo cuando la campaña sigue 'active'; los
+            // estados manuales draft/paused/ended se muestran tal cual):
+            //   Programada → inicio futuro (hoy < starts_at)
+            //   Finalizada → ya terminó (hoy > ends_at)
+            //   En reposo  → vigente pero fuera de su horario diario
+            //   Activa     → vigente y dentro de su horario
+            const dateState = camp.status === 'active'
+              ? campaignDateState(camp.starts_at, camp.ends_at)
+              : 'live'
+            const scheduled = dateState === 'scheduled'
+            const finished = dateState === 'finished'
+            const resting = camp.status === 'active' && dateState === 'live'
               && isResting(camp.daily_start_time, camp.daily_end_time)
-            const badgeKey = resting ? 'resting' : camp.status
+            const badgeKey = scheduled ? 'scheduled'
+              : finished ? 'finished'
+              : resting ? 'resting'
+              : camp.status
             const sc = STATUS_COLOR[badgeKey]
-            const badgeLabel = resting ? 'En reposo' : STATUS_LABEL[camp.status]
-            const badgeTitle = resting
-              ? `Fuera de su horario diario (${scheduleRangeLabel(camp.daily_start_time, camp.daily_end_time)}) — no se está reproduciendo ahora`
-              : undefined
+            const badgeLabel = scheduled ? 'Programada'
+              : finished ? 'Finalizada'
+              : resting ? 'En reposo'
+              : STATUS_LABEL[camp.status]
+            const badgeIcon = scheduled ? '📅' : finished ? '✓' : resting ? '⏸' : null
+            const badgeTitle = scheduled
+              ? `Empieza el ${new Date(camp.starts_at).toLocaleDateString('es-DO', { day: '2-digit', month: 'short' })} — aún no se está reproduciendo`
+              : finished
+                ? `Terminó el ${new Date(camp.ends_at).toLocaleDateString('es-DO', { day: '2-digit', month: 'short' })} — ya no se reproduce`
+                : resting
+                  ? `Fuera de su horario diario (${scheduleRangeLabel(camp.daily_start_time, camp.daily_end_time)}) — no se está reproduciendo ahora`
+                  : undefined
             const startTs = new Date(camp.starts_at).getTime()
             const endTs = new Date(camp.ends_at).getTime()
             const progress = Math.max(0, Math.min(100, ((Date.now() - startTs) / Math.max(1, endTs - startTs)) * 100))
@@ -1056,7 +1075,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
                     </div>
                   )}
                   <span title={badgeTitle} style={{ position: 'absolute', top: '8px', right: '8px', ...s.badge, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}` }}>
-                    {resting && <span style={{ marginRight: '3px' }}>⏸</span>}
+                    {badgeIcon && <span style={{ marginRight: '3px' }}>{badgeIcon}</span>}
                     {badgeLabel}
                   </span>
                 </div>

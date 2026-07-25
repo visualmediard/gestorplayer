@@ -5,14 +5,14 @@ import { resolveMediaUrl } from '../lib/mediaUrl'
 import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
 import { fileTooLargeMessage } from '../lib/fileLimit'
 import { dedupeMedia } from '../lib/dedupeMedia'
-import { isResting, scheduleRangeLabel } from '../lib/dailySchedule'
+import { isResting, scheduleRangeLabel, campaignDateState } from '../lib/dailySchedule'
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
 
 type Program = { id: string; name: string; width: number; height: number }
 type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean; fit_mode: string | null }
 type SubPlaylist = { id: string; name: string; sort_order: number; is_unlimited: boolean; daily_frequency: number | null }
-type MediaItem = { id: string; name: string; type: 'image' | 'video' | 'url'; storage_path: string; url?: string; duration_seconds: number | null; sort_order: number; daily_frequency: number | null; is_unlimited: boolean; sub_playlist_id: string | null; expires_at: string | null; schedule_days: number[] | null; schedule_start: string | null; schedule_end: string | null }
+type MediaItem = { id: string; name: string; type: 'image' | 'video' | 'url'; storage_path: string; url?: string; duration_seconds: number | null; sort_order: number; daily_frequency: number | null; is_unlimited: boolean; sub_playlist_id: string | null; expires_at: string | null; schedule_days: number[] | null; schedule_start: string | null; schedule_end: string | null; campaign_id: string | null }
 type PlaylistEntry = { kind: 'item'; item: MediaItem } | { kind: 'sub'; sub: SubPlaylist; items: MediaItem[] }
 type Props = { programId: string; onBack: () => void }
 
@@ -62,6 +62,10 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   const [zones, setZones] = useState<Zone[]>([])
   const [selectedZone, setSelectedZone] = useState<string | null>(null)
   const [entries, setEntries] = useState<PlaylistEntry[]>([])
+  // Fecha de inicio de las campañas presentes en la zona (campaign_id →
+  // starts_at). El media_content inyectado guarda expires_at (fin) pero no el
+  // inicio; esto permite marcar "Programada" los anuncios que aún no empiezan.
+  const [campaignStart, setCampaignStart] = useState<Record<string, string>>({})
   // Recalcula el indicador "En reposo" al cruzar la hora, sin recargar.
   const [, setMinuteTick] = useState(0)
   useEffect(() => {
@@ -171,6 +175,21 @@ export default function ZoneEditor({ programId, onBack }: Props) {
       else if (c.entry.kind === 'sub' && c.entry.items.length > 0) flat.push(c.entry.items[0])
     })
     setPreviewPlaylist(flat); setPlayIndex(0)
+
+    // Fecha de inicio de las campañas presentes (para marcar "Programada" los
+    // anuncios que aún no empiezan). El fin ya viene en expires_at de la fila.
+    const campIds = Array.from(new Set(
+      [...((items ?? []) as MediaItem[]), ...Object.values(subItems).flat()]
+        .map(i => i.campaign_id).filter(Boolean) as string[]
+    ))
+    if (campIds.length) {
+      const { data: camps } = await supabase.from('campaigns').select('id, starts_at').in('id', campIds)
+      const map: Record<string, string> = {}
+      for (const c of camps ?? []) if (c.starts_at) map[c.id] = c.starts_at
+      setCampaignStart(map)
+    } else {
+      setCampaignStart({})
+    }
   }
 
   async function loadLibrary() {
@@ -700,6 +719,19 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                     if (entry.kind === 'item') {
                       const item = entry.item
                       const expired = isExpired(item)
+                      // Estado de campaña por fecha: "Programada" si la campaña
+                      // aún no empieza; "Finalizada" reetiqueta el vencimiento de
+                      // los anuncios de campaña (los sueltos siguen como VENCIDO).
+                      const campState = item.campaign_id
+                        ? campaignDateState(campaignStart[item.campaign_id] ?? null, item.expires_at)
+                        : 'live'
+                      const scheduled = campState === 'scheduled'
+                      const campFinished = !!item.campaign_id && (campState === 'finished' || expired)
+                      const inactive = expired || campFinished
+                      const border = dragOverIdx === idx ? '1px solid #3B82F6'
+                        : inactive ? '1px solid #FECACA'
+                        : scheduled ? '1px solid #BFDBFE'
+                        : '1px solid #E2E8F0'
                       return (
                         <div key={item.id} draggable
                           onDragStart={() => { dragIdx.current = idx }}
@@ -707,13 +739,19 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                           onDragLeave={() => setDragOverIdx(null)}
                           onDrop={() => { if (dragIdx.current !== null) { dragDropEntry(dragIdx.current, idx); dragIdx.current = null } setDragOverIdx(null) }}
                           onDragEnd={() => { dragIdx.current = null; setDragOverIdx(null) }}
-                          style={{ ...s.playlistItem, border: dragOverIdx === idx ? '1px solid #3B82F6' : expired ? '1px solid #FECACA' : '1px solid #E2E8F0', opacity: expired ? 0.6 : 1, cursor: 'grab' }}>
+                          style={{ ...s.playlistItem, border, background: scheduled && !inactive ? '#F5F9FF' : undefined, opacity: inactive ? 0.6 : 1, cursor: 'grab' }}>
                           <span style={s.dragHandle}>⠿</span>
                           <div style={s.thumb}>{renderThumb(item)}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                               <div style={{ color: '#0F172A', fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>{item.name}</div>
-                              {expired && <span style={{ fontSize: '0.65rem', background: '#FEE2E2', color: '#EF4444', padding: '1px 5px', borderRadius: '4px', flexShrink: 0 }}>VENCIDO</span>}
+                              {campFinished
+                                ? <span style={{ fontSize: '0.65rem', background: '#FEE2E2', color: '#EF4444', padding: '1px 5px', borderRadius: '4px', flexShrink: 0 }}>✓ Finalizada</span>
+                                : expired
+                                  ? <span style={{ fontSize: '0.65rem', background: '#FEE2E2', color: '#EF4444', padding: '1px 5px', borderRadius: '4px', flexShrink: 0 }}>VENCIDO</span>
+                                  : scheduled
+                                    ? <span style={{ fontSize: '0.65rem', background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE', padding: '1px 5px', borderRadius: '4px', flexShrink: 0 }}>📅 Programada</span>
+                                    : null}
                               {item.type !== 'url' && (
                                 <button onClick={() => { setReplacingItem(item); setShowReplaceLibrary(true); setReplaceLibrarySearch(''); setShowLibrary(false); setUploadTarget(null); loadLibrary() }}
                                   style={{ background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '4px', color: '#059669', fontSize: '0.65rem', padding: '1px 5px', cursor: 'pointer', flexShrink: 0 }}>

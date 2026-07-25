@@ -38,6 +38,7 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
     return () => { alive = false; off() }
   }, [])
 
+
   const pct = usage && usage.limitBytes > 0
     ? Math.min(100, (usage.usedBytes / usage.limitBytes) * 100)
     : 0

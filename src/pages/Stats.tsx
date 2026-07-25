@@ -41,7 +41,6 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
   const [rows, setRows] = useState<DisplayRow[]>([])
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
-  const [liveCount, setLiveCount] = useState(0)
   const [search, setSearch] = useState('')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [report, setReport] = useState<{ name: string; type: string } | null>(null)
@@ -114,10 +113,9 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
 
   useEffect(() => {
     load()
-    const interval = setInterval(() => load(true), 30000)
+    const interval = setInterval(() => load(true), 600_000)
     channelRef.current = supabase.channel('playback-live')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'playback_events' }, () => {
-        setLiveCount(c => c + 1)
         setTimeout(() => load(true), 2000)
       }).subscribe()
     return () => { clearInterval(interval); if (channelRef.current) supabase.removeChannel(channelRef.current) }
@@ -164,12 +162,6 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
               Sincroniza cada 10 min
             </span>
-            {liveCount > 0 && (
-              <span style={{ background: '#2563EB', color: '#fff', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '20px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                <span style={{ width: '6px', height: '6px', background: '#fff', borderRadius: '50%', display: 'inline-block' }} />
-                En vivo · {liveCount} hoy
-              </span>
-            )}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
