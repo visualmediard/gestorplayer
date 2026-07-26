@@ -8,12 +8,13 @@ import Screens from './pages/Screens'
 import Content from './pages/Content'
 import Stats from './pages/Stats'
 import Campaigns from './pages/Campaigns'
+import Settings from './pages/Settings'
 import Sidebar from './components/Sidebar'
 import Pair from './pages/Pair'
 import Player from './pages/Player'
 import logoNegro from './assets/logo/logo-negro.png'
 
-type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns'
+type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns' | 'settings'
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
@@ -104,6 +105,7 @@ function Gate() {
   const pageLabel: Record<Page, string> = {
     home: 'Inicio', programs: 'Programas', screens: 'Pantallas',
     content: 'Contenido', stats: 'Estadísticas', campaigns: 'Campañas',
+    settings: 'Configuración',
   }
 
   return (
@@ -200,6 +202,7 @@ function Gate() {
             {page === 'content'   && <Content />}
             {page === 'stats'     && <Stats onGoToCampaign={openCampaignReport} />}
             {page === 'campaigns' && <Campaigns initialReportId={campaignReportId} />}
+            {page === 'settings'  && <Settings />}
           </div>
         </main>
       </div>

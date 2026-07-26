@@ -95,7 +95,17 @@ Deno.serve(async (req) => {
   const isVideo = (file.type || '').startsWith('video/')
   const kind = isVideo ? 'video' : 'image'
   const safeName = (file.name || 'archivo').replace(/[^\w.\-]+/g, '_')
-  const key = `${orgFolder}/${kind}/${Date.now()}_${safeName}`
+
+  // Carpeta opcional: si el cliente manda `folder`, se usa en lugar de la
+  // carpeta por tipo (video/image). Se sanea (solo letras, números, guion y
+  // guion bajo) para evitar path traversal o subrutas inesperadas. Sin
+  // `folder`, la key es idéntica al comportamiento anterior (retrocompatible).
+  const folderRaw = form.get('folder')
+  const safeFolder = typeof folderRaw === 'string'
+    ? folderRaw.replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '')
+    : ''
+  const subfolder = safeFolder || kind
+  const key = `${orgFolder}/${subfolder}/${Date.now()}_${safeName}`
 
   // 4. Subir a R2 con firma S3 (SigV4)
   const aws = new AwsClient({

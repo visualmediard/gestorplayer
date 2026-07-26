@@ -14,6 +14,7 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 export async function uploadToR2(
   file: File,
   onProgress?: (percent: number) => void,
+  folder?: string,
 ): Promise<{ url: string | null; size: number | null; error: { message: string } | null }> {
   const { data: sessionData } = await supabase.auth.getSession()
   const token = sessionData.session?.access_token
@@ -21,6 +22,9 @@ export async function uploadToR2(
 
   const form = new FormData()
   form.append('file', file)
+  // Carpeta opcional en R2 (ej. 'branding' para logos). Sin esto, la Edge
+  // Function usa la carpeta por tipo (video/image) como siempre.
+  if (folder) form.append('folder', folder)
 
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest()

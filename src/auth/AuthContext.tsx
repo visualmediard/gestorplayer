@@ -6,7 +6,7 @@ type Profile = {
   id: string
   email: string
   full_name: string | null
-  role: 'admin' | 'editor'
+  role: 'admin' | 'operator' | 'seller' | 'client'
 }
 
 type AuthContextType = {
