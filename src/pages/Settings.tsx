@@ -179,6 +179,11 @@ function UsersTab() {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [roleBusy, setRoleBusy] = useState<string | null>(null)
+  const [editing, setEditing] = useState<{ id: string; full_name: string | null; email: string } | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editEmail, setEditEmail] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState<string | null>(null)
 
   async function load() {
     const uid = (await supabase.auth.getUser()).data.user?.id ?? ''
@@ -243,6 +248,46 @@ function UsersTab() {
     setInvites(prev => prev.filter(i => i.id !== id))
   }
 
+  // Llama la Edge Function admin-manage-user. Extrae el mensaje de error real
+  // del cuerpo de la respuesta cuando el estado no es 2xx.
+  async function callManageUser(payload: { action: string; userId: string; fullName?: string; email?: string }) {
+    const { error: fnErr } = await supabase.functions.invoke('admin-manage-user', { body: payload })
+    if (fnErr) {
+      let msg = fnErr.message
+      try { const j = await (fnErr as any).context?.json(); if (j?.error) msg = j.error } catch { /* ignore */ }
+      return { ok: false, error: msg }
+    }
+    return { ok: true, error: null as string | null }
+  }
+
+  function openEdit(m: { id: string; full_name: string | null; email: string }) {
+    setError(null)
+    setEditing(m)
+    setEditName(m.full_name ?? '')
+    setEditEmail(m.email)
+  }
+
+  async function saveEdit() {
+    if (!editing) return
+    const email = editEmail.trim().toLowerCase()
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { setError('Correo inválido.'); return }
+    setSavingEdit(true); setError(null)
+    const res = await callManageUser({ action: 'update', userId: editing.id, fullName: editName, email })
+    if (!res.ok) { setError(res.error!); setSavingEdit(false); return }
+    setMembers(prev => prev.map(m => m.id === editing.id
+      ? { ...m, full_name: editName.trim() || null, email: email || m.email } : m))
+    setSavingEdit(false); setEditing(null)
+  }
+
+  async function deleteMember(m: { id: string; full_name: string | null; email: string }) {
+    if (!confirm(`¿Eliminar por completo a "${m.full_name || m.email}"?\n\nSe borrará su cuenta de acceso y su perfil. Esta acción no se puede deshacer.`)) return
+    setDeleteBusy(m.id); setError(null)
+    const res = await callManageUser({ action: 'delete', userId: m.id })
+    if (!res.ok) { setError(res.error!); setDeleteBusy(null); return }
+    setMembers(prev => prev.filter(x => x.id !== m.id))
+    setDeleteBusy(null)
+  }
+
   if (loading) return <div style={s.formCard}><p style={{ color: '#94A3B8', fontSize: '0.875rem' }}>Cargando...</p></div>
 
   return (
@@ -271,11 +316,21 @@ function UsersTab() {
               {m.id === myId ? (
                 <span style={{ fontSize: '0.78rem', color: '#64748B', fontWeight: 600, padding: '0.35rem 0.6rem' }}>{ROLE_LABELS[m.role] ?? m.role}</span>
               ) : (
-                <select value={m.role} disabled={roleBusy === m.id}
-                  onChange={e => changeRole(m.id, e.target.value)}
-                  style={{ ...s.btnOutline, padding: '0.35rem 0.5rem', cursor: 'pointer' }}>
-                  {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-                </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                  <select value={m.role} disabled={roleBusy === m.id}
+                    onChange={e => changeRole(m.id, e.target.value)}
+                    style={{ ...s.btnOutline, padding: '0.35rem 0.5rem', cursor: 'pointer' }}>
+                    {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                  </select>
+                  <button onClick={() => openEdit(m)} title="Editar usuario"
+                    style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', cursor: 'pointer' }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  </button>
+                  <button onClick={() => deleteMember(m)} disabled={deleteBusy === m.id} title="Eliminar usuario"
+                    style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', opacity: deleteBusy === m.id ? 0.5 : 1 }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                  </button>
+                </div>
               )}
             </div>
           ))}
@@ -327,6 +382,35 @@ function UsersTab() {
           </div>
         )}
       </div>
+
+      {/* Modal editar usuario */}
+      {editing && (
+        <div onClick={e => { if (e.target === e.currentTarget) setEditing(null) }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+          <div style={{ background: '#fff', borderRadius: '14px', width: '100%', maxWidth: '400px', padding: '1.5rem', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' }}>
+            <div style={s.formTitle}>Editar usuario</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem', marginTop: '0.5rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                <label style={{ color: '#64748B', fontSize: '0.78rem', fontWeight: 500 }}>Nombre</label>
+                <input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Nombre para mostrar"
+                  style={{ padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid #E2E8F0', fontSize: '0.875rem', outline: 'none' }} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                <label style={{ color: '#64748B', fontSize: '0.78rem', fontWeight: 500 }}>Correo</label>
+                <input type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="correo@empresa.com"
+                  style={{ padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid #E2E8F0', fontSize: '0.875rem', outline: 'none' }} />
+                <span style={{ fontSize: '0.7rem', color: '#94A3B8' }}>Cambiar el correo también cambia su acceso (login).</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button onClick={() => setEditing(null)} style={s.btnOutline}>Cancelar</button>
+              <button onClick={saveEdit} disabled={savingEdit} style={s.btnPrimary}>
+                {savingEdit ? 'Guardando…' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
