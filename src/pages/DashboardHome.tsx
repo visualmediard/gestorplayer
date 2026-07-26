@@ -108,9 +108,9 @@ export default function DashboardHome({
 
           {/* Panel 1: Mis medios */}
           <div style={s.panel}>
-            <div style={s.panelHeader}>
+            <div style={{ ...s.panelHeader, background: 'linear-gradient(135deg, #FFF8E7, #FFFFFF)', borderBottom: '1px solid #FDE9B8' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <div style={{ ...s.panelIcon, background: '#FEF3C7' }}>📁</div>
+                <div style={{ ...s.panelIcon, background: '#FDE68A' }}>📁</div>
                 <span style={s.panelTitle}>Mis medios</span>
               </div>
               <button style={s.btnPrimary} onClick={() => nav('content')}>
@@ -152,9 +152,9 @@ export default function DashboardHome({
 
           {/* Panel 2: Mis programas */}
           <div style={s.panel}>
-            <div style={s.panelHeader}>
+            <div style={{ ...s.panelHeader, background: 'linear-gradient(135deg, #EAF3FF, #FFFFFF)', borderBottom: '1px solid #C7DDFB' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <div style={{ ...s.panelIcon, background: '#DBEAFE' }}>▣</div>
+                <div style={{ ...s.panelIcon, background: '#BFDBFE' }}>▣</div>
                 <span style={s.panelTitle}>Mis programas</span>
               </div>
               <button style={s.btnPrimary} onClick={() => nav('programs')}>+ Programa</button>
@@ -198,9 +198,9 @@ export default function DashboardHome({
 
           {/* Panel 3: Mis pantallas */}
           <div style={s.panel}>
-            <div style={s.panelHeader}>
+            <div style={{ ...s.panelHeader, background: 'linear-gradient(135deg, #E8FBF1, #FFFFFF)', borderBottom: '1px solid #B7EAD0' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <div style={{ ...s.panelIcon, background: '#D1FAE5' }}>◫</div>
+                <div style={{ ...s.panelIcon, background: '#A7F3D0' }}>◫</div>
                 <span style={s.panelTitle}>Mis pantallas</span>
               </div>
               <button style={s.btnPrimary} onClick={() => nav('screens')}>+ Agregar</button>
