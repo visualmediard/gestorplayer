@@ -11,6 +11,7 @@ import Campaigns from './pages/Campaigns'
 import Settings from './pages/Settings'
 import Sidebar from './components/Sidebar'
 import Pair from './pages/Pair'
+import Invite from './pages/Invite'
 import Player from './pages/Player'
 import logoNegro from './assets/logo/logo-negro.png'
 
@@ -246,5 +247,6 @@ export default function App() {
   const path = window.location.pathname
   if (path === '/play' || path === '/player') return <Player />
   if (path === '/pair') return <AuthProvider><Pair /></AuthProvider>
+  if (path === '/invite') return <AuthProvider><Invite /></AuthProvider>
   return <AuthProvider><Gate /></AuthProvider>
 }
