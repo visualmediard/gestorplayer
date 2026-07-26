@@ -69,10 +69,20 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
     // estadísticas aunque sus contenidos/reproducciones históricos existan.
     const campaignIds = [...new Set(enriched.filter(r => r.campaign_id).map(r => r.campaign_id as string))]
     const campaignNameMap: Record<string, string> = {}
+    let campsData: any[] = []
+    const coverMap: Record<string, { storage_path: string; type: string }> = {}
     if (campaignIds.length > 0) {
-      const { data: camps } = await supabase.from('campaigns').select('id, name, deleted_at').in('id', campaignIds)
-      for (const c of (camps ?? [])) {
-        if (!c.deleted_at) campaignNameMap[c.id] = c.name   // omite las eliminadas
+      const { data: camps } = await supabase.from('campaigns').select('id, name, deleted_at, media_content_id').in('id', campaignIds)
+      campsData = camps ?? []
+      for (const c of campsData) {
+        if (!c.deleted_at) campaignNameMap[c.id] = c.name
+      }
+      // Portadas actuales: usa media_content_id de la campaña (fila de biblioteca)
+      // igual que Campaigns.tsx, para reflejar siempre el archivo actual.
+      const coverIds = campsData.filter(c => !c.deleted_at && c.media_content_id).map(c => c.media_content_id as string)
+      if (coverIds.length > 0) {
+        const { data: coverMedia } = await supabase.from('media_content').select('id, storage_path, type').in('id', coverIds)
+        for (const m of (coverMedia ?? [])) coverMap[m.id] = { storage_path: m.storage_path, type: m.type }
       }
     }
 
@@ -91,17 +101,21 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
       }
     }
 
-    const campaignRows: CampaignRow[] = Object.entries(campaignGroups).map(([cid, items]) => ({
-      kind: 'campaign',
-      campaign_id: cid,
-      campaign_name: campaignNameMap[cid] ?? 'Campaña',
-      storage_path: items.find(i => i.storage_path)?.storage_path ?? null,
-      content_type: items[0]?.type ?? 'video',
-      zone_count: new Set(items.map(i => `${i.program_name}|${i.zone_name}`)).size,
-      total_reproductions: items.reduce((s, i) => s + i.total_reproductions, 0),
-      today_reproductions: items.reduce((s, i) => s + i.today_reproductions, 0),
-      last_reproduction: items.map(i => i.last_reproduction).filter(Boolean).sort().pop() ?? null,
-    }))
+    const campaignRows: CampaignRow[] = Object.entries(campaignGroups).map(([cid, items]) => {
+      const campRow = campsData.find(c => c.id === cid)
+      const cover = campRow?.media_content_id ? coverMap[campRow.media_content_id] : null
+      return {
+        kind: 'campaign',
+        campaign_id: cid,
+        campaign_name: campaignNameMap[cid] ?? 'Campaña',
+        storage_path: cover?.storage_path ?? items.find(i => i.storage_path)?.storage_path ?? null,
+        content_type: cover?.type ?? items[0]?.type ?? 'video',
+        zone_count: new Set(items.map(i => `${i.program_name}|${i.zone_name}`)).size,
+        total_reproductions: items.reduce((s, i) => s + i.total_reproductions, 0),
+        today_reproductions: items.reduce((s, i) => s + i.today_reproductions, 0),
+        last_reproduction: items.map(i => i.last_reproduction).filter(Boolean).sort().pop() ?? null,
+      }
+    })
 
     const allRows: DisplayRow[] = ([...campaignRows, ...contentItems] as DisplayRow[])
       .sort((a, b) => b.total_reproductions - a.total_reproductions)
