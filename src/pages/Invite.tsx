@@ -18,9 +18,12 @@ export default function Invite() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Liga el perfil a la organización de la invitación y entra al dashboard.
-  async function accept() {
-    const { error: rpcErr } = await supabase.rpc('accept_invitation', { p_token: token })
+  // Liga el perfil a la organización de la invitación (con el nombre, si se
+  // proporciona) y entra al dashboard.
+  async function accept(name?: string) {
+    const { error: rpcErr } = await supabase.rpc('accept_invitation', {
+      p_token: token, p_full_name: name && name.length ? name : null,
+    })
     if (rpcErr) { setError(rpcErr.message); setSubmitting(false); return }
     // Recarga completa: AuthProvider vuelve a cargar el perfil ya ligado.
     window.location.replace('/')
@@ -38,14 +41,11 @@ export default function Invite() {
     if (password.length < 8) { setError('La contraseña debe tener al menos 8 caracteres.'); return }
     setSubmitting(true)
 
-    const { data, error: authError } = await supabase.auth.signUp({ email, password })
-    if (authError || !data.user) { setError(authError?.message ?? 'Error creando usuario.'); setSubmitting(false); return }
+    const { error: authError } = await supabase.auth.signUp({ email, password })
+    if (authError) { setError(authError.message); setSubmitting(false); return }
 
-    // Guarda el nombre en el perfil (la RPC no lo toca); best-effort.
-    if (fullName.trim()) {
-      await supabase.from('profiles').update({ full_name: fullName.trim() }).eq('id', data.user.id)
-    }
-    await accept()
+    // El perfil lo crea la RPC (UPSERT), incluyendo el nombre.
+    await accept(fullName.trim())
   }
 
   if (loading) {
