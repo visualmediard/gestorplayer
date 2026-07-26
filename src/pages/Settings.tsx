@@ -3,6 +3,11 @@ import { supabase } from '../lib/supabase'
 import { uploadToR2 } from '../lib/uploadToR2'
 import { notifyStorageChanged } from '../lib/storage'
 
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'Administrador', operator: 'Operador', seller: 'Vendedor', client: 'Cliente',
+}
+const ROLES = ['admin', 'operator', 'seller', 'client']
+
 type Tab = 'general' | 'users'
 
 export default function Settings() {
@@ -32,13 +37,7 @@ export default function Settings() {
       </div>
 
       {tab === 'general' && <GeneralTab />}
-      {tab === 'users' && (
-        <div style={s.formCard}>
-          <p style={{ color: '#94A3B8', fontSize: '0.875rem' }}>
-            La gestión de usuarios estará disponible pronto.
-          </p>
-        </div>
-      )}
+      {tab === 'users' && <UsersTab />}
     </div>
   )
 }
@@ -162,6 +161,171 @@ function GeneralTab() {
           {error && <p style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: '#EF4444' }}>{error}</p>}
           {saved && <p style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: '#10B981' }}>✓ Logo actualizado.</p>}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Tab Usuarios: miembros de la organización e invitaciones ────────────────
+function UsersTab() {
+  const [orgId, setOrgId] = useState<string | null>(null)
+  const [myId, setMyId] = useState<string | null>(null)
+  const [members, setMembers] = useState<{ id: string; full_name: string | null; email: string; role: string }[]>([])
+  const [invites, setInvites] = useState<{ id: string; email: string; role: string; token: string; expires_at: string | null }[]>([])
+  const [loading, setLoading] = useState(true)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState('operator')
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
+  const [roleBusy, setRoleBusy] = useState<string | null>(null)
+
+  async function load() {
+    const uid = (await supabase.auth.getUser()).data.user?.id ?? ''
+    setMyId(uid)
+    const { data: prof } = await supabase.from('profiles').select('organization_id').eq('id', uid).single()
+    const oid = prof?.organization_id ?? null
+    if (!oid) { setLoading(false); return }
+    setOrgId(oid)
+    const [{ data: mem }, { data: inv }] = await Promise.all([
+      supabase.from('profiles').select('id, full_name, email, role').eq('organization_id', oid).order('full_name'),
+      supabase.from('invitations').select('id, email, role, token, expires_at')
+        .eq('organization_id', oid).is('accepted_at', null).order('created_at', { ascending: false }),
+    ])
+    setMembers((mem ?? []) as any)
+    // Oculta invitaciones vencidas (siguen en BD pero no se muestran).
+    const now = Date.now()
+    setInvites(((inv ?? []) as any[]).filter(i => !i.expires_at || new Date(i.expires_at).getTime() > now))
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  function inviteLink(token: string) {
+    return `${window.location.origin}/invite?token=${token}`
+  }
+
+  async function copyLink(token: string) {
+    try {
+      await navigator.clipboard.writeText(inviteLink(token))
+      setCopied(token)
+      setTimeout(() => setCopied(null), 2500)
+    } catch { /* clipboard no disponible */ }
+  }
+
+  async function changeRole(userId: string, role: string) {
+    setRoleBusy(userId); setError(null)
+    const { error: rpcErr } = await supabase.rpc('set_member_role', { p_user_id: userId, p_role: role })
+    if (rpcErr) { setError(rpcErr.message); setRoleBusy(null); return }
+    setMembers(prev => prev.map(m => m.id === userId ? { ...m, role } : m))
+    setRoleBusy(null)
+  }
+
+  async function createInvite() {
+    const email = inviteEmail.trim().toLowerCase()
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { setError('Correo inválido.'); return }
+    if (!orgId || !myId) return
+    setCreating(true); setError(null)
+    const token = crypto.randomUUID()
+    const { data, error: insErr } = await supabase.from('invitations').insert({
+      organization_id: orgId, email, role: inviteRole, token, created_by: myId,
+    }).select('id, email, role, token, expires_at').single()
+    if (insErr) { setError('Error al crear invitación: ' + insErr.message); setCreating(false); return }
+    setInvites(prev => [data as any, ...prev])
+    setInviteEmail('')
+    setCreating(false)
+    copyLink((data as any).token)   // deja el enlace listo en el portapapeles
+  }
+
+  async function revokeInvite(id: string) {
+    const { error: delErr } = await supabase.from('invitations').delete().eq('id', id)
+    if (delErr) { setError('Error al revocar: ' + delErr.message); return }
+    setInvites(prev => prev.filter(i => i.id !== id))
+  }
+
+  if (loading) return <div style={s.formCard}><p style={{ color: '#94A3B8', fontSize: '0.875rem' }}>Cargando...</p></div>
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      {error && (
+        <div style={{ background: '#FFF5F5', border: '1px solid #FECACA', borderRadius: '8px', padding: '0.6rem 0.875rem', color: '#EF4444', fontSize: '0.8rem' }}>
+          {error}
+        </div>
+      )}
+
+      {/* Miembros */}
+      <div style={s.formCard}>
+        <div style={s.formTitle}>Miembros ({members.length})</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {members.map(m => (
+            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 0.75rem', borderRadius: '9px', border: '1px solid #F1F5F9', background: '#F8FAFC' }}>
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #3B82F6, #2563EB)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}>
+                {(m.full_name?.[0] ?? m.email[0]).toUpperCase()}
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: '0.85rem', color: '#0F172A', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {m.full_name || m.email}{m.id === myId && <span style={{ color: '#94A3B8', fontWeight: 500 }}> · tú</span>}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>{m.email}</div>
+              </div>
+              {m.id === myId ? (
+                <span style={{ fontSize: '0.78rem', color: '#64748B', fontWeight: 600, padding: '0.35rem 0.6rem' }}>{ROLE_LABELS[m.role] ?? m.role}</span>
+              ) : (
+                <select value={m.role} disabled={roleBusy === m.id}
+                  onChange={e => changeRole(m.id, e.target.value)}
+                  style={{ ...s.btnOutline, padding: '0.35rem 0.5rem', cursor: 'pointer' }}>
+                  {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                </select>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Invitaciones */}
+      <div style={s.formCard}>
+        <div style={s.formTitle}>Invitar a un nuevo usuario</div>
+        <p style={{ color: '#64748B', fontSize: '0.82rem', marginTop: '-0.5rem', marginBottom: '1rem' }}>
+          Se genera un enlace que puedes enviar por el medio que prefieras. Vence en 7 días.
+        </p>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ flex: 1, minWidth: '200px', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <label style={{ color: '#64748B', fontSize: '0.78rem', fontWeight: 500 }}>Correo</label>
+            <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
+              placeholder="persona@empresa.com"
+              style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #E2E8F0', fontSize: '0.875rem', outline: 'none' }} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <label style={{ color: '#64748B', fontSize: '0.78rem', fontWeight: 500 }}>Rol</label>
+            <select value={inviteRole} onChange={e => setInviteRole(e.target.value)}
+              style={{ ...s.btnOutline, padding: '0.5rem', cursor: 'pointer' }}>
+              {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+            </select>
+          </div>
+          <button onClick={createInvite} disabled={creating} style={s.btnPrimary}>
+            {creating ? 'Creando…' : 'Crear invitación'}
+          </button>
+        </div>
+
+        {invites.length > 0 && (
+          <div style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748B' }}>Pendientes</div>
+            {invites.map(i => (
+              <div key={i.id} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.55rem 0.75rem', borderRadius: '9px', border: '1px solid #F1F5F9', background: '#F8FAFC', flexWrap: 'wrap' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.email}</div>
+                  <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>{ROLE_LABELS[i.role] ?? i.role}{i.expires_at && ` · vence ${new Date(i.expires_at).toLocaleDateString('es-DO', { day: '2-digit', month: 'short' })}`}</div>
+                </div>
+                <button onClick={() => copyLink(i.token)} style={{ ...s.btnOutline, padding: '0.35rem 0.7rem', fontSize: '0.78rem' }}>
+                  {copied === i.token ? '✓ Copiado' : 'Copiar enlace'}
+                </button>
+                <button onClick={() => revokeInvite(i.id)} style={{ padding: '0.35rem 0.7rem', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', fontSize: '0.78rem', fontWeight: 500, cursor: 'pointer' }}>
+                  Revocar
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
