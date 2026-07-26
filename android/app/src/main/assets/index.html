@@ -1653,7 +1653,7 @@
           // Si llegamos aquí es porque el query a Supabase tuvo éxito,
           // lo que prueba conectividad real. No necesitamos probeConn().
           var resetAt = r.data.reset_requested_at || null
-          if (resetAt && resetAt > playerBootedAt) {
+          if (resetAt && new Date(resetAt) > new Date(playerBootedAt)) {
             dlog('Reset remoto detectado → ejecutando resync suave', 'ok')
             sb.from('screens').update({ reset_requested_at: null }).eq('id', screenData.id)
             if (!isOnline) setConnStatus(true)
