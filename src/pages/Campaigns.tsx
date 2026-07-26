@@ -7,6 +7,7 @@ import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { isResting, scheduleRangeLabel, campaignDateState } from '../lib/dailySchedule'
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
+import { hasRole } from '../lib/roles'
 import CampaignReport from './CampaignReport'
 
 type Campaign = {
@@ -52,6 +53,8 @@ const DEFAULT_FREQ = 0 // 0 = ∞ Ilimitado (matches zone editor default)
 
 export default function Campaigns({ initialReportId }: { initialReportId?: string | null }) {
   const { profile } = useAuth()
+  // Solo admin y operador gestionan campañas; vendedor y cliente son de lectura.
+  const canManage = hasRole(profile?.role, 'admin', 'operator')
   const [stats, setStats]         = useState<CampaignStat[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [media, setMedia]         = useState<MediaItem[]>([])
@@ -513,15 +516,17 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input style={s.searchInput} placeholder="Buscar por campaña o cliente..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <button style={s.btnPrimary} onClick={openCreate}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Nueva campaña
-          </button>
+          {canManage && (
+            <button style={s.btnPrimary} onClick={openCreate}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Nueva campaña
+            </button>
+          )}
         </div>
       </div>
 
       {/* Wizard modal */}
-      {wizardOpen && createPortal(
+      {wizardOpen && canManage && createPortal(
         <div className="backdrop" style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setWizardOpen(false) }}>
           <div className="modal-pop" style={s.modalCard}>
             <div style={s.modalHeader}>
@@ -1104,13 +1109,17 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                       Reporte
                     </button>
-                    <button onClick={() => openEdit(camp)} style={s.btnAct}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                      Editar
-                    </button>
-                    <button onClick={() => deleteCampaign(camp.id, camp.name)} style={s.btnDel}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-                    </button>
+                    {canManage && (
+                      <>
+                        <button onClick={() => openEdit(camp)} style={s.btnAct}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                          Editar
+                        </button>
+                        <button onClick={() => deleteCampaign(camp.id, camp.name)} style={s.btnDel}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

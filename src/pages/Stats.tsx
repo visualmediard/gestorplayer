@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../auth/AuthContext'
+import { hasRole } from '../lib/roles'
 import { resolveMediaUrl } from '../lib/mediaUrl'
 import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
 import { notifyStorageChanged } from '../lib/storage'
@@ -38,6 +40,9 @@ function getThumbUrl(storage_path: string | null | undefined) {
 }
 
 export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string) => void }) {
+  const { profile } = useAuth()
+  // Solo admin y operador pueden borrar registros de estadísticas.
+  const canDelete = hasRole(profile?.role, 'admin', 'operator')
   const [rows, setRows] = useState<DisplayRow[]>([])
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
@@ -299,13 +304,15 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
                           Ver reporte
                         </button>
-                        <button
-                          onClick={() => handleDeleteStat(row)}
-                          disabled={deleting === row.content_id}
-                          title="Eliminar de estadísticas"
-                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', opacity: deleting === row.content_id ? 0.5 : 1 }}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-                        </button>
+                        {canDelete && (
+                          <button
+                            onClick={() => handleDeleteStat(row)}
+                            disabled={deleting === row.content_id}
+                            title="Eliminar de estadísticas"
+                            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', cursor: 'pointer', opacity: deleting === row.content_id ? 0.5 : 1 }}>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

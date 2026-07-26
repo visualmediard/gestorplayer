@@ -17,6 +17,13 @@ import logoNegro from './assets/logo/logo-negro.png'
 
 type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns' | 'settings'
 
+// Página inicial según rol: el cliente no tiene "Inicio" en su menú, así que
+// aterriza directo en Campañas. El resto arranca en el dashboard.
+function getInitialPage(role: string | null | undefined): Page {
+  if (role === 'client') return 'campaigns'
+  return 'home'
+}
+
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
   useEffect(() => {
@@ -40,6 +47,7 @@ function useIsTablet() {
 function Gate() {
   const { session, profile, loading, signOut } = useAuth()
   const [page, setPage] = useState<Page>('home')
+  const [pageInit, setPageInit] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [pageKey, setPageKey] = useState(0)
@@ -47,6 +55,15 @@ function Gate() {
   const [campaignReportId, setCampaignReportId] = useState<string | null>(null)
   const isMobile = useIsMobile()
   const isTablet = useIsTablet()
+
+  // Al cargar el perfil por primera vez, ajusta la página inicial según el rol
+  // (una sola vez, para no interferir con la navegación posterior del usuario).
+  useEffect(() => {
+    if (!pageInit && profile?.role) {
+      setPage(getInitialPage(profile.role))
+      setPageInit(true)
+    }
+  }, [profile, pageInit])
 
   // Tras autenticarse, si venía de un enlace /pair (u otra ruta protegida)
   // que guardó un destino de retorno, lo enviamos allí.

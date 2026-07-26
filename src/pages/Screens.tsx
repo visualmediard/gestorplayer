@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../auth/AuthContext'
+import { hasRole } from '../lib/roles'
 import ScreenStage from '../components/ScreenStage'
 
 type Screen = {
@@ -97,6 +99,9 @@ function OccupancyRing({ used, capacity }: { used: number; capacity: number }) {
 }
 
 export default function Screens() {
+  const { profile } = useAuth()
+  // Vendedor solo ve la lista y la ocupación (lectura); admin/operador gestionan.
+  const canManage = hasRole(profile?.role, 'admin', 'operator')
   const [screens, setScreens] = useState<Screen[]>([])
   const [adCounts, setAdCounts] = useState<AdCount[]>([])
   const [loading, setLoading] = useState(true)
@@ -250,7 +255,7 @@ export default function Screens() {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input style={{ border: 'none', outline: 'none', fontSize: '0.875rem', color: '#0F172A', width: '100%', background: 'transparent' }} placeholder="Buscar pantalla..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <button style={s.btnPrimary} onClick={() => setShowForm(!showForm)}>+ Nueva pantalla</button>
+          {canManage && <button style={s.btnPrimary} onClick={() => setShowForm(!showForm)}>+ Nueva pantalla</button>}
         </div>
       </div>
 
@@ -329,33 +334,44 @@ export default function Screens() {
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', color: '#059669' }}>
                           🔒 Dispositivo vinculado
                         </span>
-                        <button
-                          onClick={() => handleRelease(sc)}
-                          disabled={releasing === sc.id}
-                          title="Borra la vinculación para que otro equipo pueda usar este token"
-                          style={{ background: '#FFF5F5', border: '1px solid #FECACA', borderRadius: '4px', color: '#EF4444', fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer', opacity: releasing === sc.id ? 0.6 : 1 }}
-                        >
-                          {releasing === sc.id ? 'Liberando…' : 'Liberar'}
-                        </button>
+                        {canManage && (
+                          <button
+                            onClick={() => handleRelease(sc)}
+                            disabled={releasing === sc.id}
+                            title="Borra la vinculación para que otro equipo pueda usar este token"
+                            style={{ background: '#FFF5F5', border: '1px solid #FECACA', borderRadius: '4px', color: '#EF4444', fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer', opacity: releasing === sc.id ? 0.6 : 1 }}
+                          >
+                            {releasing === sc.id ? 'Liberando…' : 'Liberar'}
+                          </button>
+                        )}
                       </div>
                     )}
 
-                    <div style={{ marginTop: '0.3rem' }}>
-                      {editingHours === sc.id ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          <input type="number" min={1} max={24} value={hoursValue} onChange={e => setHoursValue(+e.target.value)}
-                            style={{ ...s.input, width: '55px', padding: '0.2rem 0.4rem', fontSize: '0.8rem' }} />
-                          <span style={{ color: '#94A3B8', fontSize: '0.72rem' }}>h/día</span>
-                          <button style={{ ...s.btnPrimary, padding: '0.2rem 0.5rem', fontSize: '0.72rem' }} onClick={() => handleSaveHours(sc.id)}>OK</button>
-                          <button style={{ ...s.btnOutline, padding: '0.2rem 0.5rem', fontSize: '0.72rem' }} onClick={() => setEditingHours(null)}>✕</button>
-                        </div>
-                      ) : (
-                        <button onClick={() => { setEditingHours(sc.id); setHoursValue(sc.operating_hours) }}
-                          style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '20px', color: '#059669', fontSize: '0.7rem', padding: '2px 9px', cursor: 'pointer' }}>
+                    {canManage ? (
+                      <div style={{ marginTop: '0.3rem' }}>
+                        {editingHours === sc.id ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <input type="number" min={1} max={24} value={hoursValue} onChange={e => setHoursValue(+e.target.value)}
+                              style={{ ...s.input, width: '55px', padding: '0.2rem 0.4rem', fontSize: '0.8rem' }} />
+                            <span style={{ color: '#94A3B8', fontSize: '0.72rem' }}>h/día</span>
+                            <button style={{ ...s.btnPrimary, padding: '0.2rem 0.5rem', fontSize: '0.72rem' }} onClick={() => handleSaveHours(sc.id)}>OK</button>
+                            <button style={{ ...s.btnOutline, padding: '0.2rem 0.5rem', fontSize: '0.72rem' }} onClick={() => setEditingHours(null)}>✕</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => { setEditingHours(sc.id); setHoursValue(sc.operating_hours) }}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '20px', color: '#059669', fontSize: '0.7rem', padding: '2px 9px', cursor: 'pointer' }}>
+                            ⏱ {sc.operating_hours}h/día
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      // Vendedor: horas en solo lectura (sin control de edición).
+                      <div style={{ marginTop: '0.3rem' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '20px', color: '#059669', fontSize: '0.7rem', padding: '2px 9px' }}>
                           ⏱ {sc.operating_hours}h/día
-                        </button>
-                      )}
-                    </div>
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Occupancy ring */}
@@ -364,7 +380,7 @@ export default function Screens() {
                   </div>
                 </div>
 
-                {assigningScreen === sc.id && (
+                {canManage && assigningScreen === sc.id && (
                   <div style={{ padding: '0.6rem 1.25rem', borderTop: '1px solid #F1F5F9', display: 'flex', gap: '0.5rem' }}>
                     <select style={{ ...s.input, flex: 1, fontSize: '0.8rem' }} value={selectedProgram} onChange={e => setSelectedProgram(e.target.value)}>
                       <option value="">— Sin programa —</option>
@@ -375,39 +391,45 @@ export default function Screens() {
                   </div>
                 )}
 
-                <div style={{ padding: '0 1.25rem 0.5rem' }}>
-                  <button
-                    style={s.btnPlayer}
-                    onClick={() => openEdit(sc)}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                    Editar esta pantalla
-                  </button>
-                </div>
+                {canManage && (
+                  <div style={{ padding: '0 1.25rem 0.5rem' }}>
+                    <button
+                      style={s.btnPlayer}
+                      onClick={() => openEdit(sc)}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                      Editar esta pantalla
+                    </button>
+                  </div>
+                )}
 
                 <div style={s.cardActions}>
-                  <button style={s.btnAct} onClick={() => { setAssigningScreen(sc.id); setSelectedProgram(sc.current_program_id ?? '') }}>Asignar programa</button>
+                  {canManage && <button style={s.btnAct} onClick={() => { setAssigningScreen(sc.id); setSelectedProgram(sc.current_program_id ?? '') }}>Asignar programa</button>}
                   <button style={s.btnAct} onClick={() => setPreview(sc)} title="Ver una captura de lo que se está reproduciendo">
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                       Captura
                     </span>
                   </button>
-                  <button
-                    style={{ ...s.btnAct, ...(resetSent === sc.id ? { color: '#10B981', border: '1px solid #10B981' } : {}) }}
-                    onClick={() => handleReset(sc.id)}
-                    disabled={resetSent === sc.id}
-                    title="Fuerza una re-sincronización remota del reproductor">
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                      {resetSent === sc.id
-                        ? <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Señal enviada</>
-                        : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Reiniciar</>
-                      }
-                    </span>
-                  </button>
-                  <button style={s.btnDel} onClick={() => handleDelete(sc.id)}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-                    Eliminar
-                  </button>
+                  {canManage && (
+                    <>
+                      <button
+                        style={{ ...s.btnAct, ...(resetSent === sc.id ? { color: '#10B981', border: '1px solid #10B981' } : {}) }}
+                        onClick={() => handleReset(sc.id)}
+                        disabled={resetSent === sc.id}
+                        title="Fuerza una re-sincronización remota del reproductor">
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                          {resetSent === sc.id
+                            ? <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Señal enviada</>
+                            : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Reiniciar</>
+                          }
+                        </span>
+                      </button>
+                      <button style={s.btnDel} onClick={() => handleDelete(sc.id)}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                        Eliminar
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             )
