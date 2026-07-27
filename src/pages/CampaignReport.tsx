@@ -41,6 +41,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
   const [camp, setCamp] = useState<Campaign | null>(null)
   const [details, setDetails] = useState<Detail[]>([])
   const [orgName, setOrgName] = useState('')
+  const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   // Última reproducción de la campaña (para la 4ª tarjeta cuando ya finalizó).
   const [lastPlay, setLastPlay] = useState<string | null>(null)
@@ -68,8 +69,8 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     ])
     if (c) setCamp(c as Campaign)
     if (pd?.organization_id) {
-      const { data: org } = await supabase.from('organizations').select('name').eq('id', pd.organization_id).single()
-      if (org) setOrgName(org.name)
+      const { data: org } = await supabase.from('organizations').select('name, logo_url').eq('id', pd.organization_id).single()
+      if (org) { setOrgName(org.name); setLogoUrl(org.logo_url ?? null) }
     }
 
     // Zone/screen/play data from view — aggregate per zone to avoid duplicates
@@ -223,57 +224,122 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     range_plays: playsByZone.get(`${d.screen_name ?? '—'}|${d.zone_name}`) ?? 0,
   }))
 
-  function downloadPDF() {
+  // Trae el logo de la organización como data URL vía Edge Function (que lo
+  // descarga en el servidor, evitando el bloqueo CORS del dominio de R2).
+  async function fetchLogoDataUrl(): Promise<string | null> {
+    try {
+      const { data, error } = await supabase.functions.invoke('get-org-logo')
+      if (error || !data?.dataUrl) return null
+      return data.dataUrl as string
+    } catch { return null }
+  }
+
+  // Dimensiones de una imagen a partir de su data URL (sin CORS).
+  function imgDims(dataUrl: string): Promise<{ w: number; h: number }> {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+      img.onerror = reject
+      img.src = dataUrl
+    })
+  }
+
+  async function downloadPDF() {
     if (!camp) return
     const doc = new jsPDF()
     const pageW = doc.internal.pageSize.getWidth()
 
-    // Header bar
-    doc.setFillColor(37, 99, 235)
-    doc.rect(0, 0, pageW, 30, 'F')
-    doc.setTextColor(255, 255, 255)
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(20)
-    doc.text('GestPlayer', 14, 15)
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(10)
-    doc.text(orgName || 'Digital Signage Platform', 14, 22)
+    // Header con el fondo azul claro de la app (#F0F4F8), con una línea sutil
+    // inferior para separarlo del contenido.
+    const headerH = 32
+    doc.setFillColor(240, 244, 248)
+    doc.rect(0, 0, pageW, headerH, 'F')
+    doc.setDrawColor(226, 232, 240)
+    doc.line(0, headerH, pageW, headerH)
 
-    // Report title
+    // Logo de la organización centrado (reemplaza el texto "GestPlayer").
+    const logoData = logoUrl ? await fetchLogoDataUrl() : null
+    if (logoData) {
+      try {
+        const { w, h } = await imgDims(logoData)
+        const fmt = logoData.startsWith('data:image/png') ? 'PNG'
+          : logoData.startsWith('data:image/webp') ? 'WEBP' : 'JPEG'
+        const ratio = w / h
+        let dh = 18, dw = dh * ratio
+        if (dw > 90) { dw = 90; dh = dw / ratio }
+        doc.addImage(logoData, fmt, (pageW - dw) / 2, (headerH - dh) / 2, dw, dh)
+      } catch { /* si falla el render del logo, se deja el header limpio */ }
+    } else {
+      // Sin logo: nombre de la organización centrado (texto oscuro sobre claro).
+      doc.setTextColor(15, 23, 42)
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(18)
+      doc.text(orgName || 'GestPlayer', pageW / 2, headerH / 2 + 2, { align: 'center' })
+    }
+
+    const pageH = doc.internal.pageSize.getHeight()
+
+    // ── Título + nombre de la campaña ──
     doc.setTextColor(15, 23, 42)
     doc.setFont('helvetica', 'bold')
-    doc.setFontSize(16)
-    doc.text('REPORTE DE CAMPAÑA', 14, 45)
-
-    doc.setDrawColor(226, 232, 240)
-    doc.line(14, 48, pageW - 14, 48)
-
-    // Meta
+    doc.setFontSize(17)
+    doc.text('Reporte de campaña', 14, 46)
     doc.setFont('helvetica', 'normal')
-    doc.setFontSize(10)
+    doc.setFontSize(11)
     doc.setTextColor(100, 116, 139)
+    doc.text(camp.name, 14, 53)
 
-    let y = 58
+    // ── Tarjetas de resumen ──
+    const screenCount = new Set(detailRows.map(d => d.screen_name ?? '—')).size
+    const rangeDays = Math.max(1, Math.round((new Date(toIso).getTime() - new Date(fromIso).getTime()) / 864e5) + 1)
+    const avgPerDay = Math.round(totalPlays / rangeDays)
+
+    const cardY = 60, cardH = 22, gap = 5
+    const cardW = (pageW - 28 - 2 * gap) / 3
+    const cards: { label: string; value: string; color: [number, number, number] }[] = [
+      { label: 'REPRODUCCIONES', value: totalPlays.toLocaleString(), color: [37, 99, 235] },
+      { label: 'PANTALLAS',      value: String(screenCount),          color: [16, 185, 129] },
+      { label: 'PROMEDIO / DÍA', value: avgPerDay.toLocaleString(),   color: [139, 92, 246] },
+    ]
+    cards.forEach((c, i) => {
+      const x = 14 + i * (cardW + gap)
+      doc.setFillColor(248, 250, 252)
+      doc.setDrawColor(226, 232, 240)
+      doc.roundedRect(x, cardY, cardW, cardH, 2.5, 2.5, 'FD')
+      // Franja de color a la izquierda de la tarjeta.
+      doc.setFillColor(c.color[0], c.color[1], c.color[2])
+      doc.roundedRect(x, cardY, 1.6, cardH, 0.8, 0.8, 'F')
+      doc.setTextColor(c.color[0], c.color[1], c.color[2])
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(16)
+      doc.text(c.value, x + 6, cardY + 11)
+      doc.setTextColor(148, 163, 184)
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5)
+      doc.text(c.label, x + 6, cardY + 17)
+    })
+
+    // ── Detalles ──
+    let y = cardY + cardH + 13
+    doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
+    doc.text('Detalles', 14, y)
+    y += 6
     const line = (label: string, value: string) => {
-      doc.setFont('helvetica', 'bold'); doc.setTextColor(15, 23, 42)
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(100, 116, 139)
       doc.text(label, 14, y)
-      doc.setFont('helvetica', 'normal'); doc.setTextColor(71, 85, 105)
-      doc.text(value, 55, y)
-      y += 7
+      doc.setFont('helvetica', 'normal'); doc.setTextColor(30, 41, 59)
+      doc.text(value, 50, y)
+      y += 6.5
     }
-    line('Campaña:',  camp.name)
-    line('Cliente:',  camp.client_name ?? '—')
-    line('Período:',  `${new Date(camp.starts_at).toLocaleDateString('es-DO')} - ${new Date(camp.ends_at).toLocaleDateString('es-DO')}`)
-    // Rango del reporte: las cifras de abajo corresponden solo a este rango.
-    line('Reporte del:', `${fmtDay(fromIso)} al ${fmtDay(toIso)}`)
+    line('Cliente', camp.client_name ?? '—')
+    line('Período', `${new Date(camp.starts_at).toLocaleDateString('es-DO')} – ${new Date(camp.ends_at).toLocaleDateString('es-DO')}`)
+    // Rango del reporte: las cifras de arriba corresponden solo a este rango.
+    line('Reporte del', `${fmtDay(fromIso)} al ${fmtDay(toIso)}`)
     if (camp.daily_start_time && camp.daily_end_time) {
-      line('Horario:', `${camp.daily_start_time.slice(0,5)} - ${camp.daily_end_time.slice(0,5)}`)
+      line('Horario', `${camp.daily_start_time.slice(0, 5)} – ${camp.daily_end_time.slice(0, 5)}`)
     }
-    line('Estado:',   camp.status.toUpperCase())
+    line('Estado', camp.status.toUpperCase())
 
-    // Table
+    // ── Tabla de reproducciones por pantalla ──
     autoTable(doc, {
-      startY: y + 6,
+      startY: y + 4,
       head: [['Pantalla', 'Publicidad', 'Zona', 'Rep/día', 'Reproducciones']],
       body: detailRows.map(d => [
         d.screen_name ?? '—',
@@ -283,29 +349,37 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
         d.range_plays.toLocaleString(),
       ]),
       headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold', fontSize: 9 },
-      bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+      bodyStyles: { fontSize: 9, textColor: [30, 41, 59] },
       alternateRowStyles: { fillColor: [248, 250, 252] },
-      styles: { cellPadding: 3 },
+      columnStyles: {
+        3: { halign: 'center' },
+        4: { halign: 'right', fontStyle: 'bold', textColor: [37, 99, 235] },
+      },
+      styles: { cellPadding: 3.5, lineColor: [237, 242, 247], lineWidth: 0.1 },
       margin: { left: 14, right: 14 },
     })
 
-    const finalY = (doc as any).lastAutoTable.finalY + 8
+    // ── Total destacado ──
+    let finalY = (doc as any).lastAutoTable.finalY + 8
+    if (finalY + 20 > pageH - 20) { doc.addPage(); finalY = 20 }
+    doc.setFillColor(37, 99, 235)
+    doc.roundedRect(14, finalY, pageW - 28, 14, 2.5, 2.5, 'F')
+    doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
+    doc.text('TOTAL REPRODUCCIONES', 20, finalY + 9)
+    doc.setFontSize(14)
+    doc.text(totalPlays.toLocaleString(), pageW - 20, finalY + 9.5, { align: 'right' })
 
-    // Total box
-    doc.setFillColor(239, 246, 255)
-    doc.rect(14, finalY, pageW - 28, 12, 'F')
-    doc.setTextColor(37, 99, 235); doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
-    doc.text('TOTAL REPRODUCCIONES:', 18, finalY + 8)
-    doc.setFontSize(12)
-    doc.text(totalPlays.toLocaleString(), pageW - 18, finalY + 8, { align: 'right' })
-
-    // Footer
-    const pageH = doc.internal.pageSize.getHeight()
-    doc.setDrawColor(226, 232, 240)
-    doc.line(14, pageH - 18, pageW - 14, pageH - 18)
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(148, 163, 184)
-    doc.text(`Generado: ${new Date().toLocaleDateString('es-DO')} ${new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' })}`, 14, pageH - 12)
-    doc.text('Powered by GestPlayer', pageW - 14, pageH - 12, { align: 'right' })
+    // ── Footer con número de página (en todas las páginas) ──
+    const pageCount = (doc as any).internal.getNumberOfPages()
+    const genStamp = `Generado: ${new Date().toLocaleDateString('es-DO')} ${new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' })}`
+    for (let p = 1; p <= pageCount; p++) {
+      doc.setPage(p)
+      doc.setDrawColor(226, 232, 240)
+      doc.line(14, pageH - 16, pageW - 14, pageH - 16)
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(148, 163, 184)
+      doc.text(genStamp, 14, pageH - 10)
+      doc.text(`${orgName || 'GestPlayer'}  ·  Página ${p} de ${pageCount}`, pageW - 14, pageH - 10, { align: 'right' })
+    }
 
     doc.save(`reporte-${camp.name.replace(/\s+/g, '-').toLowerCase()}.pdf`)
   }
