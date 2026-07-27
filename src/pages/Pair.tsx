@@ -26,7 +26,7 @@ export default function Pair() {
    ══════════════════════════════════════════════════════════════════ */
 
 type ScreenRow = { id: string; name: string; location: string | null; organization_id: string | null }
-type Phase = 'loading' | 'invalid' | 'confirm' | 'linking' | 'wrong-org' | 'error' | 'done'
+type Phase = 'loading' | 'invalid' | 'confirm' | 'linking' | 'wrong-org' | 'not-admin' | 'error' | 'done'
 
 function PairByToken({ token }: { token: string }) {
   const { session, loading: authLoading } = useAuth()
@@ -59,9 +59,12 @@ function PairByToken({ token }: { token: string }) {
       setScreen(sc as ScreenRow)
 
       const { data: prof } = await supabase
-        .from('profiles').select('organization_id').eq('id', session.user.id).single()
+        .from('profiles').select('organization_id, role').eq('id', session.user.id).single()
       const oid = prof?.organization_id ?? null
       setUserOrgId(oid)
+      if (cancelled) return
+      // Solo un admin puede vincular pantallas.
+      if (prof?.role !== 'admin') { setPhase('not-admin'); return }
       if (oid) {
         const { data: org } = await supabase.from('organizations').select('name').eq('id', oid).single()
         if (org?.name) setOrgName(org.name)
@@ -116,6 +119,14 @@ function PairByToken({ token }: { token: string }) {
     </Shell>
   )
 
+  if (phase === 'not-admin') return (
+    <Shell>
+      <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔒</div>
+      <h2 style={titleStyle}>Solo administradores</h2>
+      <p style={subStyle}>Solo un administrador de la organización puede vincular pantallas.</p>
+    </Shell>
+  )
+
   if (phase === 'error') return (
     <Shell>
       <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>⚠️</div>
@@ -167,6 +178,7 @@ function PairByToken({ token }: { token: string }) {
 type Screen = { id: string; name: string; location: string | null; device_token: string | null }
 
 function PairByCode({ code }: { code: string }) {
+  const { session, profile, loading: authLoading } = useAuth()
   const [screens, setScreens] = useState<Screen[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
@@ -175,23 +187,42 @@ function PairByCode({ code }: { code: string }) {
   const [invalid, setInvalid] = useState(false)
 
   useEffect(() => {
+    if (authLoading) return
     if (!code) { setInvalid(true); setLoading(false); return }
+
+    // Exige login: sin sesión corre como anon y podría ver pantallas de otras
+    // organizaciones. Al autenticarse, el Gate devuelve a este mismo enlace.
+    if (!session) {
+      localStorage.setItem('post_login_redirect', '/pair?code=' + encodeURIComponent(code))
+      window.location.replace('/')
+      return
+    }
 
     supabase.from('device_pairings').select('code').eq('code', code).single()
       .then(({ error: e }) => {
         if (e) setInvalid(true)
+        // Con sesión + RLS "org manages screens", la lista queda limitada a la
+        // organización del usuario.
         return supabase.from('screens').select('id, name, location, device_token').order('name')
       })
       .then(({ data }) => { setScreens(data || []); setLoading(false) })
-  }, [code])
+  }, [authLoading, session, code])
 
-  async function pair(token: string, screenName: string) {
-    if (!token) return
+  // Vincula vía RPC: valida rol admin + que la pantalla sea de la org del usuario.
+  async function pair(screenId: string, screenName: string) {
     setSaving(screenName)
-    const { error: e } = await supabase.from('device_pairings').update({ token }).eq('code', code)
+    const { error: e } = await supabase.rpc('pair_screen_by_code', { p_code: code, p_screen_id: screenId })
     if (e) { setError(e.message); setSaving(null); return }
     setDone(true)
   }
+
+  if (profile && profile.role !== 'admin') return (
+    <Shell>
+      <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🔒</div>
+      <h2 style={titleStyle}>Solo administradores</h2>
+      <p style={subStyle}>Solo un administrador de la organización puede vincular pantallas.</p>
+    </Shell>
+  )
 
   if (loading) return (
     <Shell><div style={spinnerStyle} /><p style={{ color: '#64748B', marginTop: '1rem' }}>Verificando código...</p></Shell>
@@ -236,7 +267,7 @@ function PairByCode({ code }: { code: string }) {
           {screens.map(s => (
             <button
               key={s.id}
-              onClick={() => pair(s.device_token || '', s.name)}
+              onClick={() => pair(s.id, s.name)}
               disabled={saving !== null || !s.device_token}
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
