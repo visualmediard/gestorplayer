@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { supabase } from '../lib/supabase'
 import logoNegro from '../assets/logo/logo-negro.png'
@@ -10,6 +10,17 @@ import logoNegro from '../assets/logo/logo-negro.png'
 export default function Invite() {
   const { session, loading } = useAuth()
   const token = new URLSearchParams(window.location.search).get('token')
+
+  const [org, setOrg] = useState<{ name: string; logoUrl: string | null } | null>(null)
+
+  // Branding de la organización que invitó (vía RPC, funciona sin sesión).
+  useEffect(() => {
+    if (!token) return
+    supabase.rpc('invitation_org_info', { p_token: token }).then(({ data }) => {
+      const row = Array.isArray(data) ? data[0] : data
+      if (row?.org_name) setOrg({ name: row.org_name, logoUrl: row.logo_url ?? null })
+    })
+  }, [token])
 
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
@@ -48,6 +59,28 @@ export default function Invite() {
     await accept(fullName.trim())
   }
 
+  // Encabezado: logo de la empresa (prominente) o su nombre, con la atribución
+  // "Plataforma GestPlayer" debajo. Sin org conocida → logo GestPlayer.
+  function brandHeader() {
+    if (org?.logoUrl) {
+      return (
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <img src={org.logoUrl} alt={org.name} style={{ maxHeight: '56px', maxWidth: '75%', objectFit: 'contain' }} />
+          <div style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '0.45rem' }}>Plataforma GestPlayer</div>
+        </div>
+      )
+    }
+    if (org?.name) {
+      return (
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0F172A' }}>{org.name}</div>
+          <div style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '0.25rem' }}>Plataforma GestPlayer</div>
+        </div>
+      )
+    }
+    return <div style={s.logoWrap}><img src={logoNegro} alt="GestPlayer" style={{ height: '44px' }} /><span style={s.betaBadge}>BETA</span></div>
+  }
+
   if (loading) {
     return (
       <div style={s.page}><div style={s.card}>
@@ -75,7 +108,7 @@ export default function Invite() {
   if (session) {
     return (
       <div style={s.page}><div style={s.card}>
-        <div style={s.logoWrap}><img src={logoNegro} alt="GestPlayer" style={{ height: '44px' }} /><span style={s.betaBadge}>BETA</span></div>
+        {brandHeader()}
         <div style={s.divider} />
         <h2 style={s.heading}>Aceptar invitación</h2>
         <p style={s.subheading}>Te unirás a la organización que te invitó con la sesión actual.</p>
@@ -90,7 +123,7 @@ export default function Invite() {
   // Sin sesión: registro.
   return (
     <div style={s.page}><div style={s.card}>
-      <div style={s.logoWrap}><img src={logoNegro} alt="GestPlayer" style={{ height: '44px' }} /><span style={s.betaBadge}>BETA</span></div>
+      {brandHeader()}
       <div style={s.divider} />
       <h2 style={s.heading}>Aceptar invitación</h2>
       <p style={s.subheading}>Crea tu cuenta para unirte a la organización que te invitó</p>
