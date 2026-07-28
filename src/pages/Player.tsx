@@ -12,8 +12,8 @@ const supabase = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } }
 )
 
-const HEARTBEAT_MS = 30_000      // ping "online" every 30s
-const RELOAD_MS = 60_000         // re-check the assigned program every 60s
+const HEARTBEAT_MS = 30_000      // ping "online" cada 30s (igual que Android)
+const POLL_MS = 15_000           // poll de publicación/ajustes cada 15s (igual que Android)
 
 // ─────────────────────────────────────────────────────────────────────────
 //  BATCHING DE REPRODUCCIONES — misma lógica que player/index.html:
@@ -131,6 +131,20 @@ function getWebDeviceId(): string {
   } catch { return '' }
 }
 
+// Ventana operativa con hora LOCAL del dispositivo (paridad con Android). Sin
+// start/end → siempre activa. Soporta cruce de medianoche (ej. 06:00 a 02:00).
+function isWithinOperatingHours(start: string | null, end: string | null): boolean {
+  if (!start || !end) return true
+  const now = new Date()
+  const cur = now.getHours() * 60 + now.getMinutes()
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  const s = sh * 60 + sm
+  const e = eh * 60 + em
+  if (s === e) return true
+  return s < e ? (cur >= s && cur < e) : (cur >= s || cur < e)
+}
+
 export default function Player() {
   const token = new URLSearchParams(window.location.search).get('token') || ''
   const [status, setStatus] = useState<'loading' | 'no-token' | 'invalid' | 'no-program' | 'playing' | 'locked' | 'released'>('loading')
@@ -139,48 +153,79 @@ export default function Player() {
   // true solo cuando este navegador confirmó ser el dueño del token (reclamó
   // la pantalla o su huella coincide). Evita desparearse sin ser dueño.
   const claimedRef = useRef(false)
+  // Paridad con Android: disparador único de re-sync sin recargar + horario.
+  const bootedAtRef = useRef(new Date().toISOString())
+  const lastPublishedRef = useRef<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [withinHours, setWithinHours] = useState(true)
+
+  // Fuerza un re-fetch en ScreenStage SOLO si el published_at es nuevo. El poll
+  // de 15s y el evento realtime comparan ambos contra esta misma referencia,
+  // así que el segundo en llegar con el mismo valor no dispara nada (sin doble
+  // carga). La primera lectura solo registra el valor (ScreenStage ya cargó).
+  function bumpIfNewPublish(pub: string | null) {
+    if (!pub) return
+    if (lastPublishedRef.current === null) { lastPublishedRef.current = pub; return }
+    if (pub !== lastPublishedRef.current) {
+      lastPublishedRef.current = pub
+      setReloadKey(k => k + 1)
+    }
+  }
 
   async function checkScreen() {
     if (!token) { setStatus('no-token'); return }
-    const { data: sc } = await supabase.from('screens')
-      .select('id, name, current_program_id, device_fingerprint').eq('device_token', token).maybeSingle()
-    if (!sc) { setStatus('invalid'); return }
+    try {
+      const { data: sc } = await supabase.from('screens')
+        .select('id, name, current_program_id, device_fingerprint, operating_start, operating_end, operating_hours, reset_requested_at')
+        .eq('device_token', token).maybeSingle()
+      if (!sc) { setStatus('invalid'); return }
 
-    // ── Device locking: se evalúa ANTES de arrancar reproducción ──
-    // El check corre dentro de checkScreen (cada 60s, consulta que YA
-    // existía — cero requests periódicos nuevos).
-    const myId = getWebDeviceId()
-    const dbFp = (sc.device_fingerprint ?? null) as string | null
-    if (myId) {
-      if (!claimedRef.current) {
-        if (dbFp && dbFp !== myId) {
-          // Otro equipo es el dueño → bloqueado (no reproducir, no insistir).
-          setScreen(null); setProgramId(null); setStatus('locked')
+      // ── Device locking: se evalúa ANTES de arrancar reproducción ──
+      const myId = getWebDeviceId()
+      const dbFp = (sc.device_fingerprint ?? null) as string | null
+      if (myId) {
+        if (!claimedRef.current) {
+          if (dbFp && dbFp !== myId) {
+            setScreen(null); setProgramId(null); setStatus('locked')
+            return
+          }
+          if (!dbFp) {
+            const { error } = await supabase.from('screens')
+              .update({ device_fingerprint: myId, last_seen_at: new Date().toISOString() } as any)
+              .eq('id', sc.id)
+            if (!error) claimedRef.current = true
+          } else {
+            claimedRef.current = true   // dbFp === myId: mismo navegador
+          }
+        } else if (dbFp !== myId) {
+          claimedRef.current = false
+          setScreen(null); setProgramId(null); setStatus('released')
           return
         }
-        if (!dbFp) {
-          // Pantalla libre → reclamarla (única request extra, solo una vez).
-          const { error } = await supabase.from('screens')
-            .update({ device_fingerprint: myId, last_seen_at: new Date().toISOString() } as any)
-            .eq('id', sc.id)
-          if (!error) claimedRef.current = true
-          // Con error: fail-open — reproduce sin lock; se reintenta luego.
-        } else {
-          claimedRef.current = true   // dbFp === myId: mismo navegador
-        }
-      } else if (dbFp !== myId) {
-        // Éramos dueños y ya no (liberada desde el panel u otro equipo la
-        // reclamó) → detener y pedir re-vinculación.
-        claimedRef.current = false
-        setScreen(null); setProgramId(null); setStatus('released')
-        return
       }
-    }
 
-    setScreen({ id: sc.id, name: sc.name })
-    if (!sc.current_program_id) { setProgramId(null); setStatus('no-program'); return }
-    setProgramId(sc.current_program_id)   // same value → ScreenStage won't reload
-    setStatus('playing')
+      setScreen({ id: sc.id, name: sc.name })
+
+      // ── Horario operativo: fuera de horas → pantalla negra (sin stats) ──
+      setWithinHours(isWithinOperatingHours((sc as any).operating_start ?? null, (sc as any).operating_end ?? null))
+
+      // ── Reset remoto: fuerza re-sync y limpia el flag (web es anon con
+      // permiso de UPDATE en screens). Compara con Date() (no strings ISO). ──
+      const resetAt = (sc as any).reset_requested_at as string | null
+      if (resetAt && new Date(resetAt) > new Date(bootedAtRef.current)) {
+        supabase.from('screens').update({ reset_requested_at: null } as any).eq('id', sc.id)
+        setReloadKey(k => k + 1)
+      }
+
+      if (!sc.current_program_id) { setProgramId(null); setStatus('no-program'); return }
+      setProgramId(sc.current_program_id)   // mismo valor → ScreenStage no recarga por programId
+      setStatus('playing')
+
+      // ── Detección de nueva publicación (published_at, fallback updated_at) ──
+      const { data: prog } = await supabase.from('programs')
+        .select('published_at, updated_at').eq('id', sc.current_program_id).maybeSingle()
+      if (prog) bumpIfNewPublish(((prog as any).published_at ?? (prog as any).updated_at) ?? null)
+    } catch { /* offline: se reintenta en el próximo ciclo de 15s */ }
   }
 
   // Batching: acumula en memoria (espejo en localStorage) — el envío real
@@ -207,7 +252,9 @@ export default function Player() {
     restorePendingBatch()
     flushBatch()
     const iv = setInterval(flushBatch, FLUSH_INTERVAL_MS)
-    const onOnline = () => { flushBatch() }
+    // Al reconectar: envía el lote Y re-chequea publicación/ajustes al instante
+    // (paridad con Android, que re-sincroniza contenido al volver online).
+    const onOnline = () => { flushBatch(); checkScreen() }
     const onVis = () => {
       if (document.visibilityState === 'hidden') { persistBatchNow(); flushBatch() }
     }
@@ -228,9 +275,24 @@ export default function Player() {
     if (!screen) return
     heartbeat()
     const hb = setInterval(heartbeat, HEARTBEAT_MS)
-    const rl = setInterval(checkScreen, RELOAD_MS)
-    return () => { clearInterval(hb); clearInterval(rl) }
+    const pl = setInterval(checkScreen, POLL_MS)
+    return () => { clearInterval(hb); clearInterval(pl) }
   }, [screen?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Realtime: reacciona al instante a una nueva publicación del programa.
+  // Compara contra lastPublishedRef igual que el poll → nunca doble carga.
+  useEffect(() => {
+    if (!programId) return
+    const ch = supabase.channel('web-player-' + programId)
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'programs', filter: 'id=eq.' + programId },
+        (payload) => {
+          const np = (((payload.new as any)?.published_at) ?? ((payload.new as any)?.updated_at)) ?? null
+          bumpIfNewPublish(np)
+        })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [programId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (status === 'loading') return <Center><Spinner /><p style={msg}>Conectando…</p></Center>
   if (status === 'no-token') return <Center>
@@ -264,7 +326,7 @@ export default function Player() {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', cursor: 'none' }}>
-      {programId && <ScreenStage client={supabase} programId={programId} onPlay={logPlay} />}
+      {withinHours && programId && <ScreenStage client={supabase} programId={programId} reloadKey={reloadKey} onPlay={logPlay} />}
     </div>
   )
 }

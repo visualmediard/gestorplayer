@@ -12,7 +12,7 @@ type Zone = { id: string; name: string; x: number; y: number; width: number; hei
 type PlayItem = {
   id: string; type: 'image' | 'video' | 'url'
   storage_path: string; url: string | null
-  duration_seconds: number | null; expires_at: string | null
+  duration_seconds: number | null; expires_at: string | null; not_before: string | null
 }
 type Entry = { kind: 'item'; item: PlayItem } | { kind: 'sub'; items: PlayItem[] }
 type ZoneData = { zone: Zone; entries: Entry[] }
@@ -25,6 +25,16 @@ function isExpired(item: PlayItem) {
   if (!y || !mo || !d) return false
   const expiry = new Date(y, mo - 1, d, 23, 59, 59, 999)
   return new Date() > expiry
+}
+
+// Gate de fecha de inicio (paridad con Android `isNotStarted`): no reproducir
+// campañas antes de su fecha de inicio. Fecha LOCAL, igual que isExpired.
+function isNotStarted(item: PlayItem) {
+  if (!item.not_before) return false
+  const [y, mo, d] = String(item.not_before).slice(0, 10).split('-').map(Number)
+  if (!y || !mo || !d) return false
+  const debut = new Date(y, mo - 1, d, 0, 0, 0, 0)
+  return new Date() < debut
 }
 
 function ImageSlide({ url, ms, onDone, fit }: { url: string; ms: number; onDone: () => void; fit: string }) {
@@ -97,9 +107,10 @@ function ZonePlayer({ z, program, pub, onPlay }: {
   )
 }
 
-export default function ScreenStage({ client, programId, onPlay, onEmpty }: {
+export default function ScreenStage({ client, programId, reloadKey, onPlay, onEmpty }: {
   client: SupabaseClient
   programId: string
+  reloadKey?: number   // cambia para forzar re-fetch en caliente (softResync web)
   onPlay?: (contentId: string, zoneId: string) => void
   onEmpty?: (empty: boolean) => void
 }) {
@@ -123,19 +134,19 @@ export default function ScreenStage({ client, programId, onPlay, onEmpty }: {
       const built: ZoneData[] = []
       for (const zone of (zoneRows ?? []) as Zone[]) {
         const [{ data: items }, { data: subs }] = await Promise.all([
-          client.from('media_content').select('id, type, storage_path, url, duration_seconds, expires_at, sort_order')
+          client.from('media_content').select('id, type, storage_path, url, duration_seconds, expires_at, not_before, sort_order')
             .eq('zone_id', zone.id).is('sub_playlist_id', null).is('archived_at', null).order('sort_order'),
           client.from('sub_playlists').select('id, sort_order').eq('zone_id', zone.id).is('archived_at', null).order('sort_order'),
         ])
         const subItems: Record<string, PlayItem[]> = {}
         for (const sub of (subs ?? [])) {
           const { data: si } = await client.from('media_content')
-            .select('id, type, storage_path, url, duration_seconds, expires_at, sort_order')
+            .select('id, type, storage_path, url, duration_seconds, expires_at, not_before, sort_order')
             .eq('sub_playlist_id', sub.id).is('archived_at', null).order('sort_order')
-          subItems[sub.id] = ((si ?? []) as PlayItem[]).filter(i => !isExpired(i))
+          subItems[sub.id] = ((si ?? []) as PlayItem[]).filter(i => !isExpired(i) && !isNotStarted(i))
         }
         const combined: { sort_order: number; entry: Entry }[] = [
-          ...((items ?? []) as (PlayItem & { sort_order: number })[]).filter(i => !isExpired(i))
+          ...((items ?? []) as (PlayItem & { sort_order: number })[]).filter(i => !isExpired(i) && !isNotStarted(i))
             .map(i => ({ sort_order: i.sort_order, entry: { kind: 'item' as const, item: i } })),
           ...((subs ?? []) as { id: string; sort_order: number }[])
             .filter(s => (subItems[s.id] ?? []).length > 0)
@@ -149,7 +160,7 @@ export default function ScreenStage({ client, programId, onPlay, onEmpty }: {
       if (onEmpty) onEmpty(built.every(z => z.entries.length === 0))
     })()
     return () => { cancelled = true }
-  }, [programId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [programId, reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The program canvas fills the whole surface (edge to edge); (0,0) is the
   // top-left corner. Areas not covered by a zone stay black.
