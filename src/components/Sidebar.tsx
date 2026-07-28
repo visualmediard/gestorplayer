@@ -81,8 +81,8 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
         flexShrink: 0,
       }}>
         {(!isMobile && collapsed) ? (
-          // Colapsado: el ícono real del logo es el botón para expandir (sin
-          // botón flotante encima, que antes lo tapaba).
+          // Colapsado: el logo (de la org o el ícono GestPlayer) es el botón
+          // para expandir.
           <button onClick={onToggle} title="Expandir menú" aria-label="Expandir menú"
             style={{ border: 'none', padding: 0, background: 'transparent', cursor: 'pointer', display: 'flex' }}>
             <img src={logoIcon} alt="GestPlayer" style={{ width: '34px', height: '34px' }} />
