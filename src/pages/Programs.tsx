@@ -9,6 +9,8 @@ type Program = {
   created_at: string; thumbnail_url: string | null
 }
 
+type Screen = { id: string; name: string; current_program_id: string | null }
+
 type Props = { initialEditId?: string | null }
 
 export default function Programs({ initialEditId }: Props = {}) {
@@ -27,11 +29,27 @@ export default function Programs({ initialEditId }: Props = {}) {
   const [uploadingThumb, setUploadingThumb] = useState<string | null>(null)
   const thumbRef = useRef<HTMLInputElement>(null)
   const [activeThumbId, setActiveThumbId] = useState<string | null>(null)
+  const [screens, setScreens] = useState<Screen[]>([])
+  // Editar datos del programa
+  const [editProgram, setEditProgram] = useState<Program | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editClient, setEditClient] = useState('')
+  const [editWidth, setEditWidth] = useState(1920)
+  const [editHeight, setEditHeight] = useState(1080)
+  const [editSaving, setEditSaving] = useState(false)
+  // Asignar el programa recién creado a una pantalla
+  const [assignFor, setAssignFor] = useState<{ id: string; name: string } | null>(null)
+  const [assignScreen, setAssignScreen] = useState('')
+  const [assignSaving, setAssignSaving] = useState(false)
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('programs').select('*').order('created_at', { ascending: false })
+    const [{ data }, { data: scr }] = await Promise.all([
+      supabase.from('programs').select('*').order('created_at', { ascending: false }),
+      supabase.from('screens').select('id, name, current_program_id').order('name'),
+    ])
     if (data) setPrograms(data as Program[])
+    if (scr) setScreens(scr as Screen[])
     setLoading(false)
   }
 
@@ -47,15 +65,18 @@ export default function Programs({ initialEditId }: Props = {}) {
     setSaving(true); setError(null)
     const shortCode = name.trim().substring(0, 3).toUpperCase() + Math.random().toString(36).substring(2, 5).toUpperCase()
     const { data: profileData } = await supabase.from('profiles').select('organization_id').eq('id', profile?.id ?? '').single()
-    const { error } = await supabase.from('programs').insert({
+    const { data: created, error } = await supabase.from('programs').insert({
       name: name.trim(), client_name: clientName.trim() || null,
       width, height, created_by: profile?.id,
       organization_id: profileData?.organization_id ?? null,
       short_code: shortCode,
-    })
+    }).select('id, name').single()
     setSaving(false)
     if (error) { setError(error.message); return }
-    setName(''); setClientName(''); setWidth(1920); setHeight(1080); setShowForm(false); load()
+    setName(''); setClientName(''); setWidth(1920); setHeight(1080); setShowForm(false)
+    await load()
+    // Al finalizar: preguntar a qué pantalla asignarlo.
+    if (created) { setAssignScreen(''); setAssignFor({ id: created.id, name: created.name }) }
   }
 
   async function handleDelete(id: string) {
@@ -72,6 +93,37 @@ export default function Programs({ initialEditId }: Props = {}) {
     const { data } = supabase.storage.from('media').getPublicUrl(path)
     await supabase.from('programs').update({ thumbnail_url: data.publicUrl + '?t=' + Date.now() }).eq('id', programId)
     setUploadingThumb(null); setActiveThumbId(null); load()
+  }
+
+  function openEdit(p: Program) {
+    setEditProgram(p)
+    setEditName(p.name)
+    setEditClient(p.client_name ?? '')
+    setEditWidth(p.width)
+    setEditHeight(p.height)
+  }
+
+  async function handleSaveEdit() {
+    if (!editProgram || !editName.trim()) return
+    setEditSaving(true)
+    const { error } = await supabase.from('programs').update({
+      name: editName.trim(),
+      client_name: editClient.trim() || null,
+      width: editWidth, height: editHeight,
+    }).eq('id', editProgram.id)
+    setEditSaving(false)
+    if (error) { alert('Error: ' + error.message); return }
+    setEditProgram(null); load()
+  }
+
+  async function handleAssignScreen() {
+    if (!assignFor || !assignScreen) return
+    setAssignSaving(true)
+    const { error } = await supabase.from('screens')
+      .update({ current_program_id: assignFor.id }).eq('id', assignScreen)
+    setAssignSaving(false)
+    if (error) { alert('Error: ' + error.message); return }
+    setAssignFor(null); load()
   }
 
   // Si hay programa seleccionado, mostrar ZoneEditor
@@ -181,7 +233,11 @@ export default function Programs({ initialEditId }: Props = {}) {
                   </div>
                 </div>
 
-                <div style={s.cardActions}>
+                <div style={{ ...s.cardActions, flexWrap: 'wrap' }}>
+                  <button style={s.btnSecondary} onClick={() => openEdit(p)} title="Editar nombre, cliente y resolución">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Editar
+                  </button>
                   <button style={s.btnEdit} onClick={() => setEditingProgram(p.id)}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     Editar zonas
@@ -203,6 +259,69 @@ export default function Programs({ initialEditId }: Props = {}) {
             </div>
           </div>
         </>
+      )}
+
+      {/* Modal: editar datos del programa */}
+      {editProgram && (
+        <div style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setEditProgram(null) }}>
+          <div style={s.modalCard}>
+            <h3 style={s.formTitle}>Editar programa</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+              <div style={s.formGroup}>
+                <label style={s.label}>Nombre</label>
+                <input style={s.input} value={editName} onChange={e => setEditName(e.target.value)} />
+              </div>
+              <div style={s.formGroup}>
+                <label style={s.label}>Cliente</label>
+                <input style={s.input} value={editClient} onChange={e => setEditClient(e.target.value)} placeholder="Opcional" />
+              </div>
+              <div style={s.formGroup}>
+                <label style={s.label}>Resolución</label>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input style={{ ...s.input, width: '90px' }} type="number" value={editWidth} onChange={e => setEditWidth(+e.target.value)} />
+                  <span style={{ color: '#94A3B8' }}>×</span>
+                  <input style={{ ...s.input, width: '90px' }} type="number" value={editHeight} onChange={e => setEditHeight(+e.target.value)} />
+                </div>
+                <p style={{ color: '#B45309', fontSize: '0.72rem', marginTop: '0.4rem', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '6px', padding: '0.45rem 0.6rem' }}>
+                  ⚠️ Cambiar la resolución puede afectar el posicionamiento de las zonas existentes. Se recomienda ajustar las zonas después.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button style={s.btnOutline} onClick={() => setEditProgram(null)}>Cancelar</button>
+              <button style={s.btnPrimary} onClick={handleSaveEdit} disabled={editSaving}>{editSaving ? 'Guardando…' : 'Guardar'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: asignar el programa recién creado a una pantalla */}
+      {assignFor && (
+        <div style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setAssignFor(null) }}>
+          <div style={s.modalCard}>
+            <h3 style={s.formTitle}>¿Asignar este programa a una pantalla?</h3>
+            <p style={{ color: '#64748B', fontSize: '0.82rem', marginTop: '-0.5rem', marginBottom: '1rem' }}>
+              <b style={{ color: '#0F172A' }}>{assignFor.name}</b> se creó. Puedes asignarlo ahora o hacerlo luego en Pantallas.
+            </p>
+            {screens.length === 0 ? (
+              <p style={{ color: '#94A3B8', fontSize: '0.85rem' }}>No hay pantallas registradas.</p>
+            ) : (
+              <div style={s.formGroup}>
+                <label style={s.label}>Pantalla</label>
+                <select style={s.input} value={assignScreen} onChange={e => setAssignScreen(e.target.value)}>
+                  <option value="">— Selecciona una pantalla —</option>
+                  {screens.map(sc => (
+                    <option key={sc.id} value={sc.id}>{sc.name}{sc.current_program_id ? ' (ya tiene programa)' : ''}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button style={s.btnOutline} onClick={() => setAssignFor(null)}>Omitir</button>
+              <button style={s.btnPrimary} onClick={handleAssignScreen} disabled={assignSaving || !assignScreen}>{assignSaving ? 'Asignando…' : 'Asignar'}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -235,5 +354,8 @@ const s: Record<string, React.CSSProperties> = {
   shortCode: { fontSize: '0.72rem', fontWeight: 700, color: '#2563EB', background: '#EFF6FF', padding: '2px 8px', borderRadius: '4px', flexShrink: 0 },
   cardActions: { display: 'flex', gap: '0.5rem', padding: '0.75rem 1.25rem 1rem', borderTop: '1px solid #F1F5F9' },
   btnEdit: { display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.45rem 0.875rem', borderRadius: '7px', border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#2563EB', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' },
+  btnSecondary: { display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.45rem 0.75rem', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' },
+  modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' },
+  modalCard: { background: '#fff', borderRadius: '14px', width: '100%', maxWidth: '440px', padding: '1.5rem', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' },
   btnDel: { display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.45rem 0.875rem', borderRadius: '7px', border: '1px solid #FECACA', background: '#FFF5F5', color: '#EF4444', fontSize: '0.8rem', fontWeight: 500, cursor: 'pointer' },
 }
