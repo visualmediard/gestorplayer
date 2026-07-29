@@ -113,23 +113,29 @@ if (import.meta.env.DEV) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  DEVICE LOCKING (paridad con el player Android): un token solo reproduce
-//  en el equipo que lo reclamó primero. La identidad del navegador es un
-//  id estable en localStorage. Si localStorage no está disponible, se
-//  devuelve '' y el locking se omite (fail-open, igual que Android).
+//  DEVICE LOCKING por SESIÓN: un token solo reproduce en UNA pestaña a la vez.
+//  La identidad vive en sessionStorage (única por pestaña, sobrevive a un
+//  reload pero NO se comparte entre pestañas ni al cerrar), así dos pestañas
+//  del mismo navegador se detectan como sesiones distintas. Sin sessionStorage
+//  → '' y el locking se omite (fail-open, igual que Android).
 // ─────────────────────────────────────────────────────────────────────────
-function getWebDeviceId(): string {
+function getWebSessionId(): string {
   try {
-    let id = localStorage.getItem('gp_device_id')
+    let id = sessionStorage.getItem('gp_session_id')
     if (!id) {
       id = typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`
-      localStorage.setItem('gp_device_id', id)
+      sessionStorage.setItem('gp_session_id', id)
     }
     return id
   } catch { return '' }
 }
+
+// Umbral de liveness: si el dueño no refresca last_seen_at en este tiempo, se
+// considera muerto (pestaña cerrada / dispositivo reiniciado) y otra sesión
+// puede tomar el relevo. El dueño lo refresca en cada poll (15s).
+const OWNER_STALE_MS = 90_000
 
 // Ventana operativa con hora LOCAL del dispositivo (paridad con Android). Sin
 // start/end → siempre activa. Soporta cruce de medianoche (ej. 06:00 a 02:00).
@@ -176,31 +182,40 @@ export default function Player() {
     if (!token) { setStatus('no-token'); return }
     try {
       const { data: sc } = await supabase.from('screens')
-        .select('id, name, current_program_id, device_fingerprint, operating_start, operating_end, operating_hours, reset_requested_at')
+        .select('id, name, current_program_id, device_fingerprint, last_seen_at, operating_start, operating_end, operating_hours, reset_requested_at')
         .eq('device_token', token).maybeSingle()
       if (!sc) { setStatus('invalid'); return }
 
-      // ── Device locking: se evalúa ANTES de arrancar reproducción ──
-      const myId = getWebDeviceId()
+      // ── Device locking por SESIÓN (una pestaña a la vez) ──
+      const mySession = getWebSessionId()
       const dbFp = (sc.device_fingerprint ?? null) as string | null
-      if (myId) {
+      const lastSeen = (sc as any).last_seen_at as string | null
+      const ownerStale = !lastSeen || (Date.now() - new Date(lastSeen).getTime() > OWNER_STALE_MS)
+      const claim = async () => {
+        const { error } = await supabase.from('screens')
+          .update({ device_fingerprint: mySession, last_seen_at: new Date().toISOString() } as any)
+          .eq('id', sc.id)
+        if (!error) claimedRef.current = true
+      }
+      if (mySession) {
         if (!claimedRef.current) {
-          if (dbFp && dbFp !== myId) {
+          if (!dbFp || dbFp === mySession) {
+            await claim()               // libre, o reload de esta misma pestaña
+          } else if (ownerStale) {
+            await claim()               // el dueño murió → tomar el relevo
+          } else {
+            // Otra sesión activa es la dueña → bloqueado.
             setScreen(null); setProgramId(null); setStatus('locked')
             return
           }
-          if (!dbFp) {
-            const { error } = await supabase.from('screens')
-              .update({ device_fingerprint: myId, last_seen_at: new Date().toISOString() } as any)
-              .eq('id', sc.id)
-            if (!error) claimedRef.current = true
-          } else {
-            claimedRef.current = true   // dbFp === myId: mismo navegador
-          }
-        } else if (dbFp !== myId) {
+        } else if (dbFp !== mySession) {
+          // Me superó otra sesión o me liberaron desde el panel → detener.
           claimedRef.current = false
           setScreen(null); setProgramId(null); setStatus('released')
           return
+        } else {
+          // Sigo siendo dueño → refresco last_seen_at (liveness para el relevo).
+          supabase.from('screens').update({ last_seen_at: new Date().toISOString() } as any).eq('id', sc.id)
         }
       }
 
