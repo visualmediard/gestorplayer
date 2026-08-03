@@ -20,6 +20,10 @@ type AdCount = { program_id: string; total_ads: number }
 
 function fmtHM(t: string | null) { return t ? String(t).slice(0, 5) : '' }
 
+// URL de descarga del APK de Android. Vacía → se muestran los pasos sin
+// botón de descarga (evita un enlace roto).
+const APK_URL = ''
+
 // Horas operativas del rango (cruce de medianoche incluido), redondeadas al
 // entero más cercano. Se usa para el badge "Nh/día" y el cálculo de frecuencias.
 function operatingHoursCount(start: string, end: string) {
@@ -133,6 +137,10 @@ export default function Screens() {
   const [editOpStart, setEditOpStart] = useState('06:00')
   const [resetSent, setResetSent] = useState<string | null>(null)
   const [editOpEnd, setEditOpEnd] = useState('00:00')
+  // Paso 2 tras crear: cómo instalar la pantalla recién creada.
+  const [installFor, setInstallFor] = useState<{ name: string; token: string | null } | null>(null)
+  const [installTab, setInstallTab] = useState<'web' | 'android'>('web')
+  const [linkCopied, setLinkCopied] = useState(false)
 
   async function load() {
     const { data } = await supabase.from('screens').select('*').order('created_at', { ascending: true })
@@ -162,15 +170,49 @@ export default function Screens() {
     if (!name.trim()) return
     setSaving(true); setError(null)
     const { data: profileData } = await supabase.from('profiles').select('organization_id').eq('id', (await supabase.auth.getUser()).data.user?.id ?? '').single()
-    const { error } = await supabase.from('screens').insert({
+    const { data: created, error } = await supabase.from('screens').insert({
       name: name.trim(), location: location.trim() || null,
       width, height, ad_capacity: adCapacity,
       organization_id: profileData?.organization_id ?? null
-    })
+    }).select('id, name, device_token').single()
     setSaving(false)
     if (error) { setError(error.message); return }
     setName(''); setLocation(''); setWidth(1920); setHeight(1080); setAdCapacity(10)
     setShowForm(false); load()
+    // En vez de solo cerrar el formulario: mostrar cómo instalarla.
+    if (created) {
+      setInstallTab('web'); setLinkCopied(false)
+      setInstallFor({ name: created.name, token: (created as any).device_token ?? null })
+    }
+  }
+
+  function playUrlFor(tk: string) { return `${window.location.origin}/play?token=${tk}` }
+
+  async function copyPlayLink(tk: string) {
+    const text = playUrlFor(tk)
+    let ok = false
+    try {
+      await navigator.clipboard.writeText(text)
+      ok = true
+    } catch {
+      // Fallback para navegadores sin Clipboard API o con permiso denegado
+      // (habitual en navegadores de Smart TV y contextos no seguros).
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.setAttribute('readonly', '')
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+      } catch { /* sin portapapeles: la URL sigue visible para copiarla a mano */ }
+    }
+    if (ok) {
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 2500)
+    }
   }
 
 
@@ -525,6 +567,88 @@ export default function Screens() {
             </div>
             <div style={{ padding: '0.6rem 1rem', color: '#94A3B8', fontSize: '0.72rem', textAlign: 'center' }}>
               Vista de lo que se está reproduciendo · muestra el contenido asignado a esta pantalla
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Paso 2 tras crear una pantalla: cómo instalarla */}
+      {installFor && createPortal(
+        <div className="backdrop" style={s.modalBackdrop} onClick={e => { if (e.target === e.currentTarget) setInstallFor(null) }}>
+          <div className="modal-pop" style={{ ...s.modalCard, maxWidth: '520px', padding: '1.5rem' }}>
+            <h3 style={{ fontWeight: 700, color: '#0F172A', fontSize: '1.05rem' }}>¿Cómo instalar esta pantalla?</h3>
+            <p style={{ color: '#64748B', fontSize: '0.82rem', margin: '0.25rem 0 1.1rem' }}>
+              <b style={{ color: '#0F172A' }}>{installFor.name}</b> se creó correctamente. Elige el método de instalación.
+            </p>
+
+            <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '1.1rem' }}>
+              {([['web', '🌐', 'Navegador', 'TV, Smart TV, PC'],
+                 ['android', '🤖', 'Android', 'App GestPlayer']] as const).map(([key, icon, label, hint]) => (
+                <button key={key} onClick={() => setInstallTab(key)}
+                  style={{
+                    flex: 1, textAlign: 'left', padding: '0.7rem 0.85rem', borderRadius: '10px', cursor: 'pointer',
+                    border: `1.5px solid ${installTab === key ? '#2563EB' : '#E2E8F0'}`,
+                    background: installTab === key ? '#EFF6FF' : '#fff',
+                  }}>
+                  <div style={{ fontSize: '1.1rem' }}>{icon}</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: installTab === key ? '#2563EB' : '#0F172A' }}>{label}</div>
+                  <div style={{ fontSize: '0.7rem', color: '#94A3B8' }}>{hint}</div>
+                </button>
+              ))}
+            </div>
+
+            {installTab === 'web' ? (
+              <div>
+                {installFor.token ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.6rem 0.75rem', marginBottom: '0.75rem' }}>
+                      <span style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: '0.75rem', color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {playUrlFor(installFor.token)}
+                      </span>
+                      <button onClick={() => copyPlayLink(installFor.token!)}
+                        style={{ ...s.btnAct, flexShrink: 0, ...(linkCopied ? { color: '#10B981', border: '1px solid #10B981' } : {}) }}>
+                        {linkCopied ? '✓ Copiado' : 'Copiar enlace'}
+                      </button>
+                    </div>
+                    <ol style={{ margin: 0, paddingLeft: '1.1rem', color: '#475569', fontSize: '0.82rem', lineHeight: 1.9 }}>
+                      <li>Abre el navegador en el dispositivo</li>
+                      <li>Escribe o pega esta URL</li>
+                      <li>Escanea el QR que aparece con tu teléfono</li>
+                    </ol>
+                  </>
+                ) : (
+                  <p style={{ color: '#B45309', fontSize: '0.82rem', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '8px', padding: '0.6rem 0.75rem' }}>
+                    La pantalla se creó, pero aún no tiene token. Ciérralo y copia el token desde su tarjeta.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div>
+                <p style={{ color: '#475569', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                  Instala la aplicación <b>GestPlayer.apk</b> en el dispositivo Android.
+                </p>
+                {APK_URL ? (
+                  <a href={APK_URL} target="_blank" rel="noopener noreferrer"
+                    style={{ ...s.btnPrimary, display: 'inline-flex', textDecoration: 'none', marginBottom: '0.85rem' }}>
+                    ⬇ Descargar GestPlayer.apk
+                  </a>
+                ) : (
+                  <p style={{ color: '#64748B', fontSize: '0.78rem', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.6rem 0.75rem', marginBottom: '0.85rem' }}>
+                    Solicita el archivo GestPlayer.apk a tu proveedor.
+                  </p>
+                )}
+                <ol style={{ margin: 0, paddingLeft: '1.1rem', color: '#475569', fontSize: '0.82rem', lineHeight: 1.9 }}>
+                  <li>Instala el APK</li>
+                  <li>Abre la app</li>
+                  <li>Escanea el QR que aparece en pantalla</li>
+                  <li>Selecciona esta pantalla (<b>{installFor.name}</b>)</li>
+                </ol>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+              <button style={s.btnPrimary} onClick={() => setInstallFor(null)}>Listo</button>
             </div>
           </div>
         </div>,
