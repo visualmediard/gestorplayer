@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
+import { useDialog } from '../components/Dialog'
 import ZoneEditor from './ZoneEditor'
 
 type Program = {
@@ -15,6 +16,7 @@ type Props = { initialEditId?: string | null }
 
 export default function Programs({ initialEditId }: Props = {}) {
   const { profile } = useAuth()
+  const { confirm, alert } = useDialog()
   const [programs, setPrograms] = useState<Program[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -80,7 +82,7 @@ export default function Programs({ initialEditId }: Props = {}) {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar este programa?')) return
+    if (!await confirm({ title: '¿Eliminar este programa?', confirmLabel: 'Eliminar', danger: true })) return
     await supabase.from('programs').delete().eq('id', id); load()
   }
 
@@ -89,7 +91,7 @@ export default function Programs({ initialEditId }: Props = {}) {
     const ext = file.name.split('.').pop()
     const path = `thumbnails/${programId}.${ext}`
     const { error: storageError } = await supabase.storage.from('media').upload(path, file, { upsert: true })
-    if (storageError) { alert('Error: ' + storageError.message); setUploadingThumb(null); return }
+    if (storageError) { await alert({ title: 'Error al subir la imagen', message: storageError.message }); setUploadingThumb(null); return }
     const { data } = supabase.storage.from('media').getPublicUrl(path)
     await supabase.from('programs').update({ thumbnail_url: data.publicUrl + '?t=' + Date.now() }).eq('id', programId)
     setUploadingThumb(null); setActiveThumbId(null); load()
@@ -112,7 +114,7 @@ export default function Programs({ initialEditId }: Props = {}) {
       width: editWidth, height: editHeight,
     }).eq('id', editProgram.id)
     setEditSaving(false)
-    if (error) { alert('Error: ' + error.message); return }
+    if (error) { await alert({ title: 'No se pudo guardar', message: error.message }); return }
     setEditProgram(null); load()
   }
 
@@ -122,7 +124,7 @@ export default function Programs({ initialEditId }: Props = {}) {
     const { error } = await supabase.from('screens')
       .update({ current_program_id: assignFor.id }).eq('id', assignScreen)
     setAssignSaving(false)
-    if (error) { alert('Error: ' + error.message); return }
+    if (error) { await alert({ title: 'No se pudo asignar', message: error.message }); return }
     setAssignFor(null); load()
   }
 

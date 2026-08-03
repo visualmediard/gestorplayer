@@ -8,6 +8,7 @@ import { isResting, scheduleRangeLabel, campaignDateState } from '../lib/dailySc
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
 import { hasRole } from '../lib/roles'
+import { useDialog } from '../components/Dialog'
 import CampaignReport from './CampaignReport'
 
 type Campaign = {
@@ -53,6 +54,7 @@ const DEFAULT_FREQ = 0 // 0 = ∞ Ilimitado (matches zone editor default)
 
 export default function Campaigns({ initialReportId }: { initialReportId?: string | null }) {
   const { profile } = useAuth()
+  const { confirm, alert } = useDialog()
   // Solo admin y operador gestionan campañas; vendedor y cliente son de lectura.
   const canManage = hasRole(profile?.role, 'admin', 'operator')
   const [stats, setStats]         = useState<CampaignStat[]>([])
@@ -216,10 +218,10 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     if (!m) return
     setReplaceUploading(true)
     const fits = await checkStorageFits(file.size)
-    if (!fits.ok) { alert(fits.message ?? 'Sin espacio disponible.'); setReplaceUploading(false); return }
+    if (!fits.ok) { await alert({ title: 'Sin espacio disponible', message: fits.message ?? '' }); setReplaceUploading(false); return }
     const isVideo = file.type.startsWith('video/')
     const { url, size, error: storageError } = await uploadToR2(file, setReplaceProgress)
-    if (storageError || !url) { alert('Error: ' + (storageError?.message ?? 'desconocido')); setReplaceUploading(false); return }
+    if (storageError || !url) { await alert({ title: 'Error al subir', message: storageError?.message ?? 'Ocurrió un error desconocido.' }); setReplaceUploading(false); return }
     if (m.storage_path && !isRemoteUrl(m.storage_path)) await supabase.storage.from('media').remove([m.storage_path])
     await supabase.from('media_content').update({
       name: file.name, type: isVideo ? 'video' : 'image',
@@ -476,7 +478,11 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   }
 
   async function deleteCampaign(id: string, name: string) {
-    if (!confirm(`¿Eliminar la campaña "${name}"?\n\nSe quitará su contenido de las zonas, pero sus reproducciones permanecerán en Estadísticas hasta que las elimines definitivamente desde allí.`)) return
+    if (!await confirm({
+      title: `¿Eliminar la campaña "${name}"?`,
+      message: 'Se quitará su contenido de las zonas, pero sus reproducciones permanecerán en Estadísticas hasta que las elimines definitivamente desde allí.',
+      confirmLabel: 'Eliminar', danger: true,
+    })) return
     const now = new Date().toISOString()
     // Zonas afectadas ANTES de archivar, para avisarles después.
     const { data: prevRows } = await supabase

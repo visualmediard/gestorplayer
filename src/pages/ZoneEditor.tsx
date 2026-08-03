@@ -8,6 +8,7 @@ import { dedupeMedia } from '../lib/dedupeMedia'
 import { isResting, scheduleRangeLabel, campaignDateState } from '../lib/dailySchedule'
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
+import { useDialog } from '../components/Dialog'
 
 type Program = { id: string; name: string; width: number; height: number }
 type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean; fit_mode: string | null }
@@ -58,6 +59,7 @@ function ImageSlide({ url, duration, onDone, fit }: { url: string; duration: num
 
 export default function ZoneEditor({ programId, onBack }: Props) {
   const { profile } = useAuth()
+  const { confirm, alert } = useDialog()
   const [program, setProgram] = useState<Program | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [selectedZone, setSelectedZone] = useState<string | null>(null)
@@ -307,7 +309,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   }
 
   async function handleDeleteZone(id: string) {
-    if (!confirm('¿Eliminar esta zona?')) return
+    if (!await confirm({ title: '¿Eliminar esta zona?', confirmLabel: 'Eliminar', danger: true })) return
     await supabase.from('zones').delete().eq('id', id); setSelectedZone(null); load()
   }
 
@@ -359,7 +361,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   }
 
   async function handleDeleteSub(subId: string) {
-    if (!confirm('¿Eliminar esta sub-playlist?')) return
+    if (!await confirm({ title: '¿Eliminar esta sub-playlist?', confirmLabel: 'Eliminar', danger: true })) return
     await supabase.from('sub_playlists').delete().eq('id', subId); loadEntries(selectedZone!)
   }
 
@@ -402,10 +404,10 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     if (!replacingItem) return
     setReplacing(true)
     const fits = await checkStorageFits(file.size)
-    if (!fits.ok) { alert(fits.message ?? 'Sin espacio disponible.'); setReplacing(false); return }
+    if (!fits.ok) { await alert({ title: 'Sin espacio disponible', message: fits.message ?? '' }); setReplacing(false); return }
     const isVideo = file.type.startsWith('video/')
     const { url, size, error: storageError } = await uploadToR2(file, setReplaceProgress)
-    if (storageError || !url) { alert('Error: ' + (storageError?.message ?? 'desconocido')); setReplacing(false); return }
+    if (storageError || !url) { await alert({ title: 'Error al subir', message: storageError?.message ?? 'Ocurrió un error desconocido.' }); setReplacing(false); return }
     // Primero se actualiza la fila al archivo nuevo; después se borra el
     // archivo viejo (R2 vía Edge Function o Supabase legacy) solo si ninguna
     // otra fila activa lo sigue usando.
@@ -441,7 +443,11 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   }
 
   async function handleDeleteItem(item: MediaItem) {
-    if (!confirm(`¿Quitar "${item.name}" de esta zona?\n\nSeguirá en Estadísticas hasta que lo elimines definitivamente desde allí.`)) return
+    if (!await confirm({
+      title: `¿Quitar "${item.name}" de esta zona?`,
+      message: 'Seguirá en Estadísticas hasta que lo elimines definitivamente desde allí.',
+      confirmLabel: 'Quitar', danger: true,
+    })) return
     // Soft delete: keep the row (and its file) so statistics survive. The zone
     // editor and player already filter out archived_at rows.
     await supabase.from('media_content').update({ archived_at: new Date().toISOString() }).eq('id', item.id)
@@ -476,7 +482,13 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     <div style={{ background: '#F8FAFC', minHeight: '100%' }}>
       {/* Input oculto para reemplazo desde archivo */}
       <input ref={replaceRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
-        onChange={e => { const f = e.target.files?.[0]; const tooBig = f && fileTooLargeMessage(f); if (tooBig) { alert(tooBig); e.target.value = ''; return } if (f && replacingItem) handleReplaceFromFile(f); e.target.value = '' }} />
+        onChange={e => {
+          const f = e.target.files?.[0]
+          const tooBig = f && fileTooLargeMessage(f)
+          e.target.value = ''
+          if (tooBig) { void alert({ title: 'Archivo demasiado grande', message: tooBig }); return }
+          if (f && replacingItem) handleReplaceFromFile(f)
+        }} />
 
       <div style={s.topbar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>

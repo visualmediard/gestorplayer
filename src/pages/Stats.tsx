@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
 import { hasRole } from '../lib/roles'
+import { useDialog } from '../components/Dialog'
 import { resolveMediaUrl } from '../lib/mediaUrl'
 import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
 import { notifyStorageChanged } from '../lib/storage'
@@ -41,6 +42,7 @@ function getThumbUrl(storage_path: string | null | undefined) {
 
 export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string) => void }) {
   const { profile } = useAuth()
+  const { confirm } = useDialog()
   // Solo admin y operador pueden borrar registros de estadísticas.
   const canDelete = hasRole(profile?.role, 'admin', 'operator')
   const [rows, setRows] = useState<DisplayRow[]>([])
@@ -141,7 +143,11 @@ export default function Stats({ onGoToCampaign }: { onGoToCampaign?: (id: string
   }, [])
 
   async function handleDeleteStat(row: ContentRow) {
-    if (!confirm(`¿Eliminar definitivamente "${row.name}" de las estadísticas?\n\nSe borrará su registro de reproducciones. Esta acción no se puede deshacer.`)) return
+    if (!await confirm({
+      title: `¿Eliminar definitivamente "${row.name}" de las estadísticas?`,
+      message: 'Se borrará su registro de reproducciones. Esta acción no se puede deshacer.',
+      confirmLabel: 'Eliminar', danger: true,
+    })) return
     setDeleting(row.content_id)
     const path = row.storage_path ?? null
     await supabase.from('media_content').delete().eq('id', row.content_id)

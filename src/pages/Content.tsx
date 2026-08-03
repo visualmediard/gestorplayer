@@ -7,6 +7,7 @@ import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { dedupeMedia } from '../lib/dedupeMedia'
 import { useAuth } from '../auth/AuthContext'
+import { useDialog } from '../components/Dialog'
 
 type MediaItem = {
   id: string; name: string; type: 'image' | 'video' | 'url'
@@ -25,6 +26,7 @@ const TAG_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4
 
 export default function Content() {
   const { profile } = useAuth()
+  const { confirm } = useDialog()
 
   // Media state
   const [orgId, setOrgId]     = useState('')
@@ -119,7 +121,11 @@ export default function Content() {
 
   // ── DELETE MEDIA ────────────────────────────────────────────────────────
   async function handleDelete(item: MediaItem) {
-    if (!confirm(`¿Eliminar "${item.name}" de la biblioteca?\n\nSe quitará de la biblioteca y de las zonas donde esté, y el archivo se eliminará del almacenamiento. Las reproducciones ya registradas se conservan en Estadísticas.`)) return
+    if (!await confirm({
+      title: `¿Eliminar "${item.name}" de la biblioteca?`,
+      message: 'Se quitará de la biblioteca y de las zonas donde esté, y el archivo se eliminará del almacenamiento. Las reproducciones ya registradas se conservan en Estadísticas.',
+      confirmLabel: 'Eliminar', danger: true,
+    })) return
     const now = new Date().toISOString()
     if (item.type === 'url') {
       await supabase.from('media_content').update({ archived_at: now }).is('campaign_id', null).eq('id', item.id)

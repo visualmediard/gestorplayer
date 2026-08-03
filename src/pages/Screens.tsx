@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
 import { hasRole } from '../lib/roles'
+import { useDialog } from '../components/Dialog'
 import ScreenStage from '../components/ScreenStage'
 
 type Screen = {
@@ -115,6 +116,7 @@ function OccupancyRing({ used, capacity }: { used: number; capacity: number }) {
 
 export default function Screens() {
   const { profile } = useAuth()
+  const { confirm, alert } = useDialog()
   // Vendedor solo ve la lista y la ocupación (lectura); admin/operador gestionan.
   const canManage = hasRole(profile?.role, 'admin', 'operator')
   const [screens, setScreens] = useState<Screen[]>([])
@@ -230,7 +232,7 @@ export default function Screens() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('¿Eliminar esta pantalla?')) return
+    if (!await confirm({ title: '¿Eliminar esta pantalla?', confirmLabel: 'Eliminar', danger: true })) return
     await supabase.from('screens').delete().eq('id', id); load()
   }
 
@@ -280,11 +282,15 @@ export default function Screens() {
   // Libera el dispositivo vinculado a la pantalla (borra device_fingerprint).
   // El próximo equipo que abra el player con este token quedará vinculado.
   async function handleRelease(sc: Screen) {
-    if (!confirm(`¿Liberar el dispositivo de "${sc.name}"?\n\nEl próximo equipo que se conecte con este token quedará vinculado. Úsalo si cambiaste, reparaste o reinstalaste la pantalla física.`)) return
+    if (!await confirm({
+      title: `¿Liberar el dispositivo de "${sc.name}"?`,
+      message: 'El próximo equipo que se conecte con este token quedará vinculado. Úsalo si cambiaste, reparaste o reinstalaste la pantalla física.',
+      confirmLabel: 'Liberar',
+    })) return
     setReleasing(sc.id)
     const { error } = await supabase.rpc('release_screen_device', { p_screen_id: sc.id })
     setReleasing(null)
-    if (error) { alert('No se pudo liberar el dispositivo: ' + error.message); return }
+    if (error) { await alert({ title: 'No se pudo liberar el dispositivo', message: error.message }); return }
     load()
   }
 

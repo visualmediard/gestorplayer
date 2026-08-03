@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { uploadToR2 } from '../lib/uploadToR2'
 import { notifyStorageChanged } from '../lib/storage'
+import { useDialog } from '../components/Dialog'
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Administrador', operator: 'Operador', seller: 'Vendedor', client: 'Cliente',
@@ -168,6 +169,7 @@ function GeneralTab() {
 
 // ── Tab Usuarios: miembros de la organización e invitaciones ────────────────
 function UsersTab() {
+  const { confirm } = useDialog()
   const [orgId, setOrgId] = useState<string | null>(null)
   const [myId, setMyId] = useState<string | null>(null)
   const [members, setMembers] = useState<{ id: string; full_name: string | null; email: string; role: string }[]>([])
@@ -280,7 +282,11 @@ function UsersTab() {
   }
 
   async function deleteMember(m: { id: string; full_name: string | null; email: string }) {
-    if (!confirm(`¿Eliminar por completo a "${m.full_name || m.email}"?\n\nSe borrará su cuenta de acceso y su perfil. Esta acción no se puede deshacer.`)) return
+    if (!await confirm({
+      title: `¿Eliminar por completo a "${m.full_name || m.email}"?`,
+      message: 'Se borrará su cuenta de acceso y su perfil. Esta acción no se puede deshacer.',
+      confirmLabel: 'Eliminar', danger: true,
+    })) return
     setDeleteBusy(m.id); setError(null)
     const res = await callManageUser({ action: 'delete', userId: m.id })
     if (!res.ok) { setError(res.error!); setDeleteBusy(null); return }

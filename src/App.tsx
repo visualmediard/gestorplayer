@@ -10,6 +10,7 @@ import Stats from './pages/Stats'
 import Campaigns from './pages/Campaigns'
 import Settings from './pages/Settings'
 import Sidebar from './components/Sidebar'
+import { DialogProvider } from './components/Dialog'
 import Pair from './pages/Pair'
 import Invite from './pages/Invite'
 import Player from './pages/Player'
@@ -265,5 +266,5 @@ export default function App() {
   if (path === '/play' || path === '/player') return <Player />
   if (path === '/pair') return <AuthProvider><Pair /></AuthProvider>
   if (path === '/invite') return <AuthProvider><Invite /></AuthProvider>
-  return <AuthProvider><Gate /></AuthProvider>
+  return <AuthProvider><DialogProvider><Gate /></DialogProvider></AuthProvider>
 }
