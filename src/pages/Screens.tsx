@@ -24,6 +24,17 @@ function fmtHM(t: string | null) { return t ? String(t).slice(0, 5) : '' }
 // botón de descarga (evita un enlace roto).
 const APK_URL = ''
 
+// La resolución se define en Programas; las columnas width/height de screens
+// son NOT NULL, así que se guarda un valor fijo que la UI ya no muestra.
+const DEFAULT_W = 1920
+const DEFAULT_H = 1080
+
+// Detecta si el campo "location" guarda un enlace de Google Maps.
+function isMapsUrl(v: string | null): boolean {
+  if (!v) return false
+  return /^https?:\/\/(www\.)?(google\.[a-z.]+\/maps|maps\.google\.[a-z.]+|maps\.app\.goo\.gl|goo\.gl\/maps)/i.test(v.trim())
+}
+
 // Horas operativas del rango (cruce de medianoche incluido), redondeadas al
 // entero más cercano. Se usa para el badge "Nh/día" y el cálculo de frecuencias.
 function operatingHoursCount(start: string, end: string) {
@@ -112,12 +123,10 @@ export default function Screens() {
   const [showForm, setShowForm] = useState(false)
   const [name, setName] = useState('')
   const [location, setLocation] = useState('')
-  const [width, setWidth] = useState(1920)
-  const [height, setHeight] = useState(1080)
   const [adCapacity, setAdCapacity] = useState(10)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [programs, setPrograms] = useState<{ id: string; name: string }[]>([])
+  const [programs, setPrograms] = useState<{ id: string; name: string; width: number; height: number }[]>([])
   const [assigningScreen, setAssigningScreen] = useState<string | null>(null)
   const [selectedProgram, setSelectedProgram] = useState('')
   const [editingHours, setEditingHours] = useState<string | null>(null)
@@ -129,8 +138,6 @@ export default function Screens() {
   const [editScreen, setEditScreen] = useState<Screen | null>(null)
   const [editName, setEditName] = useState('')
   const [editLocation, setEditLocation] = useState('')
-  const [editWidth, setEditWidth] = useState(1920)
-  const [editHeight, setEditHeight] = useState(1080)
   const [editCapacity, setEditCapacity] = useState(10)
   const [editSaving, setEditSaving] = useState(false)
   const [editOpEnabled, setEditOpEnabled] = useState(false)
@@ -145,7 +152,7 @@ export default function Screens() {
   async function load() {
     const { data } = await supabase.from('screens').select('*').order('created_at', { ascending: true })
     if (data) setScreens(data as Screen[])
-    const { data: progs } = await supabase.from('programs').select('id, name')
+    const { data: progs } = await supabase.from('programs').select('id, name, width, height')
     if (progs) setPrograms(progs)
     setAdCounts(await fetchAdCounts())
     setLoading(false)
@@ -172,12 +179,12 @@ export default function Screens() {
     const { data: profileData } = await supabase.from('profiles').select('organization_id').eq('id', (await supabase.auth.getUser()).data.user?.id ?? '').single()
     const { data: created, error } = await supabase.from('screens').insert({
       name: name.trim(), location: location.trim() || null,
-      width, height, ad_capacity: adCapacity,
+      width: DEFAULT_W, height: DEFAULT_H, ad_capacity: adCapacity,
       organization_id: profileData?.organization_id ?? null
     }).select('id, name, device_token').single()
     setSaving(false)
     if (error) { setError(error.message); return }
-    setName(''); setLocation(''); setWidth(1920); setHeight(1080); setAdCapacity(10)
+    setName(''); setLocation(''); setAdCapacity(10)
     setShowForm(false); load()
     // En vez de solo cerrar el formulario: mostrar cómo instalarla.
     if (created) {
@@ -241,8 +248,6 @@ export default function Screens() {
     setEditScreen(sc)
     setEditName(sc.name)
     setEditLocation(sc.location ?? '')
-    setEditWidth(sc.width)
-    setEditHeight(sc.height)
     setEditCapacity(sc.ad_capacity ?? 10)
     const hasOp = !!(sc.operating_start && sc.operating_end)
     setEditOpEnabled(hasOp)
@@ -259,8 +264,6 @@ export default function Screens() {
     await supabase.from('screens').update({
       name: editName.trim(),
       location: editLocation.trim() || null,
-      width: editWidth,
-      height: editHeight,
       ad_capacity: editCapacity,
       ...opUpdate,
     }).eq('id', editScreen.id)
@@ -310,16 +313,10 @@ export default function Screens() {
               <input style={s.input} value={name} onChange={e => setName(e.target.value)} placeholder="Ej: Kennedy SN" />
             </div>
             <div style={s.formGroup}>
-              <label style={s.label}>Ubicación</label>
-              <input style={s.input} value={location} onChange={e => setLocation(e.target.value)} placeholder="Ej: Santo Domingo" />
-            </div>
-            <div style={s.formGroup}>
-              <label style={s.label}>Resolución</label>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <input style={{ ...s.input, width: '90px' }} type="number" value={width} onChange={e => setWidth(+e.target.value)} />
-                <span style={{ color: '#94A3B8' }}>×</span>
-                <input style={{ ...s.input, width: '90px' }} type="number" value={height} onChange={e => setHeight(+e.target.value)} />
-              </div>
+              <label style={s.label}>Dirección</label>
+              <input style={{ ...s.input, minWidth: '260px' }} value={location} onChange={e => setLocation(e.target.value)}
+                placeholder="Dirección o enlace de Google Maps" />
+              <span style={{ color: '#94A3B8', fontSize: '0.75rem' }}>Puedes pegar un enlace de Google Maps</span>
             </div>
             <div style={s.formGroup}>
               <label style={s.label}>Capacidad de anuncios</label>
@@ -356,8 +353,19 @@ export default function Screens() {
                 <div style={{ display: 'flex', gap: '1rem', padding: '0.75rem 1.25rem' }}>
                   {/* Info */}
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                    {sc.location && <div style={s.meta}><span>📍</span>{sc.location}</div>}
-                    <div style={s.meta}><span>🖥</span>{sc.width} × {sc.height}px</div>
+                    {sc.location && (
+                      <div style={s.meta}>
+                        {isMapsUrl(sc.location) ? (
+                          <a href={sc.location.trim()} target="_blank" rel="noopener noreferrer"
+                            title="Abrir en Google Maps"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#2563EB', textDecoration: 'none', fontWeight: 600 }}>
+                            <span>📍</span>Ver en Google Maps
+                          </a>
+                        ) : (
+                          <><span>📍</span>{sc.location}</>
+                        )}
+                      </div>
+                    )}
                     <div style={s.meta}><span>⏱</span>{sc.last_heartbeat ? new Date(sc.last_heartbeat).toLocaleTimeString('es-DO') : 'Nunca conectada'}</div>
                     <div style={s.meta}><span>📺</span>{sc.current_program_id ? 'Programa asignado' : 'Sin programa'}</div>
                     <div style={s.meta}><span>🕐</span>{(sc.operating_start && sc.operating_end) ? operatingSummary(sc.operating_start, sc.operating_end) : 'Siempre activa'}</div>
@@ -495,16 +503,10 @@ export default function Screens() {
                 <input style={s.input} value={editName} onChange={e => setEditName(e.target.value)} placeholder="Ej: Kennedy SN" />
               </div>
               <div style={s.formGroup}>
-                <label style={s.label}>Ubicación</label>
-                <input style={s.input} value={editLocation} onChange={e => setEditLocation(e.target.value)} placeholder="Ej: Santo Domingo" />
-              </div>
-              <div style={s.formGroup}>
-                <label style={s.label}>Resolución</label>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <input style={{ ...s.input, width: '90px' }} type="number" value={editWidth} onChange={e => setEditWidth(+e.target.value)} />
-                  <span style={{ color: '#94A3B8' }}>×</span>
-                  <input style={{ ...s.input, width: '90px' }} type="number" value={editHeight} onChange={e => setEditHeight(+e.target.value)} />
-                </div>
+                <label style={s.label}>Dirección</label>
+                <input style={s.input} value={editLocation} onChange={e => setEditLocation(e.target.value)}
+                  placeholder="Dirección o enlace de Google Maps" />
+                <span style={{ color: '#94A3B8', fontSize: '0.75rem' }}>Puedes pegar un enlace de Google Maps</span>
               </div>
               <div style={s.formGroup}>
                 <label style={s.label}>Capacidad de anuncios</label>
@@ -550,13 +552,19 @@ export default function Screens() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
                 <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: getStatus(preview.last_heartbeat, preview.current_program_id).dot, flexShrink: 0 }} />
                 <span style={{ fontWeight: 700, color: '#0F172A', fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preview.name}</span>
-                <span style={{ color: '#94A3B8', fontSize: '0.78rem', flexShrink: 0 }}>· {preview.width}×{preview.height}</span>
+                {(() => {
+                  const pg = programs.find(p => p.id === preview.current_program_id)
+                  return pg ? <span style={{ color: '#94A3B8', fontSize: '0.78rem', flexShrink: 0 }}>· {pg.width}×{pg.height}</span> : null
+                })()}
               </div>
               <button onClick={() => setPreview(null)} style={s.modalClose} aria-label="Cerrar">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
-            <div style={{ position: 'relative', width: '100%', aspectRatio: `${preview.width} / ${preview.height}`, background: '#000', maxHeight: '70vh' }}>
+            <div style={{ position: 'relative', width: '100%', aspectRatio: (() => {
+              const pg = programs.find(p => p.id === preview.current_program_id)
+              return pg ? `${pg.width} / ${pg.height}` : '16 / 9'
+            })(), background: '#000', maxHeight: '70vh' }}>
               {preview.current_program_id
                 ? <ScreenStage client={supabase} programId={preview.current_program_id} />
                 : <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', color: 'rgba(255,255,255,0.6)' }}>
