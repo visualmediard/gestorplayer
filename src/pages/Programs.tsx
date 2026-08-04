@@ -81,8 +81,12 @@ export default function Programs({ initialEditId }: Props = {}) {
     if (created) { setAssignScreen(''); setAssignFor({ id: created.id, name: created.name }) }
   }
 
-  async function handleDelete(id: string) {
-    if (!await confirm({ title: '¿Eliminar este programa?', confirmLabel: 'Eliminar', danger: true })) return
+  async function handleDelete(id: string, name: string) {
+    if (!await confirm({
+      title: `¿Eliminar el programa "${name}"?`,
+      message: 'Se eliminarán también todas sus zonas y la distribución de contenido del programa. Cualquier pantalla que lo esté mostrando quedará sin programa asignado.\n\nLos archivos siguen en tu biblioteca y las reproducciones en Estadísticas.',
+      confirmLabel: 'Eliminar programa', danger: true,
+    })) return
     await supabase.from('programs').delete().eq('id', id); load()
   }
 
@@ -244,7 +248,7 @@ export default function Programs({ initialEditId }: Props = {}) {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     Editar zonas
                   </button>
-                  <button style={s.btnDel} onClick={() => handleDelete(p.id)}>
+                  <button style={s.btnDel} onClick={() => handleDelete(p.id, p.name)}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                     Eliminar
                   </button>
