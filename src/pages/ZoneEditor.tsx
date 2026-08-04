@@ -10,7 +10,7 @@ import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
 import { useDialog } from '../components/Dialog'
 
-type Program = { id: string; name: string; width: number; height: number }
+type Program = { id: string; name: string; width: number; height: number; organization_id: string | null }
 type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean; fit_mode: string | null }
 type SubPlaylist = { id: string; name: string; sort_order: number; is_unlimited: boolean; daily_frequency: number | null }
 type MediaItem = { id: string; name: string; type: 'image' | 'video' | 'url'; storage_path: string; url?: string; duration_seconds: number | null; sort_order: number; daily_frequency: number | null; is_unlimited: boolean; sub_playlist_id: string | null; expires_at: string | null; schedule_days: number[] | null; schedule_start: string | null; schedule_end: string | null; campaign_id: string | null }
@@ -315,7 +315,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
 
   async function handleAddUrl() {
     if (!urlValue.trim() || !selectedZone) return
-    await supabase.from('media_content').insert({ zone_id: selectedZone, name: urlName.trim() || urlValue.trim(), type: 'url', storage_path: '', url: urlValue.trim(), duration_seconds: urlDuration, is_unlimited: urlFreq === 0, daily_frequency: urlFreq === 0 ? null : urlFreq, uploaded_by: profile?.id, sort_order: entries.length, sub_playlist_id: null })
+    await supabase.from('media_content').insert({ zone_id: selectedZone, name: urlName.trim() || urlValue.trim(), type: 'url', storage_path: '', url: urlValue.trim(), duration_seconds: urlDuration, is_unlimited: urlFreq === 0, daily_frequency: urlFreq === 0 ? null : urlFreq, uploaded_by: profile?.id, organization_id: program?.organization_id ?? null, sort_order: entries.length, sub_playlist_id: null })
     setUrlValue(''); setUrlName(''); setUrlDuration(30); setUrlFreq(0); setShowUrlForm(false); loadEntries(selectedZone)
   }
 
@@ -372,7 +372,8 @@ export default function ZoneEditor({ programId, onBack }: Props) {
       storage_path: item.storage_path, url: item.url,
       duration_seconds: item.duration_seconds,
       is_unlimited: true, daily_frequency: null,
-      uploaded_by: profile?.id, expires_at: null, sub_playlist_id: null,
+      uploaded_by: profile?.id, organization_id: program?.organization_id ?? null,
+      expires_at: null, sub_playlist_id: null,
     }
     if (uploadTarget.type === 'zone') {
       insertData.sort_order = entries.length
@@ -433,7 +434,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     const isVideo = file.type.startsWith('video/')
     const { url, size, error: storageError } = await uploadToR2(file, setProgress)
     if (storageError || !url) { setError('Error: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
-    const insertData: any = { name: file.name, type: isVideo ? 'video' : 'image', storage_path: url, duration_seconds: isVideo ? null : duration, uploaded_by: profile?.id, is_unlimited: true, daily_frequency: null, file_size_bytes: size ?? file.size }
+    const insertData: any = { name: file.name, type: isVideo ? 'video' : 'image', storage_path: url, duration_seconds: isVideo ? null : duration, uploaded_by: profile?.id, organization_id: program?.organization_id ?? null, is_unlimited: true, daily_frequency: null, file_size_bytes: size ?? file.size }
     if (uploadTarget.type === 'zone') { insertData.zone_id = selectedZone; insertData.sort_order = entries.length; insertData.sub_playlist_id = null }
     else { const entry = entries.find(e => e.kind === 'sub' && e.sub.id === uploadTarget.id); const subItems = entry?.kind === 'sub' ? entry.items : []; insertData.zone_id = selectedZone; insertData.sub_playlist_id = uploadTarget.id; insertData.sort_order = subItems.length }
     await supabase.from('media_content').insert(insertData)

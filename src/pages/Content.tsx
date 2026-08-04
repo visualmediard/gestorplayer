@@ -111,6 +111,7 @@ export default function Content() {
       type: isVideo ? 'video' : 'image', storage_path: url,
       duration_seconds: isVideo ? null : duration,
       uploaded_by: profile?.id, file_size_bytes: size ?? file.size,
+      organization_id: orgId || null,
     })
     if (insertError) { setError('Error al guardar: ' + insertError.message); setUploading(false); return }
     setFile(null); setProgress(0); setUploading(false); setDuration(10)

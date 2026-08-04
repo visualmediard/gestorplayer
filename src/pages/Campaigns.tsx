@@ -57,6 +57,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   const { confirm, alert } = useDialog()
   // Solo admin y operador gestionan campañas; vendedor y cliente son de lectura.
   const canManage = hasRole(profile?.role, 'admin', 'operator')
+  const [orgId, setOrgId]         = useState<string | null>(null)
   const [stats, setStats]         = useState<CampaignStat[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [media, setMedia]         = useState<MediaItem[]>([])
@@ -104,6 +105,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     setLoading(true)
     const { data: pd } = await supabase.from('profiles').select('organization_id').eq('id', profile?.id ?? '').single()
     const orgId = pd?.organization_id
+    setOrgId(orgId ?? null)
     if (!orgId) { setLoading(false); return }
 
     const [{ data: campData }, { data: statData }, { data: mediaData }, { data: screenData }, { data: progData }, { data: zoneData }] = await Promise.all([
@@ -185,6 +187,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
       zone_id: null, name: uploadFile.name, type: isVideo ? 'video' : 'image',
       storage_path: url, duration_seconds: isVideo ? null : 10,
       uploaded_by: profile?.id, file_size_bytes: size ?? uploadFile.size,
+      organization_id: orgId,
     }).select('id, name, type, storage_path, duration_seconds').single()
     if (insertError) { setWizardError('Error al guardar: ' + insertError.message); setUploading(false); return }
     if (inserted) {
@@ -202,7 +205,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     const { data: inserted, error } = await supabase.from('media_content').insert({
       zone_id: null, name: urlName.trim() || urlValue.trim(), type: 'url',
       storage_path: '', url: urlValue.trim(), duration_seconds: urlDuration,
-      uploaded_by: profile?.id,
+      uploaded_by: profile?.id, organization_id: orgId,
     }).select('id, name, type, storage_path, duration_seconds').single()
     if (error) { setWizardError('Error: ' + error.message); return }
     if (inserted) {
@@ -429,7 +432,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
         const { error: insErr } = await supabase.from('media_content').insert({
           zone_id: zoneId, name: m.name, type: m.type,
           storage_path: m.storage_path, duration_seconds: m.duration_seconds,
-          uploaded_by: profile?.id, campaign_id: campId,
+          uploaded_by: profile?.id, campaign_id: campId, organization_id: orgId,
           daily_frequency: a.frequency === 0 ? null : a.frequency,
           is_unlimited: a.frequency === 0, expires_at: endsAt, not_before: startsAt,
           schedule_start: schedStart, schedule_end: schedEnd,
@@ -456,7 +459,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
           const { error: insErr } = await supabase.from('media_content').insert({
             zone_id: zoneId, sub_playlist_id: spRow.id, name: m.name,
             type: m.type, storage_path: m.storage_path, duration_seconds: m.duration_seconds,
-            uploaded_by: profile?.id, campaign_id: campId,
+            uploaded_by: profile?.id, campaign_id: campId, organization_id: orgId,
             is_unlimited: true, daily_frequency: null, sort_order: order++, expires_at: endsAt, not_before: startsAt,
             schedule_start: schedStart, schedule_end: schedEnd,
           })
