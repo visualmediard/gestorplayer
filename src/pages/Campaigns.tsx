@@ -1,9 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { uploadToR2 } from '../lib/uploadToR2'
+import { uploadDirect } from '../lib/uploadDirect'
 import { resolveMediaUrl, isRemoteUrl } from '../lib/mediaUrl'
-import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { isResting, scheduleRangeLabel, campaignDateState } from '../lib/dailySchedule'
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
@@ -181,7 +180,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     const fits = await checkStorageFits(uploadFile.size)
     if (!fits.ok) { setWizardError(fits.message ?? 'Sin espacio disponible.'); setUploading(false); return }
     const isVideo = uploadFile.type.startsWith('video/')
-    const { url, size, error: storageError } = await uploadToR2(uploadFile, setUploadProgress)
+    const { url, size, error: storageError } = await uploadDirect(uploadFile, setUploadProgress)
     if (storageError || !url) { setWizardError('Error al subir: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
     const { data: inserted, error: insertError } = await supabase.from('media_content').insert({
       zone_id: null, name: uploadFile.name, type: isVideo ? 'video' : 'image',
@@ -223,7 +222,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
     const fits = await checkStorageFits(file.size)
     if (!fits.ok) { await alert({ title: 'Sin espacio disponible', message: fits.message ?? '' }); setReplaceUploading(false); return }
     const isVideo = file.type.startsWith('video/')
-    const { url, size, error: storageError } = await uploadToR2(file, setReplaceProgress)
+    const { url, size, error: storageError } = await uploadDirect(file, setReplaceProgress)
     if (storageError || !url) { await alert({ title: 'Error al subir', message: storageError?.message ?? 'Ocurrió un error desconocido.' }); setReplaceUploading(false); return }
     if (m.storage_path && !isRemoteUrl(m.storage_path)) await supabase.storage.from('media').remove([m.storage_path])
     await supabase.from('media_content').update({
@@ -601,9 +600,9 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
                 <div>
                   {/* Hidden file inputs */}
                   <input ref={uploadRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
-                    onChange={e => { const f = e.target.files?.[0]; const tooBig = f && fileTooLargeMessage(f); if (tooBig) { setWizardError(tooBig); e.target.value = ''; return } if (f) { setWizardError(null); setUploadFile(f) } }} />
+                    onChange={e => { const f = e.target.files?.[0]; if (f) { setWizardError(null); setUploadFile(f) } }} />
                   <input ref={replaceRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
-                    onChange={e => { const f = e.target.files?.[0]; const tooBig = f && fileTooLargeMessage(f); if (tooBig) { setWizardError(tooBig); e.target.value = ''; return } if (f) handleWizardReplace(f); e.target.value = '' }} />
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleWizardReplace(f); e.target.value = '' }} />
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <h4 style={s.stepTitle}>Contenido y zonas</h4>
@@ -621,7 +620,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
                   {/* Upload form */}
                   {showUploadForm && (
                     <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.875rem', marginBottom: '0.75rem' }}>
-                      <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0F172A', marginBottom: '0.5rem', display: 'block' }}>Subir nuevo archivo <span style={{ color: '#94A3B8', fontWeight: 400 }}>(máx. {MAX_FILE_MB} MB)</span></label>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0F172A', marginBottom: '0.5rem', display: 'block' }}>Subir nuevo archivo <span style={{ color: '#94A3B8', fontWeight: 400 }}>(recomendado: hasta 100 MB)</span></label>
                       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
                         <button style={s.btnSm} onClick={() => uploadRef.current?.click()}>
                           {uploadFile ? uploadFile.name : 'Seleccionar archivo...'}

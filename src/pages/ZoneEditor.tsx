@@ -1,9 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { uploadToR2 } from '../lib/uploadToR2'
+import { uploadDirect } from '../lib/uploadDirect'
 import { resolveMediaUrl } from '../lib/mediaUrl'
 import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
-import { fileTooLargeMessage } from '../lib/fileLimit'
 import { dedupeMedia } from '../lib/dedupeMedia'
 import { isResting, scheduleRangeLabel, campaignDateState } from '../lib/dailySchedule'
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
@@ -407,7 +406,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     const fits = await checkStorageFits(file.size)
     if (!fits.ok) { await alert({ title: 'Sin espacio disponible', message: fits.message ?? '' }); setReplacing(false); return }
     const isVideo = file.type.startsWith('video/')
-    const { url, size, error: storageError } = await uploadToR2(file, setReplaceProgress)
+    const { url, size, error: storageError } = await uploadDirect(file, setReplaceProgress)
     if (storageError || !url) { await alert({ title: 'Error al subir', message: storageError?.message ?? 'Ocurrió un error desconocido.' }); setReplacing(false); return }
     // Primero se actualiza la fila al archivo nuevo; después se borra el
     // archivo viejo (R2 vía Edge Function o Supabase legacy) solo si ninguna
@@ -432,7 +431,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     const fits = await checkStorageFits(file.size)
     if (!fits.ok) { setError(fits.message ?? 'Sin espacio disponible.'); setUploading(false); return }
     const isVideo = file.type.startsWith('video/')
-    const { url, size, error: storageError } = await uploadToR2(file, setProgress)
+    const { url, size, error: storageError } = await uploadDirect(file, setProgress)
     if (storageError || !url) { setError('Error: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
     const insertData: any = { name: file.name, type: isVideo ? 'video' : 'image', storage_path: url, duration_seconds: isVideo ? null : duration, uploaded_by: profile?.id, organization_id: program?.organization_id ?? null, is_unlimited: true, daily_frequency: null, file_size_bytes: size ?? file.size }
     if (uploadTarget.type === 'zone') { insertData.zone_id = selectedZone; insertData.sort_order = entries.length; insertData.sub_playlist_id = null }
@@ -485,9 +484,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
       <input ref={replaceRef} type="file" accept="image/*,video/*" style={{ display: 'none' }}
         onChange={e => {
           const f = e.target.files?.[0]
-          const tooBig = f && fileTooLargeMessage(f)
           e.target.value = ''
-          if (tooBig) { void alert({ title: 'Archivo demasiado grande', message: tooBig }); return }
           if (f && replacingItem) handleReplaceFromFile(f)
         }} />
 
@@ -750,8 +747,6 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                   <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
                     <input ref={fileRef} type="file" accept="image/*,video/*" style={s.input} onChange={e => {
                       const f = e.target.files?.[0] ?? null
-                      const tooBig = f && fileTooLargeMessage(f)
-                      if (tooBig) { setError(tooBig); setFile(null); e.target.value = ''; return }
                       setError(null); setFile(f)
                     }} />
                     {file && !file.type.startsWith('video/') && <input style={{ ...s.input, width: '80px' }} type="number" min={1} max={60} value={duration} onChange={e => setDuration(+e.target.value)} placeholder="seg" />}
