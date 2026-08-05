@@ -67,6 +67,10 @@ export default function Content() {
   const [tagDropdownOpen, setTagDropdownOpen] = useState<string | null>(null)
   const [deleteDlg, setDeleteDlg]     = useState<DeleteDlg | null>(null)
 
+  // Selección múltiple para borrado en lote
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+
   // ── LOAD ────────────────────────────────────────────────────────────────
   async function load() {
     setLoading(true)
@@ -161,20 +165,17 @@ export default function Content() {
   }
 
   // ── DELETE MEDIA ────────────────────────────────────────────────────────
-  async function handleDelete(item: MediaItem) {
-    if (!await confirm({
-      title: `¿Eliminar "${item.name}" de la biblioteca?`,
-      message: 'Se quitará de la biblioteca y de las zonas donde esté, y el archivo se eliminará del almacenamiento. Las reproducciones ya registradas se conservan en Estadísticas.',
-      confirmLabel: 'Eliminar', danger: true,
-    })) return
+  // Núcleo del borrado de un ítem (sin confirmación ni recarga), reutilizable
+  // por el borrado individual y el borrado en lote.
+  async function deleteMediaItem(item: MediaItem) {
     const now = new Date().toISOString()
     if (item.type === 'url') {
       await supabase.from('media_content').update({ archived_at: now }).is('campaign_id', null).eq('id', item.id)
-      load(); return
+      return
     }
     const { data: copies } = await supabase.from('media_content').select('id, storage_path').is('campaign_id', null).eq('name', item.name).eq('type', item.type)
     const rows = copies ?? []
-    if (rows.length === 0) { load(); return }
+    if (rows.length === 0) return
     const ids = rows.map(r => r.id)
     const paths = [...new Set(rows.map(r => r.storage_path).filter(Boolean))] as string[]
     const { data: stats } = await supabase.from('content_stats').select('content_id, total_reproductions').in('content_id', ids)
@@ -184,7 +185,40 @@ export default function Content() {
     if (keepIds.length > 0) await supabase.from('media_content').update({ archived_at: now, storage_path: null }).in('id', keepIds)
     if (dropIds.length > 0) await supabase.from('media_content').delete().in('id', dropIds)
     for (const p of paths) await deleteMediaFileIfUnused(p)
+  }
+
+  async function handleDelete(item: MediaItem) {
+    if (!await confirm({
+      title: `¿Eliminar "${item.name}" de la biblioteca?`,
+      message: 'Se quitará de la biblioteca y de las zonas donde esté, y el archivo se eliminará del almacenamiento. Las reproducciones ya registradas se conservan en Estadísticas.',
+      confirmLabel: 'Eliminar', danger: true,
+    })) return
+    await deleteMediaItem(item)
     notifyStorageChanged(); load()
+  }
+
+  async function handleBulkDelete() {
+    const chosen = items.filter(i => selectedIds.has(i.id))
+    if (chosen.length === 0) return
+    if (!await confirm({
+      title: `¿Eliminar ${chosen.length} ${chosen.length === 1 ? 'archivo' : 'archivos'} de la biblioteca?`,
+      message: 'Se quitarán de la biblioteca y de las zonas donde estén, y los archivos se eliminarán del almacenamiento. Las reproducciones ya registradas se conservan en Estadísticas.',
+      confirmLabel: `Eliminar ${chosen.length}`, danger: true,
+    })) return
+    setBulkDeleting(true)
+    for (const item of chosen) await deleteMediaItem(item)
+    setBulkDeleting(false)
+    setSelectedIds(new Set())
+    notifyStorageChanged(); load()
+  }
+
+  // ── SELECCIÓN ─────────────────────────────────────────────────────────────
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
   }
 
   // ── TAG: ASSIGN / UNASSIGN ──────────────────────────────────────────────
@@ -299,6 +333,17 @@ export default function Content() {
     acc[tag.id] = items.filter(i => (itemTagMap[i.id] ?? []).some(t => t.id === tag.id)).length
     return acc
   }, {})
+
+  const allVisibleSelected  = filtered.length > 0 && filtered.every(i => selectedIds.has(i.id))
+  const someVisibleSelected = filtered.some(i => selectedIds.has(i.id))
+  function toggleSelectAll() {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (filtered.every(i => next.has(i.id))) filtered.forEach(i => next.delete(i.id))
+      else filtered.forEach(i => next.add(i.id))
+      return next
+    })
+  }
 
   // ── RENDER ───────────────────────────────────────────────────────────────
   return (
@@ -580,10 +625,29 @@ export default function Content() {
               {!activeTagId && <p style={{ color: '#94A3B8', fontSize: '0.85rem', marginTop: '0.25rem' }}>Crea un programa con zonas y luego sube archivos aquí.</p>}
             </div>
           ) : (
+            <>
+            {selectedIds.size > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '10px', padding: '0.6rem 0.9rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.85rem', color: '#0F172A', fontWeight: 600 }}>
+                  {selectedIds.size} {selectedIds.size === 1 ? 'seleccionado' : 'seleccionados'}
+                </span>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button style={s.btnOutline} onClick={() => setSelectedIds(new Set())} disabled={bulkDeleting}>Deseleccionar</button>
+                  <button style={{ ...s.btnPrimary, background: '#EF4444', opacity: bulkDeleting ? 0.6 : 1 }} onClick={handleBulkDelete} disabled={bulkDeleting}>
+                    {bulkDeleting ? 'Eliminando…' : `Eliminar ${selectedIds.size}`}
+                  </button>
+                </div>
+              </div>
+            )}
             <div style={s.tableWrap}>
               <table style={s.table}>
                 <thead>
                   <tr>
+                    <th style={{ ...s.th, width: '40px' }}>
+                      <input type="checkbox" checked={allVisibleSelected}
+                        ref={el => { if (el) el.indeterminate = !allVisibleSelected && someVisibleSelected }}
+                        onChange={toggleSelectAll} style={{ cursor: 'pointer' }} title="Seleccionar todo" />
+                    </th>
                     <th style={s.th}>Nombre del medio</th>
                     <th style={s.th}>Tipo de medio</th>
                     <th style={s.th}>Programa → Zona</th>
@@ -597,7 +661,10 @@ export default function Content() {
                     const zone     = zones.find(z => z.id === item.zone_id)
                     const itemTags = itemTagMap[item.id] ?? []
                     return (
-                      <tr key={item.id} style={s.tr}>
+                      <tr key={item.id} style={{ ...s.tr, background: selectedIds.has(item.id) ? '#F8FAFF' : undefined }}>
+                        <td style={{ ...s.td, width: '40px' }}>
+                          <input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleSelect(item.id)} style={{ cursor: 'pointer' }} />
+                        </td>
                         <td style={s.td}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                             <div style={{ width: '48px', height: '32px', borderRadius: '6px', overflow: 'hidden', background: '#F1F5F9', flexShrink: 0 }}>
@@ -692,6 +759,7 @@ export default function Content() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
       </div>
