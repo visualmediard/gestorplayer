@@ -1,10 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { uploadToR2 } from '../lib/uploadToR2'
+import { uploadDirect } from '../lib/uploadDirect'
 import { resolveMediaUrl } from '../lib/mediaUrl'
 import { deleteMediaFileIfUnused } from '../lib/deleteMediaFile'
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
-import { fileTooLargeMessage, MAX_FILE_MB } from '../lib/fileLimit'
 import { dedupeMedia } from '../lib/dedupeMedia'
 import { useAuth } from '../auth/AuthContext'
 import { useDialog } from '../components/Dialog'
@@ -24,6 +23,18 @@ type DeleteDlg = {
 
 const TAG_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#64748B']
 
+// Tamaño recomendado (solo informativo, NO bloquea). El único límite real es
+// el cupo de almacenamiento de la organización, validado en la Edge Function.
+const RECOMMENDED_MB = 100
+
+type UploadItem = {
+  id: string
+  file: File
+  status: 'pendiente' | 'subiendo' | 'ok' | 'error'
+  progress: number
+  message?: string
+}
+
 export default function Content() {
   const { profile } = useAuth()
   const { confirm } = useDialog()
@@ -39,9 +50,9 @@ export default function Content() {
   const [showForm, setShowForm]       = useState(false)
   const [selectedZone, setSelectedZone] = useState('')
   const [duration, setDuration]       = useState(10)
-  const [file, setFile]               = useState<File | null>(null)
-  const [uploading, setUploading]     = useState(false)
-  const [progress, setProgress]       = useState(0)
+  const [uploads, setUploads]         = useState<UploadItem[]>([])
+  const [batchRunning, setBatchRunning] = useState(false)
+  const [summary, setSummary]         = useState<{ ok: number; failed: number } | null>(null)
   const [error, setError]             = useState<string | null>(null)
   const [search, setSearch]           = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
@@ -95,29 +106,58 @@ export default function Content() {
 
   useEffect(() => { load() }, [])
 
-  // ── UPLOAD ──────────────────────────────────────────────────────────────
-  async function handleUpload() {
-    if (!file) { setError('Selecciona un archivo.'); return }
-    const tooBig = fileTooLargeMessage(file)
-    if (tooBig) { setError(tooBig); return }
-    setUploading(true); setError(null)
-    const fits = await checkStorageFits(file.size)
-    if (!fits.ok) { setError(fits.message ?? 'Sin espacio disponible.'); setUploading(false); return }
-    const isVideo = file.type.startsWith('video/')
-    const { url, size, error: storageError } = await uploadToR2(file, setProgress)
-    if (storageError || !url) { setError('Error al subir: ' + (storageError?.message ?? 'desconocido')); setUploading(false); return }
-    const { error: insertError } = await supabase.from('media_content').insert({
-      zone_id: selectedZone || null, name: file.name,
+  // ── UPLOAD (múltiple, simultáneo, tolerante a fallos) ────────────────────
+  function onSelectFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const list = Array.from(e.target.files ?? [])
+    setError(null); setSummary(null)
+    setUploads(list.map(f => ({ id: crypto.randomUUID(), file: f, status: 'pendiente' as const, progress: 0 })))
+  }
+
+  function patchUpload(id: string, patch: Partial<UploadItem>) {
+    setUploads(prev => prev.map(u => (u.id === id ? { ...u, ...patch } : u)))
+  }
+
+  // Sube un archivo y crea su fila en media_content. No lanza: marca el estado
+  // del ítem y devuelve true/false para el resumen.
+  async function uploadOne(item: UploadItem): Promise<boolean> {
+    patchUpload(item.id, { status: 'subiendo', progress: 0, message: undefined })
+    const isVideo = item.file.type.startsWith('video/')
+    const { url, size, error: upErr } = await uploadDirect(item.file, p => patchUpload(item.id, { progress: p }))
+    if (upErr || !url) { patchUpload(item.id, { status: 'error', message: upErr?.message ?? 'Error al subir' }); return false }
+    const { error: insErr } = await supabase.from('media_content').insert({
+      zone_id: selectedZone || null, name: item.file.name,
       type: isVideo ? 'video' : 'image', storage_path: url,
       duration_seconds: isVideo ? null : duration,
-      uploaded_by: profile?.id, file_size_bytes: size ?? file.size,
+      uploaded_by: profile?.id, file_size_bytes: size ?? item.file.size,
       organization_id: orgId || null,
     })
-    if (insertError) { setError('Error al guardar: ' + insertError.message); setUploading(false); return }
-    setFile(null); setProgress(0); setUploading(false); setDuration(10)
-    setSelectedZone(''); setShowForm(false)
-    if (fileRef.current) fileRef.current.value = ''
+    if (insErr) { patchUpload(item.id, { status: 'error', message: 'Error al guardar: ' + insErr.message }); return false }
+    patchUpload(item.id, { status: 'ok', progress: 100 })
+    return true
+  }
+
+  async function handleUploadAll() {
+    const pending = uploads.filter(u => u.status === 'pendiente' || u.status === 'error')
+    if (pending.length === 0) { setError('Selecciona al menos un archivo.'); return }
+    setError(null); setSummary(null)
+    // Pre-chequeo del LOTE completo contra el cupo (evita la carrera del check
+    // por-archivo cuando suben todos a la vez).
+    const totalSize = pending.reduce((s, u) => s + u.file.size, 0)
+    const fits = await checkStorageFits(totalSize)
+    if (!fits.ok) { setError(fits.message ?? 'El lote no cabe en tu almacenamiento disponible.'); return }
+    setBatchRunning(true)
+    // Sin límite de concurrencia: todos a la vez.
+    const results = await Promise.all(pending.map(uploadOne))
+    setBatchRunning(false)
+    const ok = results.filter(Boolean).length
+    setSummary({ ok, failed: results.length - ok })
     notifyStorageChanged(); load()
+  }
+
+  function closeUploadForm() {
+    setShowForm(false); setUploads([]); setSummary(null); setError(null)
+    setDuration(10); setSelectedZone('')
+    if (fileRef.current) fileRef.current.value = ''
   }
 
   // ── DELETE MEDIA ────────────────────────────────────────────────────────
@@ -365,51 +405,74 @@ export default function Content() {
         </div>
       </div>
 
-      {/* Upload form */}
+      {/* Upload form (múltiple) */}
       {showForm && (
         <div style={s.formCard}>
-          <h3 style={s.formTitle}>Subir archivo</h3>
+          <h3 style={s.formTitle}>Subir archivos</h3>
           <div style={s.formRow}>
             <div style={s.formGroup}>
               <label style={s.label}>Zona destino <span style={{ color: '#94A3B8', fontWeight: 400 }}>(opcional)</span></label>
-              <select style={s.input} value={selectedZone} onChange={e => setSelectedZone(e.target.value)}>
+              <select style={s.input} value={selectedZone} onChange={e => setSelectedZone(e.target.value)} disabled={batchRunning}>
                 <option value="">— Solo biblioteca, sin zona —</option>
                 {zones.map(z => <option key={z.id} value={z.id}>{z.program_name} → {z.name}</option>)}
               </select>
             </div>
             <div style={s.formGroup}>
-              <label style={s.label}>Archivo (imagen o video) <span style={{ color: '#94A3B8', fontWeight: 400 }}>(máx. {MAX_FILE_MB} MB)</span></label>
-              <input ref={fileRef} type="file" accept="image/*,video/*" style={s.input} onChange={e => {
-                const f = e.target.files?.[0] ?? null
-                const tooBig = f && fileTooLargeMessage(f)
-                if (tooBig) { setError(tooBig); setFile(null); if (fileRef.current) fileRef.current.value = ''; return }
-                setError(null); setFile(f)
-              }} />
+              <label style={s.label}>Archivos (imágenes o videos) <span style={{ color: '#94A3B8', fontWeight: 400 }}>· puedes seleccionar varios</span></label>
+              <input ref={fileRef} type="file" multiple accept="image/*,video/*" style={s.input} onChange={onSelectFiles} disabled={batchRunning} />
+              <span style={{ color: '#94A3B8', fontSize: '0.72rem' }}>Recomendado: hasta {RECOMMENDED_MB} MB por archivo. El límite real es tu almacenamiento disponible.</span>
             </div>
-            {file && !file.type.startsWith('video/') && (
+            {uploads.some(u => !u.file.type.startsWith('video/')) && (
               <div style={s.formGroup}>
-                <label style={s.label}>Duración (seg)</label>
-                <input style={{ ...s.input, width: '100px' }} type="number" min={1} max={60} value={duration} onChange={e => setDuration(+e.target.value)} />
+                <label style={s.label}>Duración imágenes (seg)</label>
+                <input style={{ ...s.input, width: '100px' }} type="number" min={1} max={60} value={duration} onChange={e => setDuration(+e.target.value)} disabled={batchRunning} />
               </div>
             )}
           </div>
-          {uploading && (
-            <div style={{ marginBottom: '0.75rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
-                <span style={{ color: '#64748B', fontSize: '0.8rem' }}>Subiendo...</span>
-                <span style={{ color: '#3B82F6', fontSize: '0.8rem', fontWeight: 600 }}>{progress}%</span>
-              </div>
-              <div style={{ height: '5px', background: '#E2E8F0', borderRadius: '999px', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${progress}%`, background: '#3B82F6', borderRadius: '999px', transition: 'width 0.2s' }} />
-              </div>
+
+          {/* Lista de archivos con progreso individual */}
+          {uploads.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', margin: '0.25rem 0 0.9rem' }}>
+              {uploads.map(u => {
+                const color = u.status === 'ok' ? '#10B981' : u.status === 'error' ? '#EF4444' : '#3B82F6'
+                const label = u.status === 'ok' ? '✓' : u.status === 'error' ? '✗' : u.status === 'subiendo' ? `${u.progress}%` : 'En espera'
+                return (
+                  <div key={u.id} style={{ padding: '0.5rem 0.7rem', borderRadius: '8px', border: '1px solid #F1F5F9', background: '#F8FAFC' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: '0.8rem', color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.file.name}</span>
+                      <span style={{ fontSize: '0.7rem', color: '#94A3B8', flexShrink: 0 }}>{(u.file.size / (1024 * 1024)).toFixed(1)} MB</span>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color, flexShrink: 0, minWidth: '52px', textAlign: 'right' }}>{label}</span>
+                    </div>
+                    {u.status === 'subiendo' && (
+                      <div style={{ height: '4px', background: '#E2E8F0', borderRadius: '999px', overflow: 'hidden', marginTop: '0.4rem' }}>
+                        <div style={{ height: '100%', width: `${u.progress}%`, background: '#3B82F6', borderRadius: '999px', transition: 'width 0.2s' }} />
+                      </div>
+                    )}
+                    {u.status === 'error' && u.message && <div style={{ fontSize: '0.7rem', color: '#EF4444', marginTop: '0.25rem' }}>{u.message}</div>}
+                  </div>
+                )
+              })}
             </div>
           )}
+
+          {/* Resumen final */}
+          {summary && (
+            <div style={{ display: 'inline-flex', gap: '1rem', fontSize: '0.82rem', fontWeight: 600, marginBottom: '0.9rem' }}>
+              <span style={{ color: '#10B981' }}>✓ {summary.ok} {summary.ok === 1 ? 'subió' : 'subieron'}</span>
+              {summary.failed > 0 && <span style={{ color: '#EF4444' }}>✗ {summary.failed} {summary.failed === 1 ? 'falló' : 'fallaron'}</span>}
+            </div>
+          )}
+
           {error && <p style={{ color: '#EF4444', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{error}</p>}
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button style={{ ...s.btnPrimary, opacity: uploading || !file ? 0.6 : 1 }} onClick={handleUpload} disabled={uploading || !file}>
-              {uploading ? `Subiendo ${progress}%...` : 'Subir archivo'}
+            {uploads.some(u => u.status === 'pendiente' || u.status === 'error') && (
+              <button style={{ ...s.btnPrimary, opacity: batchRunning ? 0.6 : 1 }} onClick={handleUploadAll} disabled={batchRunning}>
+                {batchRunning ? 'Subiendo…' : `Subir ${uploads.filter(u => u.status === 'pendiente' || u.status === 'error').length} archivo(s)`}
+              </button>
+            )}
+            <button style={s.btnOutline} onClick={closeUploadForm} disabled={batchRunning}>
+              {summary ? 'Cerrar' : 'Cancelar'}
             </button>
-            <button style={s.btnOutline} onClick={() => setShowForm(false)}>Cancelar</button>
           </div>
         </div>
       )}
