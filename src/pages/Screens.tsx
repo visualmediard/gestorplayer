@@ -95,6 +95,19 @@ function isScreenOnline(sc: Screen): boolean {
   return getStatus(sc.last_heartbeat, sc.current_program_id).label === 'Activa'
 }
 
+// Iconos de línea (estilo del menú lateral). Heredan color vía currentColor y
+// tamaño vía la prop `size`, así encajan en el texto muted de las tarjetas.
+function Svg({ size = 13, children }: { size?: number; children: React.ReactNode }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>{children}</svg>
+}
+const IconPin = ({ size }: { size?: number }) => <Svg size={size}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></Svg>
+const IconActivity = ({ size }: { size?: number }) => <Svg size={size}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Svg>
+const IconLayout = ({ size }: { size?: number }) => <Svg size={size}><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="9" y1="21" x2="9" y2="9" /></Svg>
+const IconClock = ({ size }: { size?: number }) => <Svg size={size}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></Svg>
+const IconLock = ({ size }: { size?: number }) => <Svg size={size}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></Svg>
+const IconMonitor = ({ size }: { size?: number }) => <Svg size={size}><rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></Svg>
+const IconKey = ({ size }: { size?: number }) => <Svg size={size}><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></Svg>
+
 function OccupancyRing({ used, capacity }: { used: number; capacity: number }) {
   const pct = capacity > 0 ? Math.min((used / capacity) * 100, 100) : 0
   const r = 28
@@ -410,12 +423,12 @@ export default function Screens() {
                     <div style={{ flex: '2 1 150px', minWidth: 0, fontSize: '0.8rem', color: '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {sc.location
                         ? (isMapsUrl(sc.location)
-                          ? <a href={sc.location.trim()} target="_blank" rel="noopener noreferrer" style={{ color: '#2563EB', textDecoration: 'none', fontWeight: 600 }}>📍 Ver en Google Maps</a>
-                          : <>📍 {sc.location}</>)
+                          ? <a href={sc.location.trim()} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#2563EB', textDecoration: 'none', fontWeight: 600, maxWidth: '100%' }}><IconPin size={12} />Ver en Google Maps</a>
+                          : <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', maxWidth: '100%' }}><IconPin size={12} />{sc.location}</span>)
                         : <span style={{ color: '#CBD5E1' }}>Sin ubicación</span>}
                     </div>
                     <div style={{ flex: '1 1 110px', minWidth: 0, fontSize: '0.8rem', color: sc.current_program_id ? '#64748B' : '#F59E0B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {sc.current_program_id ? '📺 Programa asignado' : '📺 Sin programa'}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', maxWidth: '100%' }}><IconLayout size={12} />{sc.current_program_id ? 'Programa asignado' : 'Sin programa'}</span>
                     </div>
                     <div style={{ flexShrink: 0, fontSize: '0.8rem', fontWeight: 700, color: occColor, minWidth: '42px', textAlign: 'right' }}>{adCount}/{capacity}</div>
                     <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0, marginLeft: '0.25rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -460,19 +473,20 @@ export default function Screens() {
                           <a href={sc.location.trim()} target="_blank" rel="noopener noreferrer"
                             title="Abrir en Google Maps"
                             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#2563EB', textDecoration: 'none', fontWeight: 600 }}>
-                            <span>📍</span>Ver en Google Maps
+                            <IconPin />Ver en Google Maps
                           </a>
                         ) : (
-                          <><span>📍</span>{sc.location}</>
+                          <><IconPin />{sc.location}</>
                         )}
                       </div>
                     )}
-                    <div style={s.meta}><span>⏱</span>{sc.last_heartbeat ? new Date(sc.last_heartbeat).toLocaleTimeString('es-DO') : 'Nunca conectada'}</div>
-                    <div style={s.meta}><span>📺</span>{sc.current_program_id ? 'Programa asignado' : 'Sin programa'}</div>
-                    <div style={s.meta}><span>🕐</span>{(sc.operating_start && sc.operating_end) ? operatingSummary(sc.operating_start, sc.operating_end) : 'Siempre activa'}</div>
+                    <div style={s.meta}><IconActivity />{sc.last_heartbeat ? new Date(sc.last_heartbeat).toLocaleTimeString('es-DO') : 'Nunca conectada'}</div>
+                    <div style={s.meta}><IconLayout />{sc.current_program_id ? 'Programa asignado' : 'Sin programa'}</div>
+                    <div style={s.meta}><IconClock />{(sc.operating_start && sc.operating_end) ? operatingSummary(sc.operating_start, sc.operating_end) : 'Siempre activa'}</div>
 
                     {sc.device_token && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.2rem' }}>
+                        <span style={{ color: '#94A3B8', display: 'inline-flex' }} title="Token del dispositivo"><IconKey size={12} /></span>
                         <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: '#64748B' }}>{sc.device_token.slice(0, 16)}...</span>
                         <button onClick={() => copyToken(sc.device_token!)} style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '4px', color: '#2563EB', fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer' }}>
                           {copied === sc.device_token ? '✓' : 'Copiar'}
@@ -482,8 +496,8 @@ export default function Screens() {
 
                     {sc.device_fingerprint && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.2rem' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', color: '#059669' }}>
-                          🔒 Dispositivo vinculado
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', color: '#059669' }}>
+                          <IconLock size={12} /> Dispositivo vinculado
                         </span>
                         {canManage && (
                           <button
@@ -511,7 +525,7 @@ export default function Screens() {
                         ) : (
                           <button onClick={() => { setEditingHours(sc.id); setHoursValue(sc.operating_hours) }}
                             style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '20px', color: '#059669', fontSize: '0.7rem', padding: '2px 9px', cursor: 'pointer' }}>
-                            ⏱ {sc.operating_hours}h/día
+                            <IconClock size={12} /> {sc.operating_hours}h/día
                           </button>
                         )}
                       </div>
@@ -519,7 +533,7 @@ export default function Screens() {
                       // Vendedor: horas en solo lectura (sin control de edición).
                       <div style={{ marginTop: '0.3rem' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: '#F0FDF4', border: '1px solid #A7F3D0', borderRadius: '20px', color: '#059669', fontSize: '0.7rem', padding: '2px 9px' }}>
-                          ⏱ {sc.operating_hours}h/día
+                          <IconClock size={12} /> {sc.operating_hours}h/día
                         </span>
                       </div>
                     )}
@@ -669,7 +683,7 @@ export default function Screens() {
               {preview.current_program_id
                 ? <ScreenStage client={supabase} programId={preview.current_program_id} />
                 : <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', color: 'rgba(255,255,255,0.6)' }}>
-                    <div style={{ fontSize: '2rem' }}>📺</div>
+                    <IconMonitor size={34} />
                     <span style={{ fontSize: '0.85rem' }}>Sin programa asignado</span>
                   </div>
               }
