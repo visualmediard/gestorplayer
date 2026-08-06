@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import QRCode from 'qrcode'
 import ScreenStage from '../components/ScreenStage'
+import logoNegro from '../assets/logo/logo-negro.png'
 
 // Dedicated anonymous client: a screen is never "logged in", and even when an
 // admin previews /play in the same browser we must write as anon so RLS lets
@@ -151,9 +153,21 @@ function isWithinOperatingHours(start: string | null, end: string | null): boole
   return s < e ? (cur >= s && cur < e) : (cur >= s || cur < e)
 }
 
+// Clave de token persistido: un TV ya vinculado que reinicie y abra /play (sin
+// token en la URL) retoma solo, sin re-vincular.
+const TOKEN_STORAGE_KEY = 'gp_device_token'
+function readStoredToken(): string { try { return localStorage.getItem(TOKEN_STORAGE_KEY) || '' } catch { return '' } }
+// Código corto de vinculación (mismo formato que el player Android).
+function genPairCode(): string { return Math.random().toString(36).substring(2, 8).toUpperCase() }
+
 export default function Player() {
-  const token = new URLSearchParams(window.location.search).get('token') || ''
-  const [status, setStatus] = useState<'loading' | 'no-token' | 'invalid' | 'no-program' | 'playing' | 'locked' | 'released'>('loading')
+  const urlToken = new URLSearchParams(window.location.search).get('token') || ''
+  const [token, setToken] = useState(() => urlToken || readStoredToken())
+  const [status, setStatus] = useState<'loading' | 'no-token' | 'no-program' | 'playing' | 'locked' | 'released'>('loading')
+  // Vinculación por QR (cuando no hay token).
+  const [pairCode, setPairCode] = useState('')
+  const [qrDataUrl, setQrDataUrl] = useState('')
+  const [pairError, setPairError] = useState<string | null>(null)
   const [screen, setScreen] = useState<{ id: string; name: string } | null>(null)
   const [programId, setProgramId] = useState<string | null>(null)
   // true solo cuando este navegador confirmó ser el dueño del token (reclamó
@@ -184,7 +198,13 @@ export default function Player() {
       const { data: sc } = await supabase.from('screens')
         .select('id, name, current_program_id, device_fingerprint, last_seen_at, operating_start, operating_end, operating_hours, reset_requested_at')
         .eq('device_token', token).maybeSingle()
-      if (!sc) { setStatus('invalid'); return }
+      if (!sc) {
+        // Token inválido (borrado del panel o erróneo): se limpia el guardado y
+        // se vuelve a la pantalla de QR para re-vincular automáticamente.
+        try { localStorage.removeItem(TOKEN_STORAGE_KEY) } catch { /* noop */ }
+        setToken('')
+        return
+      }
 
       // ── Device locking por SESIÓN (una pestaña a la vez) ──
       const mySession = getWebSessionId()
@@ -258,7 +278,62 @@ export default function Player() {
     await supabase.from('screens').update({ last_heartbeat: new Date().toISOString() } as any).eq('id', screen.id)
   }
 
-  useEffect(() => { checkScreen() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Re-chequea al montar y cada vez que el token cambia (p. ej. tras vincular
+  // por QR: setToken → arranca la reproducción sin recargar la página).
+  useEffect(() => { checkScreen() }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Vinculación por QR: activa solo cuando no hay token ──────────────────
+  useEffect(() => {
+    if (token) return
+    let cancelled = false
+    let poll: ReturnType<typeof setInterval> | null = null
+    let lifetime: ReturnType<typeof setTimeout> | null = null
+    let currentCode = ''
+
+    async function newCode() {
+      if (cancelled) return
+      if (poll) { clearInterval(poll); poll = null }
+      if (lifetime) { clearTimeout(lifetime); lifetime = null }
+      setPairError(null); setQrDataUrl('')
+
+      const code = genPairCode()
+      currentCode = code
+      setPairCode(code)
+
+      const { error } = await supabase.from('device_pairings').insert({ code, token: null })
+      if (cancelled) return
+      if (error) { setPairError('No se pudo generar el código. Reintentando…'); lifetime = setTimeout(newCode, 5000); return }
+
+      try {
+        const dataUrl = await QRCode.toDataURL(`${window.location.origin}/pair?code=${code}`, {
+          width: 320, margin: 1, color: { dark: '#0F172A', light: '#FFFFFF' },
+        })
+        if (!cancelled) setQrDataUrl(dataUrl)
+      } catch { if (!cancelled) setPairError('No se pudo generar el QR.') }
+
+      // Polling: cuando el admin vincula desde /pair, aparece el token.
+      poll = setInterval(async () => {
+        const { data } = await supabase.from('device_pairings').select('token').eq('code', code).maybeSingle()
+        if (cancelled || !data?.token) return
+        if (poll) clearInterval(poll)
+        if (lifetime) clearTimeout(lifetime)
+        supabase.from('device_pairings').delete().eq('code', code)
+        try { localStorage.setItem(TOKEN_STORAGE_KEY, data.token) } catch { /* noop */ }
+        setToken(data.token as string)   // → dispara checkScreen y arranca a reproducir
+      }, 2000)
+
+      // Rota el código cada 5 min (las filas no expiran solas).
+      lifetime = setTimeout(newCode, 5 * 60 * 1000)
+    }
+
+    newCode()
+    return () => {
+      cancelled = true
+      if (poll) clearInterval(poll)
+      if (lifetime) clearTimeout(lifetime)
+      if (currentCode) supabase.from('device_pairings').delete().eq('code', currentCode)
+    }
+  }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ciclo de vida del batching: restaurar pendientes + flush inicial,
   // intervalo de 10 min (único intervalo de red nuevo), flush al volver
@@ -310,17 +385,25 @@ export default function Player() {
   }, [programId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (status === 'loading') return <Center><Spinner /><p style={msg}>Conectando…</p></Center>
-  if (status === 'no-token') return <Center>
-    <h1 style={title}>Reproductor GestPlayer</h1>
-    <p style={msg}>Falta el token de la pantalla en la URL.</p>
-    <p style={{ ...msg, opacity: 0.7 }}>Usa: <code style={code}>/play?token=TU_TOKEN</code></p>
-    <p style={{ ...msg, opacity: 0.7 }}>Copia el token desde <b>Pantallas</b> en el panel.</p>
-  </Center>
-  if (status === 'invalid') return <Center>
-    <div style={{ fontSize: '3rem' }}>❌</div>
-    <h1 style={title}>Token inválido</h1>
-    <p style={msg}>No hay ninguna pantalla con ese token.</p>
-  </Center>
+  if (status === 'no-token') return (
+    <div style={pairWrap}>
+      <img src={logoNegro} alt="GestPlayer" style={{ height: '46px', width: 'auto', marginBottom: '1.75rem' }} />
+      <div style={pairCard}>
+        <div style={pairIcon}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
+        </div>
+        <h2 style={pairTitle}>Vincula esta pantalla</h2>
+        <p style={pairSub}>Escanea el código con tu teléfono, inicia sesión y elige esta pantalla.</p>
+        <div style={pairQrBox}>
+          {qrDataUrl
+            ? <img src={qrDataUrl} alt="Código QR de vinculación" width={220} height={220} style={{ display: 'block' }} />
+            : <div style={{ width: 220, height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={pairSpinner} /></div>}
+        </div>
+        {pairCode && <p style={pairCodeText}>{pairCode}</p>}
+        <p style={{ ...pairSub, color: pairError ? '#EF4444' : '#94A3B8', margin: '0.6rem 0 0' }}>{pairError ?? 'Esperando conexión…'}</p>
+      </div>
+    </div>
+  )
   if (status === 'no-program') return <Center>
     <div style={{ fontSize: '3rem' }}>📺</div>
     <h1 style={title}>{screen?.name ?? 'Pantalla'}</h1>
@@ -355,5 +438,14 @@ function Spinner() {
 }
 const title: React.CSSProperties = { fontSize: '1.4rem', fontWeight: 700, margin: '0.5rem 0 0' }
 const msg: React.CSSProperties = { color: '#CBD5E1', fontSize: '0.95rem', margin: 0 }
-const code: React.CSSProperties = { background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: 4, fontFamily: 'monospace' }
 const btnRelink: React.CSSProperties = { marginTop: '1rem', padding: '0.65rem 1.4rem', borderRadius: 8, border: 'none', background: '#3B82F6', color: '#fff', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer' }
+
+// Pantalla de vinculación por QR: misma línea gráfica que /pair y el login.
+const pairWrap: React.CSSProperties = { position: 'fixed', inset: 0, background: '#F8FAFC', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1.5rem', fontFamily: 'system-ui, -apple-system, sans-serif' }
+const pairCard: React.CSSProperties = { background: '#fff', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '2rem', boxShadow: '0 4px 24px rgba(0,0,0,0.07)', textAlign: 'center', maxWidth: '380px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }
+const pairIcon: React.CSSProperties = { width: '56px', height: '56px', borderRadius: '14px', background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }
+const pairTitle: React.CSSProperties = { fontSize: '1.15rem', fontWeight: 700, color: '#0F172A', margin: 0 }
+const pairSub: React.CSSProperties = { color: '#94A3B8', fontSize: '0.88rem', margin: '0.5rem 0 1.25rem' }
+const pairQrBox: React.CSSProperties = { background: '#fff', padding: 12, borderRadius: 14, border: '1px solid #E2E8F0' }
+const pairCodeText: React.CSSProperties = { fontFamily: 'monospace', fontSize: '1.5rem', letterSpacing: '0.3em', color: '#0F172A', fontWeight: 700, margin: '1.1rem 0 0' }
+const pairSpinner: React.CSSProperties = { width: '30px', height: '30px', border: '3px solid #E2E8F0', borderTop: '3px solid #3B82F6', borderRadius: '50%', animation: 'spin 1s linear infinite' }
