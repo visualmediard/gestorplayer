@@ -294,6 +294,8 @@ export default function Player() {
       if (cancelled) return
       if (poll) { clearInterval(poll); poll = null }
       if (lifetime) { clearTimeout(lifetime); lifetime = null }
+      // Al rotar, borra el código anterior para no dejar filas huérfanas.
+      if (currentCode) supabase.from('device_pairings').delete().eq('code', currentCode)
       setPairError(null); setQrDataUrl('')
 
       const code = genPairCode()
