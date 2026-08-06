@@ -35,6 +35,7 @@ export default function Programs({ initialEditId }: Props = {}) {
   const thumbRef = useRef<HTMLInputElement>(null)
   const [activeThumbId, setActiveThumbId] = useState<string | null>(null)
   const [screens, setScreens] = useState<Screen[]>([])
+  const [zoneCounts, setZoneCounts] = useState<Record<string, number>>({})
   // Editar datos del programa
   const [editProgram, setEditProgram] = useState<Program | null>(null)
   const [editName, setEditName] = useState('')
@@ -49,12 +50,16 @@ export default function Programs({ initialEditId }: Props = {}) {
 
   async function load() {
     setLoading(true)
-    const [{ data }, { data: scr }] = await Promise.all([
+    const [{ data }, { data: scr }, { data: zoneRows }] = await Promise.all([
       supabase.from('programs').select('*').order('created_at', { ascending: false }),
       supabase.from('screens').select('id, name, current_program_id').order('name'),
+      supabase.from('zones').select('program_id'),
     ])
     if (data) setPrograms(data as Program[])
     if (scr) setScreens(scr as Screen[])
+    const counts: Record<string, number> = {}
+    for (const z of (zoneRows ?? [])) { const pid = (z as any).program_id; if (pid) counts[pid] = (counts[pid] ?? 0) + 1 }
+    setZoneCounts(counts)
     setLoading(false)
   }
 
@@ -229,10 +234,10 @@ export default function Programs({ initialEditId }: Props = {}) {
                 <div style={{ flex: '3 1 200px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
                     <span style={{ ...s.cardName, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: '60px' }}>{p.name}</span>
-                    {p.short_code && <span style={s.shortCode}>{p.short_code}</span>}
                   </div>
                   <span style={{ fontSize: '0.78rem', color: '#94A3B8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.client_name ?? 'Programa horizontal'}</span>
                 </div>
+                <div style={{ flexShrink: 0 }}><span style={s.zoneChip}>{(zoneCounts[p.id] ?? 0)} {(zoneCounts[p.id] ?? 0) === 1 ? 'zona' : 'zonas'}</span></div>
                 <div style={{ flexShrink: 0, fontSize: '0.8rem', color: '#64748B', whiteSpace: 'nowrap' }}>{p.width} × {p.height}</div>
                 <div style={{ flexShrink: 0, fontSize: '0.8rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>{new Date(p.created_at).toLocaleDateString('es-DO')}</div>
                 <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0, marginLeft: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -262,12 +267,15 @@ export default function Programs({ initialEditId }: Props = {}) {
                 </div>
 
                 <div style={s.cardBody}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+                    <div style={{ minWidth: 0 }}>
                       <h3 style={s.cardName}>{p.name}</h3>
                       <p style={s.cardSub}>{p.client_name ?? 'Programa horizontal'}</p>
                     </div>
-                    {p.short_code && <span style={s.shortCode}>{p.short_code}</span>}
+                    <span style={s.zoneChip}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+                      {(zoneCounts[p.id] ?? 0)} {(zoneCounts[p.id] ?? 0) === 1 ? 'zona' : 'zonas'}
+                    </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.75rem' }}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
@@ -386,6 +394,7 @@ const s: Record<string, React.CSSProperties> = {
   errorText: { color: '#EF4444', fontSize: '0.8rem', marginBottom: '0.75rem' },
   emptyBox: { background: '#fff', border: '1px dashed #E2E8F0', borderRadius: '12px', padding: '4rem', textAlign: 'center', marginTop: '1rem' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem', marginBottom: '1.5rem' },
+  zoneChip: { display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.72rem', fontWeight: 600, color: '#475569', background: '#F1F5F9', border: '1px solid #E2E8F0', padding: '2px 8px', borderRadius: '20px', flexShrink: 0, whiteSpace: 'nowrap' },
   list: { display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' },
   listRow: { display: 'flex', alignItems: 'center', gap: '0.85rem', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.6rem 1rem', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' },
   viewToggle: { display: 'flex', gap: '2px', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '2px', flexShrink: 0 },
@@ -398,7 +407,6 @@ const s: Record<string, React.CSSProperties> = {
   cardBody: { padding: '1rem 1.25rem 0.75rem' },
   cardName: { fontWeight: 700, color: '#0F172A', fontSize: '1rem' },
   cardSub: { color: '#94A3B8', fontSize: '0.8rem', marginTop: '0.15rem' },
-  shortCode: { fontSize: '0.72rem', fontWeight: 700, color: '#2563EB', background: '#EFF6FF', padding: '2px 8px', borderRadius: '4px', flexShrink: 0 },
   cardActions: { display: 'flex', gap: '0.5rem', padding: '0.75rem 1.25rem 1rem', borderTop: '1px solid #F1F5F9' },
   btnEdit: { display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.45rem 0.875rem', borderRadius: '7px', border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#2563EB', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' },
   btnSecondary: { display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.45rem 0.75rem', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' },
