@@ -71,6 +71,11 @@ export default function Content() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
 
+  // Vista previa dentro de la app (imágenes/videos)
+  const [preview, setPreview] = useState<MediaItem | null>(null)
+  const [previewZoom, setPreviewZoom] = useState(false)
+  function closePreview() { setPreview(null); setPreviewZoom(false) }
+
   // ── LOAD ────────────────────────────────────────────────────────────────
   async function load() {
     setLoading(true)
@@ -109,6 +114,14 @@ export default function Content() {
   }
 
   useEffect(() => { load() }, [])
+
+  // Cerrar la vista previa con Esc.
+  useEffect(() => {
+    if (!preview) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closePreview() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [preview])
 
   // ── UPLOAD (múltiple, simultáneo, tolerante a fallos) ────────────────────
   function onSelectFiles(e: React.ChangeEvent<HTMLInputElement>) {
@@ -348,6 +361,33 @@ export default function Content() {
   // ── RENDER ───────────────────────────────────────────────────────────────
   return (
     <div>
+      {/* Vista previa (imágenes/videos) — la URL de R2 solo se usa como src */}
+      {preview && (
+        <div onClick={closePreview}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)', zIndex: 500, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3vh 1.5rem', gap: '0.75rem' }}>
+          {/* Cabecera: nombre + cerrar */}
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '900px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+            <span style={{ color: '#fff', fontSize: '0.9rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{preview.name}</span>
+            <button onClick={closePreview} aria-label="Cerrar vista previa"
+              style={{ flexShrink: 0, width: '34px', height: '34px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.12)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          {/* Medio */}
+          <div onClick={e => e.stopPropagation()}
+            style={{ maxWidth: '92vw', maxHeight: '82vh', overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {preview.type === 'video' ? (
+              <video src={getPublicUrl(preview.storage_path)} controls autoPlay
+                style={{ maxWidth: '100%', maxHeight: '82vh', borderRadius: '10px', background: '#000', display: 'block' }} />
+            ) : (
+              <img src={getPublicUrl(preview.storage_path)} alt={preview.name}
+                onClick={() => setPreviewZoom(z => !z)}
+                style={{ maxWidth: previewZoom ? 'none' : '100%', maxHeight: previewZoom ? 'none' : '82vh', cursor: previewZoom ? 'zoom-out' : 'zoom-in', borderRadius: '10px', display: 'block' }} />
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Click-outside overlay for tag assignment dropdown */}
       {tagDropdownOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9 }} onClick={() => setTagDropdownOpen(null)} />
@@ -713,10 +753,17 @@ export default function Content() {
                         </td>
                         <td style={s.td}>
                           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                            <a href={url} target="_blank" rel="noreferrer"
-                              style={{ color: '#2563EB', fontSize: '0.8rem', fontWeight: 500, textDecoration: 'none' }}>
-                              Vista previa
-                            </a>
+                            {item.type === 'url' ? (
+                              <a href={url} target="_blank" rel="noreferrer"
+                                style={{ color: '#2563EB', fontSize: '0.8rem', fontWeight: 500, textDecoration: 'none' }}>
+                                Vista previa
+                              </a>
+                            ) : (
+                              <button onClick={() => { setPreviewZoom(false); setPreview(item) }}
+                                style={{ color: '#2563EB', fontSize: '0.8rem', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                                Vista previa
+                              </button>
+                            )}
                             <span style={{ color: '#E2E8F0' }}>|</span>
 
                             {/* Tag assignment button + dropdown */}
