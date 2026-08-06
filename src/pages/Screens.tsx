@@ -89,6 +89,12 @@ function getStatus(hb: string | null, prog: string | null) {
   return { label: 'Player no corriendo', color: '#94A3B8', dot: '#CBD5E1' }
 }
 
+// Una pantalla está "en línea" si su player latió hace menos de 2 min (misma
+// regla que el indicador del dashboard y el estado "Activa").
+function isScreenOnline(sc: Screen): boolean {
+  return getStatus(sc.last_heartbeat, sc.current_program_id).label === 'Activa'
+}
+
 function OccupancyRing({ used, capacity }: { used: number; capacity: number }) {
   const pct = capacity > 0 ? Math.min((used / capacity) * 100, 100) : 0
   const r = 28
@@ -140,6 +146,13 @@ export default function Screens() {
   // Vista lista/tarjeta, recordada entre sesiones por página.
   const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('gp_view_screens') === 'list' ? 'list' : 'grid'))
   function changeView(v: 'grid' | 'list') { setView(v); localStorage.setItem('gp_view_screens', v) }
+  // Filtro por estado. Al entrar desde los indicadores del dashboard, se lee un
+  // valor "de una sola vez" desde localStorage y se limpia enseguida.
+  const [statusFilter, setStatusFilter] = useState<'all' | 'online' | 'offline'>(() => {
+    const f = localStorage.getItem('gp_screens_filter')
+    if (f === 'online' || f === 'offline') { localStorage.removeItem('gp_screens_filter'); return f }
+    return 'all'
+  })
   const [editScreen, setEditScreen] = useState<Screen | null>(null)
   const [editName, setEditName] = useState('')
   const [editLocation, setEditLocation] = useState('')
@@ -297,6 +310,12 @@ export default function Screens() {
     load()
   }
 
+  // Lista visible tras aplicar búsqueda + filtro por estado.
+  const visibleScreens = screens.filter(sc =>
+    (sc.name.toLowerCase().includes(search.toLowerCase()) || (sc.location ?? '').toLowerCase().includes(search.toLowerCase()))
+    && (statusFilter === 'all' || (statusFilter === 'online' ? isScreenOnline(sc) : !isScreenOnline(sc)))
+  )
+
   return (
     <div>
       <div style={s.topbar} className="page-topbar">
@@ -351,9 +370,28 @@ export default function Screens() {
         </div>
       )}
 
-      {loading ? <p style={{ color: '#94A3B8', marginTop: '2rem' }}>Cargando...</p> : (
+      {!loading && screens.length > 0 && (
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.1rem', flexWrap: 'wrap' }}>
+          {([['all', 'Todas', screens.length], ['online', 'En línea', screens.filter(isScreenOnline).length], ['offline', 'Desconectadas', screens.filter(sc => !isScreenOnline(sc)).length]] as ['all' | 'online' | 'offline', string, number][]).map(([val, label, count]) => (
+            <button key={val} onClick={() => setStatusFilter(val)} style={{ ...s.filterChip, ...(statusFilter === val ? s.filterChipActive : {}) }}>
+              {val !== 'all' && <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: val === 'online' ? '#10B981' : '#CBD5E1', flexShrink: 0 }} />}
+              {label} <span style={{ opacity: 0.65 }}>{count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {loading ? <p style={{ color: '#94A3B8', marginTop: '2rem' }}>Cargando...</p> : visibleScreens.length === 0 ? (
+        <p style={{ color: '#94A3B8', marginTop: '2rem' }}>
+          {screens.length === 0
+            ? 'No hay pantallas registradas todavía.'
+            : statusFilter === 'online' ? 'No hay pantallas en línea en este momento.'
+            : statusFilter === 'offline' ? 'No hay pantallas desconectadas.'
+            : 'Ninguna pantalla coincide con la búsqueda.'}
+        </p>
+      ) : (
        <div style={view === 'grid' ? s.grid : s.list}>
-          {screens.filter(sc => sc.name.toLowerCase().includes(search.toLowerCase()) || (sc.location ?? '').toLowerCase().includes(search.toLowerCase())).map(sc => {
+          {visibleScreens.map(sc => {
             const status = getStatus(sc.last_heartbeat, sc.current_program_id)
             const adCount = getAdCount(sc.current_program_id)
             const capacity = sc.ad_capacity ?? 10
@@ -772,6 +810,8 @@ const s: Record<string, React.CSSProperties> = {
   viewToggle: { display: 'flex', gap: '2px', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '2px', flexShrink: 0 },
   viewBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', border: 'none', borderRadius: '6px', background: 'transparent', color: '#94A3B8', cursor: 'pointer' },
   viewBtnActive: { background: '#fff', color: '#2563EB', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' },
+  filterChip: { display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.8rem', borderRadius: '20px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' },
+  filterChipActive: { background: '#EFF6FF', borderColor: '#BFDBFE', color: '#2563EB' },
   card: { background: '#fff', borderRadius: '14px', border: '1px solid #E2E8F0', boxShadow: '0 1px 6px rgba(0,0,0,0.04)', overflow: 'hidden' },
   cardHeader: { padding: '0.875rem 1.25rem 0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   cardName: { fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' },

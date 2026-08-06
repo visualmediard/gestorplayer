@@ -88,14 +88,14 @@ export default function DashboardHome({
           <p style={s.sub}>{(profile as any)?.organization_name ?? 'GestPlayer'} · Panel de control</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div style={s.statPill}>
+          <button style={{ ...s.statPill, cursor: 'pointer' }} onClick={() => { localStorage.setItem('gp_screens_filter', 'online'); nav('screens') }} title="Ver pantallas en línea">
             <div style={{ ...s.dot, background: '#10B981', boxShadow: '0 0 6px #10B981' }} />
             En línea: <strong>{online}</strong>
-          </div>
-          <div style={s.statPill}>
+          </button>
+          <button style={{ ...s.statPill, cursor: 'pointer' }} onClick={() => { localStorage.setItem('gp_screens_filter', 'offline'); nav('screens') }} title="Ver pantallas desconectadas">
             <div style={{ ...s.dot, background: '#CBD5E1' }} />
             Desconectado: <strong>{offline}</strong>
-          </div>
+          </button>
         </div>
       </div>
 
