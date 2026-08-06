@@ -42,6 +42,7 @@ export default function ContentReport({
   const [rangeByContent, setRangeByContent] = useState<Record<string, number>>({})
   const [orgName, setOrgName] = useState('')
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  const [orgContact, setOrgContact] = useState<{ address: string | null; phone: string | null; email: string | null }>({ address: null, phone: null, email: null })
   const [loading, setLoading] = useState(true)
   const [rangeMode, setRangeMode] = useState<RangeMode>('14d')
   const [customFrom, setCustomFrom] = useState(isoDay(new Date(Date.now() - 13 * 864e5)))
@@ -58,8 +59,12 @@ export default function ContentReport({
       .from('profiles').select('organization_id').eq('id', profile?.id ?? '').single()
     const orgId = pd?.organization_id ?? ''
     if (orgId) {
-      const { data: org } = await supabase.from('organizations').select('name, logo_url').eq('id', orgId).single()
-      if (org) { setOrgName(org.name); setLogoUrl(org.logo_url ?? null) }
+      // select('*') para no fallar si aún no existen las columnas de contacto.
+      const { data: org } = await supabase.from('organizations').select('*').eq('id', orgId).single()
+      if (org) {
+        setOrgName(org.name); setLogoUrl(org.logo_url ?? null)
+        setOrgContact({ address: (org as any).address ?? null, phone: (org as any).phone ?? null, email: (org as any).email ?? null })
+      }
     }
 
     // Todas las colocaciones (content_ids) de este archivo, por nombre.
@@ -232,6 +237,13 @@ export default function ContentReport({
       doc.setTextColor(15, 23, 42)
       doc.setFont('helvetica', 'bold'); doc.setFontSize(18)
       doc.text(orgName || 'GestPlayer', pageW / 2, headerH / 2 + 2, { align: 'center' })
+    }
+
+    // Línea de contacto tipo membrete (solo los campos que existan).
+    const contactParts = [orgContact.address, orgContact.phone, orgContact.email].filter(Boolean) as string[]
+    if (contactParts.length > 0) {
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(100, 116, 139)
+      doc.text(contactParts.join('   ·   '), pageW / 2, headerH + 6, { align: 'center' })
     }
 
     // Título + nombre del contenido

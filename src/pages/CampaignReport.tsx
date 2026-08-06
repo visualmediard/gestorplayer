@@ -42,6 +42,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
   const [details, setDetails] = useState<Detail[]>([])
   const [orgName, setOrgName] = useState('')
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  const [orgContact, setOrgContact] = useState<{ address: string | null; phone: string | null; email: string | null }>({ address: null, phone: null, email: null })
   const [loading, setLoading] = useState(true)
   // Última reproducción de la campaña (para la 4ª tarjeta cuando ya finalizó).
   const [lastPlay, setLastPlay] = useState<string | null>(null)
@@ -69,8 +70,12 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     ])
     if (c) setCamp(c as Campaign)
     if (pd?.organization_id) {
-      const { data: org } = await supabase.from('organizations').select('name, logo_url').eq('id', pd.organization_id).single()
-      if (org) { setOrgName(org.name); setLogoUrl(org.logo_url ?? null) }
+      // select('*') para no fallar si aún no existen las columnas de contacto.
+      const { data: org } = await supabase.from('organizations').select('*').eq('id', pd.organization_id).single()
+      if (org) {
+        setOrgName(org.name); setLogoUrl(org.logo_url ?? null)
+        setOrgContact({ address: (org as any).address ?? null, phone: (org as any).phone ?? null, email: (org as any).email ?? null })
+      }
     }
 
     // Zone/screen/play data from view — aggregate per zone to avoid duplicates
@@ -277,6 +282,13 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     }
 
     const pageH = doc.internal.pageSize.getHeight()
+
+    // Línea de contacto tipo membrete (solo los campos que existan).
+    const contactParts = [orgContact.address, orgContact.phone, orgContact.email].filter(Boolean) as string[]
+    if (contactParts.length > 0) {
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(100, 116, 139)
+      doc.text(contactParts.join('   ·   '), pageW / 2, headerH + 6, { align: 'center' })
+    }
 
     // ── Título + nombre de la campaña ──
     doc.setTextColor(15, 23, 42)

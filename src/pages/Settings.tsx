@@ -56,6 +56,15 @@ function GeneralTab() {
   const [saved, setSaved] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Datos de la empresa (nombre + contacto), salen en los reportes PDF.
+  const [orgName, setOrgName] = useState('')
+  const [address, setAddress] = useState('')
+  const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
+  const [savingInfo, setSavingInfo] = useState(false)
+  const [infoError, setInfoError] = useState<string | null>(null)
+  const [infoSaved, setInfoSaved] = useState(false)
+
   useEffect(() => {
     let alive = true
     async function load() {
@@ -63,10 +72,16 @@ function GeneralTab() {
       const { data: prof } = await supabase.from('profiles').select('organization_id').eq('id', uid).single()
       const oid = prof?.organization_id ?? null
       if (!oid) { if (alive) setLoading(false); return }
-      const { data: org } = await supabase.from('organizations').select('logo_url').eq('id', oid).single()
+      // select('*') para no fallar si las columnas de contacto aún no existen
+      // (antes de correr la migración).
+      const { data: org } = await supabase.from('organizations').select('*').eq('id', oid).single()
       if (!alive) return
       setOrgId(oid)
       setLogoUrl(org?.logo_url ?? null)
+      setOrgName(org?.name ?? '')
+      setAddress((org as any)?.address ?? '')
+      setPhone((org as any)?.phone ?? '')
+      setEmail((org as any)?.email ?? '')
       setLoading(false)
     }
     load()
@@ -109,11 +124,28 @@ function GeneralTab() {
     notifyStorageChanged()
   }
 
+  async function handleSaveInfo() {
+    if (!orgId) return
+    if (!orgName.trim()) { setInfoError('El nombre de la empresa es obligatorio.'); return }
+    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setInfoError('El email no tiene un formato válido.'); return }
+    setSavingInfo(true); setInfoError(null); setInfoSaved(false)
+    const { error: dbErr } = await supabase.from('organizations').update({
+      name: orgName.trim(),
+      address: address.trim() || null,
+      phone: phone.trim() || null,
+      email: email.trim() || null,
+    }).eq('id', orgId)
+    setSavingInfo(false)
+    if (dbErr) { setInfoError('Error al guardar: ' + dbErr.message); return }
+    setInfoSaved(true)
+  }
+
   if (loading) return <div style={s.formCard}><p style={{ color: '#94A3B8', fontSize: '0.875rem' }}>Cargando...</p></div>
 
   const shown = previewUrl ?? logoUrl
 
   return (
+    <>
     <div style={s.formCard}>
       <div style={s.formTitle}>Logo de la organización</div>
       <p style={{ color: '#64748B', fontSize: '0.82rem', marginTop: '-0.5rem', marginBottom: '1.25rem' }}>
@@ -164,6 +196,43 @@ function GeneralTab() {
         </div>
       </div>
     </div>
+
+    <div style={{ ...s.formCard, marginTop: '1.25rem' }}>
+      <div style={s.formTitle}>Datos de la empresa</div>
+      <p style={{ color: '#64748B', fontSize: '0.82rem', marginTop: '-0.5rem', marginBottom: '1.25rem' }}>
+        Aparecen en la cabecera de los reportes PDF que descargas.
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '520px' }}>
+        <div>
+          <label style={s.fieldLabel}>Nombre de la empresa</label>
+          <input style={s.field} value={orgName} onChange={e => { setOrgName(e.target.value); setInfoSaved(false) }} placeholder="Ej: Acme Media" />
+        </div>
+        <div>
+          <label style={s.fieldLabel}>Dirección</label>
+          <input style={s.field} value={address} onChange={e => { setAddress(e.target.value); setInfoSaved(false) }} placeholder="Av. Winston Churchill 45, Santo Domingo" />
+        </div>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 180px' }}>
+            <label style={s.fieldLabel}>Teléfono</label>
+            <input style={s.field} value={phone} onChange={e => { setPhone(e.target.value); setInfoSaved(false) }} placeholder="(809) 555-1234" />
+          </div>
+          <div style={{ flex: '1 1 180px' }}>
+            <label style={s.fieldLabel}>Email</label>
+            <input style={s.field} value={email} onChange={e => { setEmail(e.target.value); setInfoSaved(false) }} placeholder="info@acme.com" />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button onClick={handleSaveInfo} style={s.btnPrimary} disabled={savingInfo}>
+            {savingInfo ? 'Guardando…' : 'Guardar datos'}
+          </button>
+          {infoError && <span style={{ fontSize: '0.8rem', color: '#EF4444' }}>{infoError}</span>}
+          {infoSaved && <span style={{ fontSize: '0.8rem', color: '#10B981' }}>✓ Datos guardados.</span>}
+        </div>
+      </div>
+    </div>
+    </>
   )
 }
 
@@ -433,4 +502,6 @@ const s: Record<string, React.CSSProperties> = {
   btnPrimary: { display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.55rem 1.1rem', borderRadius: '8px', border: 'none', background: '#3B82F6', color: '#fff', fontWeight: 600, fontSize: '0.875rem', whiteSpace: 'nowrap', cursor: 'pointer' },
   btnOutline: { padding: '0.55rem 1rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontWeight: 500, fontSize: '0.875rem', cursor: 'pointer' },
   logoBox: { width: '180px', height: '120px', borderRadius: '10px', border: '1px dashed #CBD5E1', background: '#F8FAFC', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0.75rem', flexShrink: 0 },
+  fieldLabel: { display: 'block', color: '#64748B', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.35rem' },
+  field: { width: '100%', padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', color: '#0F172A', fontSize: '0.875rem', outline: 'none', boxSizing: 'border-box' },
 }
