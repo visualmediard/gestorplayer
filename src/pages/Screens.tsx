@@ -137,6 +137,9 @@ export default function Screens() {
   const [preview, setPreview] = useState<Screen | null>(null)
   const [releasing, setReleasing] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // Vista lista/tarjeta, recordada entre sesiones por página.
+  const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('gp_view_screens') === 'list' ? 'list' : 'grid'))
+  function changeView(v: 'grid' | 'list') { setView(v); localStorage.setItem('gp_view_screens', v) }
   const [editScreen, setEditScreen] = useState<Screen | null>(null)
   const [editName, setEditName] = useState('')
   const [editLocation, setEditLocation] = useState('')
@@ -306,6 +309,16 @@ export default function Screens() {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input style={{ border: 'none', outline: 'none', fontSize: '0.875rem', color: '#0F172A', width: '100%', background: 'transparent' }} placeholder="Buscar pantalla..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
+          <div style={s.viewToggle}>
+            <button onClick={() => changeView('grid')} title="Vista de tarjetas" aria-label="Vista de tarjetas"
+              style={{ ...s.viewBtn, ...(view === 'grid' ? s.viewBtnActive : {}) }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            </button>
+            <button onClick={() => changeView('list')} title="Vista de lista" aria-label="Vista de lista"
+              style={{ ...s.viewBtn, ...(view === 'list' ? s.viewBtnActive : {}) }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </button>
+          </div>
           {canManage && <button style={s.btnPrimary} onClick={() => setShowForm(!showForm)}>+ Nueva pantalla</button>}
         </div>
       </div>
@@ -339,11 +352,55 @@ export default function Screens() {
       )}
 
       {loading ? <p style={{ color: '#94A3B8', marginTop: '2rem' }}>Cargando...</p> : (
-       <div style={s.grid}>
+       <div style={view === 'grid' ? s.grid : s.list}>
           {screens.filter(sc => sc.name.toLowerCase().includes(search.toLowerCase()) || (sc.location ?? '').toLowerCase().includes(search.toLowerCase())).map(sc => {
             const status = getStatus(sc.last_heartbeat, sc.current_program_id)
             const adCount = getAdCount(sc.current_program_id)
             const capacity = sc.ad_capacity ?? 10
+            const occColor = capacity > 0 && (adCount / capacity) >= 0.9 ? '#EF4444' : capacity > 0 && (adCount / capacity) >= 0.7 ? '#F59E0B' : '#10B981'
+
+            // ── Vista lista: fila horizontal limpia y compacta ──────────────
+            if (view === 'list') {
+              return (
+                <div key={sc.id} style={{ display: 'flex', flexDirection: 'column', opacity: sc.is_active ? 1 : 0.6 }}>
+                  <div style={s.listRow}>
+                    <div style={{ width: '9px', height: '9px', borderRadius: '50%', background: status.dot, boxShadow: status.dot === '#10B981' ? '0 0 6px #10B981' : 'none', flexShrink: 0 }} />
+                    <div style={{ flex: '3 1 210px', minWidth: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span style={{ ...s.cardName, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: '60px' }}>{sc.name}</span>
+                      <span style={{ flexShrink: 0, fontSize: '0.68rem', fontWeight: 600, padding: '1px 7px', borderRadius: '20px', background: status.dot === '#10B981' ? '#ECFDF5' : '#F8FAFC', color: status.color, border: `1px solid ${status.dot === '#10B981' ? '#A7F3D0' : '#E2E8F0'}` }}>{status.label}</span>
+                    </div>
+                    <div style={{ flex: '2 1 150px', minWidth: 0, fontSize: '0.8rem', color: '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {sc.location
+                        ? (isMapsUrl(sc.location)
+                          ? <a href={sc.location.trim()} target="_blank" rel="noopener noreferrer" style={{ color: '#2563EB', textDecoration: 'none', fontWeight: 600 }}>📍 Ver en Google Maps</a>
+                          : <>📍 {sc.location}</>)
+                        : <span style={{ color: '#CBD5E1' }}>Sin ubicación</span>}
+                    </div>
+                    <div style={{ flex: '1 1 110px', minWidth: 0, fontSize: '0.8rem', color: sc.current_program_id ? '#64748B' : '#F59E0B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {sc.current_program_id ? '📺 Programa asignado' : '📺 Sin programa'}
+                    </div>
+                    <div style={{ flexShrink: 0, fontSize: '0.8rem', fontWeight: 700, color: occColor, minWidth: '42px', textAlign: 'right' }}>{adCount}/{capacity}</div>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0, marginLeft: '0.25rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {canManage && <button style={s.btnAct} onClick={() => { setAssigningScreen(sc.id); setSelectedProgram(sc.current_program_id ?? '') }}>Asignar</button>}
+                      <button style={s.btnAct} onClick={() => setPreview(sc)}>Captura</button>
+                      {canManage && <button style={{ ...s.btnAct, ...(resetSent === sc.id ? { color: '#10B981', border: '1px solid #10B981' } : {}) }} onClick={() => handleReset(sc.id)} disabled={resetSent === sc.id}>{resetSent === sc.id ? 'Enviada' : 'Reiniciar'}</button>}
+                      {canManage && <button style={s.btnAct} onClick={() => openEdit(sc)}>Editar</button>}
+                    </div>
+                  </div>
+                  {canManage && assigningScreen === sc.id && (
+                    <div style={{ display: 'flex', gap: '0.5rem', padding: '0.5rem 1rem 0' }}>
+                      <select style={{ ...s.input, flex: 1, fontSize: '0.8rem' }} value={selectedProgram} onChange={e => setSelectedProgram(e.target.value)}>
+                        <option value="">— Sin programa —</option>
+                        {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                      <button style={s.btnPrimary} onClick={() => handleAssign(sc.id)}>OK</button>
+                      <button style={s.btnOutline} onClick={() => setAssigningScreen(null)}>✕</button>
+                    </div>
+                  )}
+                </div>
+              )
+            }
+
             return (
               <div key={sc.id} style={{ ...s.card, opacity: sc.is_active ? 1 : 0.6 }}>
                 <div style={s.cardHeader}>
@@ -710,6 +767,11 @@ const s: Record<string, React.CSSProperties> = {
   label: { color: '#64748B', fontSize: '0.8rem', fontWeight: 500 },
   input: { padding: '0.55rem 0.75rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', color: '#0F172A', fontSize: '0.875rem', outline: 'none' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem' },
+  list: { display: 'flex', flexDirection: 'column', gap: '0.5rem' },
+  listRow: { display: 'flex', alignItems: 'center', gap: '0.85rem', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.7rem 1rem', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' },
+  viewToggle: { display: 'flex', gap: '2px', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '2px', flexShrink: 0 },
+  viewBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', border: 'none', borderRadius: '6px', background: 'transparent', color: '#94A3B8', cursor: 'pointer' },
+  viewBtnActive: { background: '#fff', color: '#2563EB', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' },
   card: { background: '#fff', borderRadius: '14px', border: '1px solid #E2E8F0', boxShadow: '0 1px 6px rgba(0,0,0,0.04)', overflow: 'hidden' },
   cardHeader: { padding: '0.875rem 1.25rem 0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   cardName: { fontWeight: 700, color: '#0F172A', fontSize: '0.95rem' },

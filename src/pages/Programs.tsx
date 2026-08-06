@@ -28,6 +28,9 @@ export default function Programs({ initialEditId }: Props = {}) {
   const [error, setError] = useState<string | null>(null)
   const [editingProgram, setEditingProgram] = useState<string | null>(initialEditId ?? null)
   const [search, setSearch] = useState('')
+  // Vista lista/tarjeta, recordada entre sesiones por página.
+  const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('gp_view_programs') === 'list' ? 'list' : 'grid'))
+  function changeView(v: 'grid' | 'list') { setView(v); localStorage.setItem('gp_view_programs', v) }
   const [uploadingThumb, setUploadingThumb] = useState<string | null>(null)
   const thumbRef = useRef<HTMLInputElement>(null)
   const [activeThumbId, setActiveThumbId] = useState<string | null>(null)
@@ -155,6 +158,16 @@ export default function Programs({ initialEditId }: Props = {}) {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input style={s.searchInput} placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
+          <div style={s.viewToggle}>
+            <button onClick={() => changeView('grid')} title="Vista de tarjetas" aria-label="Vista de tarjetas"
+              style={{ ...s.viewBtn, ...(view === 'grid' ? s.viewBtnActive : {}) }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            </button>
+            <button onClick={() => changeView('list')} title="Vista de lista" aria-label="Vista de lista"
+              style={{ ...s.viewBtn, ...(view === 'list' ? s.viewBtnActive : {}) }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </button>
+          </div>
           <button style={s.btnPrimary} onClick={() => setShowForm(!showForm)}>
             {showForm ? '✕ Cancelar' : '+ Nuevo programa'}
           </button>
@@ -194,8 +207,8 @@ export default function Programs({ initialEditId }: Props = {}) {
         onChange={e => { const file = e.target.files?.[0]; if (file && activeThumbId) handleThumbnailUpload(activeThumbId, file); e.target.value = '' }} />
 
       {loading ? (
-        <div style={s.grid}>
-          {[0,1,2,3].map(i => <div key={i} style={{ height: '320px', borderRadius: '14px' }} className="skeleton" />)}
+        <div style={view === 'grid' ? s.grid : s.list}>
+          {[0,1,2,3].map(i => <div key={i} style={{ height: view === 'grid' ? '320px' : '54px', borderRadius: view === 'grid' ? '14px' : '10px' }} className="skeleton" />)}
         </div>
       ) : filtered.length === 0 ? (
         <div style={s.emptyBox}>
@@ -204,8 +217,31 @@ export default function Programs({ initialEditId }: Props = {}) {
         </div>
       ) : (
         <>
-          <div style={s.grid}>
-            {filtered.map(p => (
+          <div style={view === 'grid' ? s.grid : s.list}>
+            {filtered.map(p => view === 'list' ? (
+              // ── Vista lista: fila horizontal limpia y compacta ──────────────
+              <div key={p.id} style={s.listRow}>
+                <div style={{ width: '54px', height: '34px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, background: '#F1F5F9' }}>
+                  {p.thumbnail_url
+                    ? <img src={p.thumbnail_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1E3A5F 0%, #2563EB 50%, #1E40AF 100%)' }} />}
+                </div>
+                <div style={{ flex: '3 1 200px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                    <span style={{ ...s.cardName, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: '60px' }}>{p.name}</span>
+                    {p.short_code && <span style={s.shortCode}>{p.short_code}</span>}
+                  </div>
+                  <span style={{ fontSize: '0.78rem', color: '#94A3B8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.client_name ?? 'Programa horizontal'}</span>
+                </div>
+                <div style={{ flexShrink: 0, fontSize: '0.8rem', color: '#64748B', whiteSpace: 'nowrap' }}>{p.width} × {p.height}</div>
+                <div style={{ flexShrink: 0, fontSize: '0.8rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>{new Date(p.created_at).toLocaleDateString('es-DO')}</div>
+                <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0, marginLeft: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <button style={s.btnSecondary} onClick={() => openEdit(p)}>Editar</button>
+                  <button style={s.btnEdit} onClick={() => setEditingProgram(p.id)}>Editar zonas</button>
+                  <button style={s.btnDel} onClick={() => handleDelete(p.id, p.name)}>Eliminar</button>
+                </div>
+              </div>
+            ) : (
               <div key={p.id} style={s.card} className="card-hover">
                 <div style={s.cardImg}>
                   {p.thumbnail_url
@@ -350,6 +386,11 @@ const s: Record<string, React.CSSProperties> = {
   errorText: { color: '#EF4444', fontSize: '0.8rem', marginBottom: '0.75rem' },
   emptyBox: { background: '#fff', border: '1px dashed #E2E8F0', borderRadius: '12px', padding: '4rem', textAlign: 'center', marginTop: '1rem' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem', marginBottom: '1.5rem' },
+  list: { display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' },
+  listRow: { display: 'flex', alignItems: 'center', gap: '0.85rem', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.6rem 1rem', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' },
+  viewToggle: { display: 'flex', gap: '2px', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '2px', flexShrink: 0 },
+  viewBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', border: 'none', borderRadius: '6px', background: 'transparent', color: '#94A3B8', cursor: 'pointer' },
+  viewBtnActive: { background: '#fff', color: '#2563EB', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' },
   card: { background: '#fff', borderRadius: '14px', overflow: 'hidden', border: '1px solid #E2E8F0', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' },
   cardImg: { height: '180px', position: 'relative', overflow: 'hidden', background: '#E2E8F0' },
   resBadge: { position: 'absolute', top: '0.875rem', left: '0.875rem', background: 'rgba(0,0,0,0.5)', color: '#fff', fontSize: '0.75rem', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', backdropFilter: 'blur(4px)' },
