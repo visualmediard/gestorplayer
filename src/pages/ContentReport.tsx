@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { drawReportHeader } from '../lib/reportHeader'
 
 // Reporte de repeticiones para un video/imagen SUELTO (no de campaña).
 // Agrupa todas las colocaciones del mismo archivo (por nombre) y muestra:
@@ -215,50 +216,20 @@ export default function ContentReport({
     const pageW = doc.internal.pageSize.getWidth()
     const pageH = doc.internal.pageSize.getHeight()
 
-    // Header con el fondo azul claro de la app (#F0F4F8) + logo centrado.
-    const headerH = 32
-    doc.setFillColor(240, 244, 248)
-    doc.rect(0, 0, pageW, headerH, 'F')
-    doc.setDrawColor(226, 232, 240)
-    doc.line(0, headerH, pageW, headerH)
-
-    const logoData = logoUrl ? await fetchLogoDataUrl() : null
-    if (logoData) {
-      try {
-        const { w, h } = await imgDims(logoData)
-        const fmt = logoData.startsWith('data:image/png') ? 'PNG'
-          : logoData.startsWith('data:image/webp') ? 'WEBP' : 'JPEG'
-        const ratio = w / h
-        let dh = 18, dw = dh * ratio
-        if (dw > 90) { dw = 90; dh = dw / ratio }
-        doc.addImage(logoData, fmt, (pageW - dw) / 2, (headerH - dh) / 2, dw, dh)
-      } catch { /* header limpio si falla */ }
-    } else {
-      doc.setTextColor(15, 23, 42)
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(18)
-      doc.text(orgName || 'GestPlayer', pageW / 2, headerH / 2 + 2, { align: 'center' })
-    }
-
-    // Línea de contacto tipo membrete (solo los campos que existan).
-    const contactParts = [orgContact.address, orgContact.phone, orgContact.email].filter(Boolean) as string[]
-    if (contactParts.length > 0) {
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(100, 116, 139)
-      doc.text(contactParts.join('   ·   '), pageW / 2, headerH + 6, { align: 'center' })
-    }
-
-    // Título + nombre del contenido
-    doc.setTextColor(15, 23, 42)
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(17)
-    doc.text('Reporte de contenido', 14, 46)
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(100, 116, 139)
-    doc.text(name.length > 70 ? name.slice(0, 70) + '…' : name, 14, 53)
+    // ── Cabecera tipo membrete: logo centrado + banda con datos de empresa ──
+    const cardY = await drawReportHeader(doc, pageW, {
+      logoData: logoUrl ? await fetchLogoDataUrl() : null,
+      imgDims, orgName, orgContact,
+      title: 'Reporte de contenido',
+      subtitle: name.length > 70 ? name.slice(0, 70) + '…' : name,
+    })
 
     // Tarjetas de resumen (mismas que el reporte de campaña: Reproducciones,
     // Pantallas, Promedio/día). El promedio se calcula sobre los últimos 14 días.
     const screenCount = new Set(zoneRows.map(z => z.screen_name ?? '—')).size
     const dailyTotal = daily.reduce((s, d) => s + d.plays, 0)
     const avgPerDay = daily.length ? Math.round(dailyTotal / daily.length) : 0
-    const cardY = 60, cardH = 22, gap = 5
+    const cardH = 22, gap = 5
     const cardW = (pageW - 28 - 2 * gap) / 3
     const cards: { label: string; value: string; color: [number, number, number] }[] = [
       { label: 'REPRODUCCIONES', value: totalPlays.toLocaleString(), color: [37, 99, 235] },
