@@ -175,7 +175,7 @@ function PairByToken({ token }: { token: string }) {
    LEGACY — vinculación por código (player HTML / device_pairings)
    ══════════════════════════════════════════════════════════════════ */
 
-type Screen = { id: string; name: string; location: string | null; device_token: string | null }
+type Screen = { id: string; name: string; location: string | null; device_token: string | null; device_fingerprint: string | null }
 
 function PairByCode({ code }: { code: string }) {
   const { session, profile, loading: authLoading } = useAuth()
@@ -185,6 +185,7 @@ function PairByCode({ code }: { code: string }) {
   const [done, setDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [invalid, setInvalid] = useState(false)
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     if (authLoading) return
@@ -203,7 +204,7 @@ function PairByCode({ code }: { code: string }) {
         if (e) setInvalid(true)
         // Con sesión + RLS "org manages screens", la lista queda limitada a la
         // organización del usuario.
-        return supabase.from('screens').select('id, name, location, device_token').order('name')
+        return supabase.from('screens').select('id, name, location, device_token, device_fingerprint').order('name')
       })
       .then(({ data }) => { setScreens(data || []); setLoading(false) })
   }, [authLoading, session, code])
@@ -262,36 +263,61 @@ function PairByCode({ code }: { code: string }) {
 
       {screens.length === 0 ? (
         <p style={subStyle}>No hay pantallas registradas. Créalas en el dashboard.</p>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-          {screens.map(s => (
-            <button
-              key={s.id}
-              onClick={() => pair(s.id, s.name)}
-              disabled={saving !== null || !s.device_token}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '0.85rem 1rem', borderRadius: '10px', cursor: s.device_token ? 'pointer' : 'default',
-                border: '1px solid #E2E8F0', background: saving === s.name ? '#EFF6FF' : '#F8FAFC',
-                opacity: !s.device_token ? 0.45 : 1, transition: 'background 0.15s',
-                width: '100%', textAlign: 'left',
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 600, color: '#0F172A', fontSize: '0.95rem' }}>{s.name}</div>
-                {s.location && <div style={{ color: '#94A3B8', fontSize: '0.78rem', marginTop: '2px' }}>{s.location}</div>}
-                {!s.device_token && <div style={{ color: '#F59E0B', fontSize: '0.75rem', marginTop: '2px' }}>Sin token asignado</div>}
+      ) : (() => {
+        const filtered = screens.filter(s => s.name.toLowerCase().includes(search.trim().toLowerCase()))
+        return (
+          <>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar pantalla por nombre…"
+              style={{ width: '100%', padding: '0.7rem 0.9rem', borderRadius: '10px', border: '1px solid #E2E8F0', background: '#fff', color: '#0F172A', fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box', marginBottom: '0.85rem' }}
+            />
+            {filtered.length === 0 ? (
+              <p style={subStyle}>Ninguna pantalla coincide con "{search}".</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                {filtered.map(s => {
+                  const linked = !!s.device_fingerprint          // ya vinculada a un equipo
+                  const selectable = !!s.device_token && !linked
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => pair(s.id, s.name)}
+                      disabled={saving !== null || !selectable}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '0.85rem 1rem', borderRadius: '10px', cursor: selectable ? 'pointer' : 'default',
+                        border: `1px solid ${linked ? '#FECACA' : '#E2E8F0'}`,
+                        background: linked ? '#FFF5F5' : (saving === s.name ? '#EFF6FF' : '#F8FAFC'),
+                        opacity: (!s.device_token && !linked) ? 0.45 : 1, transition: 'background 0.15s',
+                        width: '100%', textAlign: 'left',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600, color: linked ? '#94A3B8' : '#0F172A', fontSize: '0.95rem' }}>{s.name}</div>
+                        {s.location && <div style={{ color: '#94A3B8', fontSize: '0.78rem', marginTop: '2px' }}>{s.location}</div>}
+                        {!s.device_token && !linked && <div style={{ color: '#F59E0B', fontSize: '0.75rem', marginTop: '2px' }}>Sin token asignado</div>}
+                      </div>
+                      {saving === s.name
+                        ? <div style={{ ...spinnerStyle, width: '18px', height: '18px', borderWidth: '2px' }} />
+                        : linked
+                          ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0, background: '#FEE2E2', color: '#DC2626', fontSize: '0.72rem', fontWeight: 700, padding: '3px 9px', borderRadius: '20px' }}>
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                              Vinculada
+                            </span>
+                          : selectable
+                            ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2.5"><polyline points="9 18 15 12 9 6" /></svg>
+                            : null
+                      }
+                    </button>
+                  )
+                })}
               </div>
-              {saving === s.name
-                ? <div style={{ ...spinnerStyle, width: '18px', height: '18px', borderWidth: '2px' }} />
-                : s.device_token
-                  ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2.5"><polyline points="9 18 15 12 9 6" /></svg>
-                  : null
-              }
-            </button>
-          ))}
-        </div>
-      )}
+            )}
+          </>
+        )
+      })()}
     </Shell>
   )
 }
