@@ -3,7 +3,7 @@ import { useAuth } from '../auth/AuthContext'
 import logoNegro from '../assets/logo/logo-negro.png'
 
 export default function Login() {
-  const { signIn } = useAuth()
+  const { signIn, suspendedNotice, clearSuspendedNotice } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -12,6 +12,7 @@ export default function Login() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
+    clearSuspendedNotice()
     setSubmitting(true)
     const { error } = await signIn(email, password)
     setSubmitting(false)
@@ -31,6 +32,19 @@ export default function Login() {
 
         <h2 style={s.heading}>Iniciar sesión</h2>
         <p style={s.subheading}>Acceso restringido — equipo de administración</p>
+
+        {/* Sesión cerrada sola por organización suspendida. En ámbar, para no
+            confundirse con el rojo de "credenciales incorrectas": aquí los
+            datos del usuario están bien, el problema es la cuenta. */}
+        {suspendedNotice && (
+          <div style={s.warnBox}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            {suspendedNotice}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}>
           <div style={s.fieldGroup}>
@@ -163,6 +177,19 @@ const s: Record<string, React.CSSProperties> = {
     color: '#EF4444',
     fontSize: '0.8rem',
     fontWeight: 500,
+  },
+  warnBox: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    background: '#FFFBEB',
+    border: '1px solid #FDE68A',
+    borderRadius: '8px',
+    padding: '0.6rem 0.875rem',
+    color: '#B45309',
+    fontSize: '0.8rem',
+    fontWeight: 500,
+    marginTop: '1.25rem',
   },
   btn: {
     padding: '0.7rem',
