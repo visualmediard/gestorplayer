@@ -9,6 +9,7 @@ import Content from './pages/Content'
 import Stats from './pages/Stats'
 import Campaigns from './pages/Campaigns'
 import Settings from './pages/Settings'
+import Superadmin from './pages/Superadmin'
 import Sidebar from './components/Sidebar'
 import { DialogProvider } from './components/Dialog'
 import Pair from './pages/Pair'
@@ -16,7 +17,7 @@ import Invite from './pages/Invite'
 import Player from './pages/Player'
 import logoNegro from './assets/logo/logo-negro.png'
 
-type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns' | 'settings'
+type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns' | 'settings' | 'superadmin'
 
 // Página inicial según rol: el cliente no tiene "Inicio" en su menú, así que
 // aterriza directo en Campañas. El resto arranca en el dashboard.
@@ -124,7 +125,7 @@ function Gate() {
   const pageLabel: Record<Page, string> = {
     home: 'Inicio', programs: 'Programas', screens: 'Pantallas',
     content: 'Contenido', stats: 'Estadísticas', campaigns: 'Campañas',
-    settings: 'Configuración',
+    settings: 'Configuración', superadmin: 'Superadmin',
   }
 
   return (
@@ -222,6 +223,7 @@ function Gate() {
             {page === 'stats'     && <Stats onGoToCampaign={openCampaignReport} />}
             {page === 'campaigns' && <Campaigns initialReportId={campaignReportId} />}
             {page === 'settings'  && <Settings />}
+            {page === 'superadmin' && profile?.is_superadmin && <Superadmin />}
           </div>
         </main>
       </div>

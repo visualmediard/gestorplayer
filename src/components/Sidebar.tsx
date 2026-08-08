@@ -146,6 +146,45 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
             </button>
           )
         })}
+
+        {/* Superadmin: no es un rol de organización (no entra en `nav`, que
+            filtra por Role), sino una marca global del dueño de la plataforma.
+            Va en su propio bloque, separado del menú normal. */}
+        {profile?.is_superadmin && (() => {
+          const isActive = current === 'superadmin'
+          const showLabel = isMobile || !collapsed
+          return (
+            <>
+              <div style={{ height: '1px', background: '#F1F5F9', margin: '0.5rem 0.5rem 0.4rem' }} />
+              <button
+                onClick={() => onChange('superadmin')}
+                title={(!isMobile && collapsed) ? 'Superadmin' : undefined}
+                className="nav-item"
+                style={{
+                  display: 'flex', alignItems: 'center',
+                  gap: showLabel ? '0.75rem' : 0,
+                  justifyContent: showLabel ? 'flex-start' : 'center',
+                  padding: showLabel ? '0.6rem 0.875rem' : '0.65rem 0',
+                  borderRadius: '8px', border: 'none',
+                  background: isActive ? '#EFF6FF' : 'transparent',
+                  color: isActive ? '#2563EB' : '#64748B',
+                  fontSize: '0.875rem', fontWeight: isActive ? 600 : 500,
+                  width: '100%', position: 'relative', cursor: 'pointer',
+                }}>
+                {isActive && showLabel && (
+                  <div style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', width: '3px', height: '60%', background: '#2563EB', borderRadius: '0 3px 3px 0' }} />
+                )}
+                <span style={{ color: isActive ? '#2563EB' : '#94A3B8', flexShrink: 0, display: 'flex' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <path d="M9 12l2 2 4-4"/>
+                  </svg>
+                </span>
+                {showLabel && <span>Superadmin</span>}
+              </button>
+            </>
+          )
+        })()}
       </nav>
 
       {/* Almacenamiento */}

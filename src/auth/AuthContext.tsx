@@ -7,6 +7,9 @@ type Profile = {
   email: string
   full_name: string | null
   role: 'admin' | 'operator' | 'seller' | 'client'
+  // Superadmin de la plataforma (dueño de GestPlayer). Ortogonal a `role`, que
+  // es el permiso DENTRO de una organización.
+  is_superadmin: boolean
 }
 
 type AuthContextType = {
@@ -24,18 +27,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
 
+  const BASE_COLS = 'id, email, full_name, role'
+
   async function loadProfile(userId: string) {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role')
+      .select(`${BASE_COLS}, is_superadmin`)
       .eq('id', userId)
       .single()
+
+    // Si el frontend se despliega antes que la migración del superadmin, la
+    // columna todavía no existe y el select entero falla. Reintenta sin ella
+    // para no dejar a todo el mundo sin perfil por un despliegue desordenado.
+    if (error?.message?.includes('is_superadmin')) {
+      ;({ data, error } = await supabase
+        .from('profiles').select(BASE_COLS).eq('id', userId).single())
+    }
 
     if (error) {
       console.error('Error cargando perfil:', error.message)
       setProfile(null)
     } else {
-      setProfile(data as Profile)
+      setProfile({ is_superadmin: false, ...(data as object) } as Profile)
     }
   }
 
