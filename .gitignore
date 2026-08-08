@@ -39,3 +39,6 @@ Instalación*
 # Notas con tokens/credenciales — NUNCA subir
 Token value*
 *.psd
+
+# Estado local del CLI de Supabase (incluye pooler-url y el project-ref)
+supabase/.temp/
