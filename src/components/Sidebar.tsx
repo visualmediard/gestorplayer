@@ -89,10 +89,11 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
           </button>
         ) : (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <button onClick={() => onChange('home')} title="Ir al inicio"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
               <img src={logoNegro} alt="GestPlayer" style={{ height: '46px', width: 'auto' }} />
               <span style={s.betaBadge}>BETA</span>
-            </div>
+            </button>
 
             <button onClick={onToggle} style={{ ...s.toggleBtn, position: 'absolute', right: '0.75rem' }} aria-label={isMobile ? 'Cerrar menú' : 'Colapsar'}>
               {isMobile ? (
