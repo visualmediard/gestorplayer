@@ -46,6 +46,16 @@ export default function Superadmin() {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
+  // Eliminación definitiva: `target` es la organización abierta en el modal.
+  const [target, setTarget] = useState<OrgRow | null>(null)
+  const [confirmText, setConfirmText] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  // Comparación estricta, sin trim ni minúsculas (igual que GitHub al borrar un
+  // repo): pegar el nombre con un espacio de más no debe habilitar el botón.
+  const nameMatches = !!target && confirmText === target.name
+
   async function load() {
     setLoading(true)
     const { data, error } = await supabase.rpc('superadmin_orgs_overview')
@@ -83,6 +93,47 @@ export default function Superadmin() {
       setCopiedId(id)
       setTimeout(() => setCopiedId(c => (c === id ? null : c)), 1500)
     } catch { /* sin portapapeles: el UUID igual está visible */ }
+  }
+
+  function downloadBackup(name: string, backup: unknown) {
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `respaldo-${name.replace(/[^\w-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function handleDelete() {
+    if (!target || !nameMatches) return
+    setDeleting(true); setDeleteError(null)
+
+    const { data, error } = await supabase.functions.invoke('superadmin-delete-org', {
+      body: { orgId: target.id, confirmName: confirmText },
+    })
+
+    // functions.invoke devuelve un error genérico ("non-2xx status code") y deja
+    // data en null: el motivo real viene en el cuerpo, dentro de error.context.
+    if (error) {
+      let msg = error.message
+      try {
+        const j = await (error as any).context?.json()
+        if (j?.error) msg = j.error
+        // Si los archivos ya se borraron pero la base de datos falló, el
+        // respaldo viaja en la respuesta de error: es justo cuando más falta
+        // hace, porque los archivos ya no están.
+        if (j?.backup) downloadBackup(target.name, j.backup)
+      } catch { /* se queda el genérico */ }
+      setDeleting(false); setDeleteError(msg); return
+    }
+
+    // Se descarga solo: es la única copia y no hay segunda oportunidad.
+    if ((data as any)?.backup) downloadBackup(target.name, (data as any).backup)
+
+    setDeleting(false)
+    setTarget(null); setConfirmText('')
+    load()
   }
 
   if (!profile?.is_superadmin) {
@@ -210,23 +261,81 @@ export default function Superadmin() {
                     </td>
 
                     <td style={{ ...s.td, textAlign: 'right' }}>
-                      <button onClick={() => toggleStatus(r)} disabled={busyId === r.id}
-                        style={{
-                          ...s.btnOutline,
-                          display: 'inline-flex',
-                          color: r.status === 'active' ? '#B45309' : '#15803D',
-                          borderColor: r.status === 'active' ? '#FDE68A' : '#BBF7D0',
-                          opacity: busyId === r.id ? 0.6 : 1,
-                          whiteSpace: 'nowrap',
-                        }}>
-                        {busyId === r.id ? '...' : r.status === 'active' ? 'Suspender' : 'Reactivar'}
-                      </button>
+                      <div style={{ display: 'inline-flex', gap: '0.4rem' }}>
+                        <button onClick={() => toggleStatus(r)} disabled={busyId === r.id}
+                          style={{
+                            ...s.btnOutline,
+                            display: 'inline-flex',
+                            color: r.status === 'active' ? '#B45309' : '#15803D',
+                            borderColor: r.status === 'active' ? '#FDE68A' : '#BBF7D0',
+                            opacity: busyId === r.id ? 0.6 : 1,
+                            whiteSpace: 'nowrap',
+                          }}>
+                          {busyId === r.id ? '...' : r.status === 'active' ? 'Suspender' : 'Reactivar'}
+                        </button>
+
+                        {/* Solo sobre organizaciones ya dadas de baja: refleja
+                            en la UI la misma protección que valida el servidor. */}
+                        {r.status !== 'active' && (
+                          <button
+                            onClick={() => { setTarget(r); setConfirmText(''); setDeleteError(null) }}
+                            style={{ ...s.btnOutline, display: 'inline-flex', color: '#B91C1C', borderColor: '#FECACA' }}>
+                            Eliminar
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Modal de eliminación definitiva. No usa el confirm() del DialogProvider
+          porque necesita el input de confirmación por nombre. */}
+      {target && (
+        <div style={s.modalBackdrop} onClick={() => { if (!deleting) setTarget(null) }}>
+          <div style={s.modalCard} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#B91C1C' }}>
+              Eliminar "{target.name}" definitivamente
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: '#475569', lineHeight: 1.55, marginTop: '0.6rem' }}>
+              Se borrarán <strong>{target.screen_count} pantalla(s)</strong>,{' '}
+              <strong>{target.user_count} usuario(s)</strong> y{' '}
+              <strong>{formatBytes(Number(target.used_bytes) || 0)}</strong> de archivos en R2,
+              junto con sus programas, campañas y estadísticas. Las cuentas de acceso
+              dejarán de existir. <strong>Esta acción no se puede deshacer.</strong>
+            </p>
+            <p style={{ fontSize: '0.8rem', color: '#64748B', marginTop: '0.5rem' }}>
+              Se descargará un respaldo en JSON antes de borrar.
+            </p>
+
+            <label style={{ ...s.modalLabel, marginTop: '1rem' }}>
+              Escribe <code style={{ color: '#0F172A', fontWeight: 700 }}>{target.name}</code> para confirmar
+            </label>
+            <input autoFocus value={confirmText} onChange={e => setConfirmText(e.target.value)}
+              disabled={deleting} placeholder={target.name} style={s.confirmInput} />
+
+            {deleteError && <div style={{ ...s.errorBox, marginTop: '0.75rem', marginBottom: 0 }}>{deleteError}</div>}
+
+            <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end', marginTop: '1.1rem' }}>
+              <button onClick={() => setTarget(null)} disabled={deleting} style={s.btnOutline}>
+                Cancelar
+              </button>
+              <button onClick={handleDelete} disabled={!nameMatches || deleting}
+                style={{
+                  ...s.btnOutline,
+                  background: nameMatches ? '#DC2626' : '#FCA5A5',
+                  color: '#fff', border: 'none',
+                  cursor: nameMatches && !deleting ? 'pointer' : 'not-allowed',
+                }}>
+                {deleting ? 'Eliminando...' : 'Eliminar definitivamente'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -260,4 +369,9 @@ const s: Record<string, React.CSSProperties> = {
   td: { padding: '0.875rem 1.25rem', color: '#0F172A', fontSize: '0.875rem', verticalAlign: 'middle' },
   badge: { display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.2rem 0.55rem', borderRadius: '999px', border: '1px solid', fontSize: '0.72rem', fontWeight: 600, whiteSpace: 'nowrap' },
   folderBtn: { background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '6px', padding: '0.3rem 0.5rem', cursor: 'pointer', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  // Mismo velo que el resto de modales de la app (Content.tsx).
+  modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: '1rem' },
+  modalCard: { background: '#fff', borderRadius: '14px', padding: '1.5rem', width: '100%', maxWidth: '460px', boxShadow: '0 12px 40px rgba(0,0,0,0.2)', border: '1px solid #E2E8F0' },
+  modalLabel: { display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#374151', marginBottom: '0.35rem' },
+  confirmInput: { width: '100%', padding: '0.6rem 0.8rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#0F172A', fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box' },
 }
