@@ -11,6 +11,25 @@ type HeaderOpts = {
   subtitle: string
 }
 
+// Iconos de contacto dibujados con primitivas vectoriales (jsPDF no trae fuente
+// de iconos). `y` es la línea base del texto; el icono se dibuja a su izquierda.
+function drawContactIcon(doc: jsPDF, kind: 'pin' | 'phone' | 'mail', x: number, y: number) {
+  doc.setDrawColor(37, 99, 235); doc.setFillColor(37, 99, 235); doc.setLineWidth(0.4)
+  if (kind === 'pin') {
+    doc.circle(x + 1.6, y - 2.4, 1.1, 'S')       // aro
+    doc.circle(x + 1.6, y - 2.4, 0.4, 'F')        // centro
+    doc.line(x + 1.6, y - 1.3, x + 1.6, y - 0.1)  // punta
+  } else if (kind === 'phone') {
+    doc.roundedRect(x + 0.5, y - 3.7, 2.6, 3.9, 0.5, 0.5, 'S')  // cuerpo
+    doc.circle(x + 1.8, y - 0.6, 0.25, 'F')                     // botón
+  } else {
+    const w = 4, h = 2.9
+    doc.rect(x, y - 3.1, w, h, 'S')                 // sobre
+    doc.line(x, y - 3.1, x + w / 2, y - 1.5)        // solapa izq
+    doc.line(x + w, y - 3.1, x + w / 2, y - 1.5)    // solapa der
+  }
+}
+
 // Dibuja la cabecera tipo membrete de los reportes PDF: logo centrado arriba y,
 // debajo, una banda sombreada con los datos de la empresa (nombre, dirección,
 // teléfono · email). Luego el título del reporte, en la misma línea gráfica de
@@ -38,29 +57,44 @@ export async function drawReportHeader(doc: jsPDF, pageW: number, opts: HeaderOp
     hy += 12
   }
 
-  // 2. Banda con los datos de la empresa (solo si hay algún dato de contacto).
-  const infoLines: string[] = []
-  if (orgContact.address) infoLines.push(orgContact.address)
-  const phoneEmail = [orgContact.phone, orgContact.email].filter(Boolean).join('   ·   ')
-  if (phoneEmail) infoLines.push(phoneEmail)
+  // 2. Banda con los datos de la empresa: nombre + una fila por dato, cada una
+  //    con su icono y su etiqueta (solo se muestran los campos que existan).
+  const fields: { icon: 'pin' | 'phone' | 'mail'; label: string; value: string }[] = []
+  if (orgContact.address) fields.push({ icon: 'pin', label: 'Dirección', value: orgContact.address })
+  if (orgContact.phone) fields.push({ icon: 'phone', label: 'Teléfono', value: orgContact.phone })
+  if (orgContact.email) fields.push({ icon: 'mail', label: 'Email', value: orgContact.email })
 
-  if (infoLines.length > 0) {
+  if (fields.length > 0) {
     const bandTop = hy
-    const bandH = 10 + infoLines.length * 5
+    const rowH = 6
+    const nameY = bandTop + 7
+    const firstRowY = nameY + 6.5
+    const bandH = (firstRowY - bandTop) + (fields.length - 1) * rowH + 4
+
+    // Fondo + acento azul a la izquierda + líneas sutiles arriba/abajo.
     doc.setFillColor(238, 242, 247)
     doc.rect(0, bandTop, pageW, bandH, 'F')
-    doc.setDrawColor(226, 232, 240)
+    doc.setFillColor(37, 99, 235)
+    doc.rect(0, bandTop, 1.6, bandH, 'F')
+    doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.2)
     doc.line(0, bandTop, pageW, bandTop)
     doc.line(0, bandTop + bandH, pageW, bandTop + bandH)
-    // Rótulo "DE" + nombre en la misma fila.
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(30, 58, 95)
-    doc.text('DE', 14, bandTop + 6)
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(15, 23, 42)
-    doc.text(orgName || 'GestPlayer', 24, bandTop + 6)
-    // Líneas de contacto.
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(71, 85, 105)
-    let ly = bandTop + 12
-    for (const ln of infoLines) { doc.text(ln, 14, ly); ly += 5 }
+
+    // Nombre de la empresa (encabezado de la banda).
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(15, 23, 42)
+    doc.text(orgName || 'GestPlayer', 14, nameY)
+
+    // Filas: icono + etiqueta (negrita) + valor.
+    let ly = firstRowY
+    for (const f of fields) {
+      drawContactIcon(doc, f.icon, 14, ly)
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(71, 85, 105)
+      doc.text(f.label + ':', 21, ly)
+      const labelW = doc.getTextWidth(f.label + ':  ')
+      doc.setFont('helvetica', 'normal'); doc.setTextColor(51, 65, 85)
+      doc.text(f.value, 21 + labelW, ly)
+      ly += rowH
+    }
     hy = bandTop + bandH
   }
 
