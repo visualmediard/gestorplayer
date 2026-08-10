@@ -63,6 +63,10 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   const [tree, setTree]           = useState<ScreenNode[]>([])
   const [loading, setLoading]     = useState(true)
   const [search, setSearch]       = useState('')
+  // Vista lista/tarjeta, recordada entre sesiones por página (igual que
+  // Programas y Pantallas).
+  const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('gp_view_campaigns') === 'list' ? 'list' : 'grid'))
+  function changeView(v: 'grid' | 'list') { setView(v); localStorage.setItem('gp_view_campaigns', v) }
   const [reportId, setReportId]   = useState<string | null>(initialReportId ?? null)
   // Recalcula el badge "Activa/En reposo" al cruzar la hora, sin recargar ni
   // consultar la base: solo fuerza un re-render cada minuto.
@@ -523,6 +527,16 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
           <div style={s.searchWrap}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input style={s.searchInput} placeholder="Buscar por campaña o cliente..." value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+          <div style={s.viewToggle}>
+            <button onClick={() => changeView('grid')} title="Vista de tarjetas" aria-label="Vista de tarjetas"
+              style={{ ...s.viewBtn, ...(view === 'grid' ? s.viewBtnActive : {}) }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            </button>
+            <button onClick={() => changeView('list')} title="Vista de lista" aria-label="Vista de lista"
+              style={{ ...s.viewBtn, ...(view === 'list' ? s.viewBtnActive : {}) }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </button>
           </div>
           {canManage && (
             <button style={s.btnPrimary} onClick={openCreate}>
@@ -1035,7 +1049,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
           <p style={{ color: '#94A3B8', fontSize: '0.85rem', marginTop: '0.25rem' }}>Crea tu primera campaña con el wizard.</p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
+        <div style={view === 'grid' ? s.grid : s.list}>
           {filtered.map(camp => {
             const stat = getStat(camp.id)
             const mediaItem = getMedia(camp.media_content_id)
@@ -1073,15 +1087,67 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
             const endTs = new Date(camp.ends_at).getTime()
             const progress = Math.max(0, Math.min(100, ((Date.now() - startTs) / Math.max(1, endTs - startTs)) * 100))
 
+            const thumb = mediaItem?.type === 'video'
+              ? <video src={getPublicUrl(mediaItem.storage_path) + '#t=1'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted />
+              : mediaItem?.type === 'image'
+                ? <img src={getPublicUrl(mediaItem.storage_path)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1E3A5F, #2563EB)' }} />
+
+            // ── Vista lista: fila horizontal limpia y compacta ──────────────
+            if (view === 'list') return (
+              <div key={camp.id} style={s.listRow}>
+                <div style={{ width: '54px', height: '34px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, background: '#F1F5F9' }}>
+                  {thumb}
+                </div>
+
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {camp.name}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#94A3B8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {camp.client_name ?? '—'}
+                  </div>
+                </div>
+
+                <span title={badgeTitle} style={{ ...s.badge, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, flexShrink: 0 }}>
+                  {badgeIcon && <span style={{ marginRight: '3px' }}>{badgeIcon}</span>}
+                  {badgeLabel}
+                </span>
+
+                <span style={{ fontSize: '0.75rem', color: '#64748B', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {new Date(camp.starts_at).toLocaleDateString('es-DO', { day: '2-digit', month: 'short' })}
+                  {' – '}
+                  {new Date(camp.ends_at).toLocaleDateString('es-DO', { day: '2-digit', month: 'short' })}
+                </span>
+
+                <span style={{ fontSize: '0.75rem', color: '#64748B', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {stat?.zone_count ?? 0} zonas · {(stat?.total_plays ?? 0).toLocaleString()} rep.
+                </span>
+
+                <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
+                  <button onClick={() => setReportId(camp.id)} style={s.btnAct}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    Reporte
+                  </button>
+                  {canManage && (
+                    <>
+                      <button onClick={() => openEdit(camp)} style={s.btnAct}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        Editar
+                      </button>
+                      <button onClick={() => deleteCampaign(camp.id, camp.name)} style={s.btnDel}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+
             return (
               <div key={camp.id} style={s.campCard} className="card-hover">
                 <div style={s.campThumb}>
-                  {mediaItem?.type === 'video'
-                    ? <video src={getPublicUrl(mediaItem.storage_path) + '#t=1'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted />
-                    : mediaItem?.type === 'image'
-                      ? <img src={getPublicUrl(mediaItem.storage_path)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      : <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1E3A5F, #2563EB)' }} />
-                  }
+                  {thumb}
                   {mediaItem?.type === 'video' && (
                     <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '30px', height: '30px', background: 'rgba(0,0,0,0.55)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
@@ -1144,6 +1210,12 @@ const s: Record<string, React.CSSProperties> = {
   title:      { fontSize: '1.6rem', fontWeight: 700, color: '#0F172A' },
   sub:        { color: '#64748B', fontSize: '0.875rem', marginTop: '0.2rem' },
   searchWrap: { display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.4rem 0.75rem' },
+  grid:       { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' },
+  list:       { display: 'flex', flexDirection: 'column', gap: '0.5rem' },
+  listRow:    { display: 'flex', alignItems: 'center', gap: '0.85rem', background: '#fff', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.6rem 1rem', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' },
+  viewToggle: { display: 'flex', gap: '2px', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '2px', flexShrink: 0 },
+  viewBtn:    { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', border: 'none', borderRadius: '6px', background: 'transparent', color: '#94A3B8', cursor: 'pointer' },
+  viewBtnActive: { background: '#fff', color: '#2563EB', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' },
   searchInput:{ border: 'none', outline: 'none', fontSize: '0.85rem', color: '#0F172A', background: 'transparent', width: '260px' },
   btnPrimary: { display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.1rem', borderRadius: '8px', border: 'none', background: '#2563EB', color: '#fff', fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer', whiteSpace: 'nowrap' },
   btnOutline: { padding: '0.55rem 1rem', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontWeight: 500, fontSize: '0.85rem', cursor: 'pointer' },
