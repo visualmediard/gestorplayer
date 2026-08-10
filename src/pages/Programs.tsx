@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
 import { useDialog } from '../components/Dialog'
@@ -12,6 +12,41 @@ type Program = {
 
 type Screen = { id: string; name: string; current_program_id: string | null }
 
+type ZoneBox = { id: string; x: number; y: number; width: number; height: number; background_color: string | null }
+
+// Paleta fija por posición. No se usa `background_color` de la zona: ese es el
+// color detrás del medio (casi siempre negro), así que todas las zonas se
+// verían iguales y confundidas con el lienzo. Aquí lo que importa es
+// distinguir una zona de otra.
+const ZONE_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#06B6D4']
+
+// Vista previa del layout: dibuja las zonas a escala dentro del lienzo del
+// programa. Es la referencia visual de la tarjeta — sustituye a la foto subida
+// a mano, que no decía nada de cómo está montado el programa.
+function ZonePreview({ zones, width, height }: { zones: ZoneBox[]; width: number; height: number }) {
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet"
+      style={{ width: '100%', height: '100%', display: 'block', background: '#0F172A' }}>
+      {/* Lienzo del programa, para que se vea el espacio libre sin zonas. */}
+      <rect x={0} y={0} width={width} height={height} fill="#1E293B" />
+      {zones.map((z, i) => (
+        <g key={z.id}>
+          <rect x={z.x} y={z.y} width={z.width} height={z.height}
+            fill={ZONE_COLORS[i % ZONE_COLORS.length]} fillOpacity={0.85}
+            stroke="#F8FAFC" strokeWidth={Math.max(2, width / 300)} />
+          {/* Numeración: a este tamaño el nombre no se leería. El tamaño va
+              en unidades del viewBox, así escala con la resolución. */}
+          <text x={z.x + z.width / 2} y={z.y + z.height / 2}
+            fill="#F8FAFC" fontSize={Math.min(z.width, z.height) * 0.45}
+            fontWeight="700" textAnchor="middle" dominantBaseline="central">
+            {i + 1}
+          </text>
+        </g>
+      ))}
+    </svg>
+  )
+}
+
 type Props = { initialEditId?: string | null }
 
 export default function Programs({ initialEditId }: Props = {}) {
@@ -21,7 +56,6 @@ export default function Programs({ initialEditId }: Props = {}) {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [name, setName] = useState('')
-  const [clientName, setClientName] = useState('')
   const [width, setWidth] = useState(1920)
   const [height, setHeight] = useState(1080)
   const [saving, setSaving] = useState(false)
@@ -31,15 +65,12 @@ export default function Programs({ initialEditId }: Props = {}) {
   // Vista lista/tarjeta, recordada entre sesiones por página.
   const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('gp_view_programs') === 'list' ? 'list' : 'grid'))
   function changeView(v: 'grid' | 'list') { setView(v); localStorage.setItem('gp_view_programs', v) }
-  const [uploadingThumb, setUploadingThumb] = useState<string | null>(null)
-  const thumbRef = useRef<HTMLInputElement>(null)
-  const [activeThumbId, setActiveThumbId] = useState<string | null>(null)
   const [screens, setScreens] = useState<Screen[]>([])
   const [zoneCounts, setZoneCounts] = useState<Record<string, number>>({})
+  const [zonesByProgram, setZonesByProgram] = useState<Record<string, ZoneBox[]>>({})
   // Editar datos del programa
   const [editProgram, setEditProgram] = useState<Program | null>(null)
   const [editName, setEditName] = useState('')
-  const [editClient, setEditClient] = useState('')
   const [editWidth, setEditWidth] = useState(1920)
   const [editHeight, setEditHeight] = useState(1080)
   const [editSaving, setEditSaving] = useState(false)
@@ -53,13 +84,20 @@ export default function Programs({ initialEditId }: Props = {}) {
     const [{ data }, { data: scr }, { data: zoneRows }] = await Promise.all([
       supabase.from('programs').select('*').order('created_at', { ascending: false }),
       supabase.from('screens').select('id, name, current_program_id').order('name'),
-      supabase.from('zones').select('program_id'),
+      supabase.from('zones').select('id, program_id, x, y, width, height, background_color'),
     ])
     if (data) setPrograms(data as Program[])
     if (scr) setScreens(scr as Screen[])
     const counts: Record<string, number> = {}
-    for (const z of (zoneRows ?? [])) { const pid = (z as any).program_id; if (pid) counts[pid] = (counts[pid] ?? 0) + 1 }
+    const byProgram: Record<string, ZoneBox[]> = {}
+    for (const row of (zoneRows ?? [])) {
+      const z = row as any
+      if (!z.program_id) continue
+      counts[z.program_id] = (counts[z.program_id] ?? 0) + 1
+      ;(byProgram[z.program_id] ??= []).push(z as ZoneBox)
+    }
     setZoneCounts(counts)
+    setZonesByProgram(byProgram)
     setLoading(false)
   }
 
@@ -76,14 +114,16 @@ export default function Programs({ initialEditId }: Props = {}) {
     const shortCode = name.trim().substring(0, 3).toUpperCase() + Math.random().toString(36).substring(2, 5).toUpperCase()
     const { data: profileData } = await supabase.from('profiles').select('organization_id').eq('id', profile?.id ?? '').single()
     const { data: created, error } = await supabase.from('programs').insert({
-      name: name.trim(), client_name: clientName.trim() || null,
+      // client_name ya no se pide al crear; la columna se conserva y sigue
+      // siendo editable para los programas que la traen de antes.
+      name: name.trim(), client_name: null,
       width, height, created_by: profile?.id,
       organization_id: profileData?.organization_id ?? null,
       short_code: shortCode,
     }).select('id, name').single()
     setSaving(false)
     if (error) { setError(error.message); return }
-    setName(''); setClientName(''); setWidth(1920); setHeight(1080); setShowForm(false)
+    setName(''); setWidth(1920); setHeight(1080); setShowForm(false)
     await load()
     // Al finalizar: preguntar a qué pantalla asignarlo.
     if (created) { setAssignScreen(''); setAssignFor({ id: created.id, name: created.name }) }
@@ -98,21 +138,9 @@ export default function Programs({ initialEditId }: Props = {}) {
     await supabase.from('programs').delete().eq('id', id); load()
   }
 
-  async function handleThumbnailUpload(programId: string, file: File) {
-    setUploadingThumb(programId)
-    const ext = file.name.split('.').pop()
-    const path = `thumbnails/${programId}.${ext}`
-    const { error: storageError } = await supabase.storage.from('media').upload(path, file, { upsert: true })
-    if (storageError) { await alert({ title: 'Error al subir la imagen', message: storageError.message }); setUploadingThumb(null); return }
-    const { data } = supabase.storage.from('media').getPublicUrl(path)
-    await supabase.from('programs').update({ thumbnail_url: data.publicUrl + '?t=' + Date.now() }).eq('id', programId)
-    setUploadingThumb(null); setActiveThumbId(null); load()
-  }
-
   function openEdit(p: Program) {
     setEditProgram(p)
     setEditName(p.name)
-    setEditClient(p.client_name ?? '')
     setEditWidth(p.width)
     setEditHeight(p.height)
   }
@@ -121,8 +149,9 @@ export default function Programs({ initialEditId }: Props = {}) {
     if (!editProgram || !editName.trim()) return
     setEditSaving(true)
     const { error } = await supabase.from('programs').update({
+      // client_name se omite a propósito: ya no se edita desde la UI, y
+      // mandarlo aquí borraría el valor de los programas que lo traen de antes.
       name: editName.trim(),
-      client_name: editClient.trim() || null,
       width: editWidth, height: editHeight,
     }).eq('id', editProgram.id)
     setEditSaving(false)
@@ -188,10 +217,6 @@ export default function Programs({ initialEditId }: Props = {}) {
               <input style={s.input} value={name} onChange={e => setName(e.target.value)} placeholder="Ej: Kennedy SN Full HD" />
             </div>
             <div style={s.formGroup}>
-              <label style={s.label}>Cliente (opcional)</label>
-              <input style={s.input} value={clientName} onChange={e => setClientName(e.target.value)} placeholder="Ej: Coca-Cola" />
-            </div>
-            <div style={s.formGroup}>
               <label style={s.label}>Resolución</label>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 <input style={{ ...s.input, width: '90px' }} type="number" value={width} onChange={e => setWidth(+e.target.value)} />
@@ -208,8 +233,6 @@ export default function Programs({ initialEditId }: Props = {}) {
         </div>
       )}
 
-      <input ref={thumbRef} type="file" accept="image/*" style={{ display: 'none' }}
-        onChange={e => { const file = e.target.files?.[0]; if (file && activeThumbId) handleThumbnailUpload(activeThumbId, file); e.target.value = '' }} />
 
       {loading ? (
         <div style={view === 'grid' ? s.grid : s.list}>
@@ -227,8 +250,8 @@ export default function Programs({ initialEditId }: Props = {}) {
               // ── Vista lista: fila horizontal limpia y compacta ──────────────
               <div key={p.id} style={s.listRow}>
                 <div style={{ width: '54px', height: '34px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, background: '#F1F5F9' }}>
-                  {p.thumbnail_url
-                    ? <img src={p.thumbnail_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  {(zonesByProgram[p.id] ?? []).length > 0
+                    ? <ZonePreview zones={zonesByProgram[p.id]} width={p.width} height={p.height} />
                     : <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1E3A5F 0%, #2563EB 50%, #1E40AF 100%)' }} />}
                 </div>
                 <div style={{ flex: '3 1 200px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
@@ -249,21 +272,16 @@ export default function Programs({ initialEditId }: Props = {}) {
             ) : (
               <div key={p.id} style={s.card} className="card-hover">
                 <div style={s.cardImg}>
-                  {p.thumbnail_url
-                    ? <img src={p.thumbnail_url} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    : <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1E3A5F 0%, #2563EB 50%, #1E40AF 100%)' }} />
-                  }
+                  {(zonesByProgram[p.id] ?? []).length > 0 ? (
+                    <ZonePreview zones={zonesByProgram[p.id]} width={p.width} height={p.height} />
+                  ) : (
+                    <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1E3A5F 0%, #2563EB 50%, #1E40AF 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.75)', fontWeight: 500 }}>
+                        Sin zonas todavía
+                      </span>
+                    </div>
+                  )}
                   <div style={s.resBadge}>{p.width} × {p.height}</div>
-                  <button style={s.thumbBtn} onClick={() => { setActiveThumbId(p.id); thumbRef.current?.click() }} disabled={uploadingThumb === p.id}>
-                    {uploadingThumb === p.id ? (
-                      <span style={{ fontSize: '0.7rem', color: '#fff' }}>Subiendo...</span>
-                    ) : (
-                      <>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        <span style={{ fontSize: '0.7rem', color: '#fff' }}>{p.thumbnail_url ? 'Cambiar foto' : 'Subir foto'}</span>
-                      </>
-                    )}
-                  </button>
                 </div>
 
                 <div style={s.cardBody}>
@@ -320,10 +338,6 @@ export default function Programs({ initialEditId }: Props = {}) {
               <div style={s.formGroup}>
                 <label style={s.label}>Nombre</label>
                 <input style={s.input} value={editName} onChange={e => setEditName(e.target.value)} />
-              </div>
-              <div style={s.formGroup}>
-                <label style={s.label}>Cliente</label>
-                <input style={s.input} value={editClient} onChange={e => setEditClient(e.target.value)} placeholder="Opcional" />
               </div>
               <div style={s.formGroup}>
                 <label style={s.label}>Resolución</label>
@@ -402,7 +416,9 @@ const s: Record<string, React.CSSProperties> = {
   viewBtnActive: { background: '#fff', color: '#2563EB', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' },
   card: { background: '#fff', borderRadius: '14px', overflow: 'hidden', border: '1px solid #E2E8F0', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' },
   cardImg: { height: '180px', position: 'relative', overflow: 'hidden', background: '#E2E8F0' },
-  resBadge: { position: 'absolute', top: '0.875rem', left: '0.875rem', background: 'rgba(0,0,0,0.5)', color: '#fff', fontSize: '0.75rem', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', backdropFilter: 'blur(4px)' },
+  // Abajo a la izquierda: arriba taparía la zona 1, que casi siempre ocupa esa
+  // esquina del layout.
+  resBadge: { position: 'absolute', bottom: '0.625rem', left: '0.625rem', background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: '0.72rem', fontWeight: 600, padding: '3px 8px', borderRadius: '6px', backdropFilter: 'blur(4px)' },
   thumbBtn: { position: 'absolute', bottom: '0.875rem', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '20px', padding: '5px 12px', cursor: 'pointer', backdropFilter: 'blur(4px)', whiteSpace: 'nowrap' },
   cardBody: { padding: '1rem 1.25rem 0.75rem' },
   cardName: { fontWeight: 700, color: '#0F172A', fontSize: '1rem' },
