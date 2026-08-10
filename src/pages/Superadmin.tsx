@@ -46,6 +46,12 @@ export default function Superadmin() {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
+  // Edición del límite de almacenamiento, en la propia celda.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [limitInput, setLimitInput] = useState('')
+  const [savingLimit, setSavingLimit] = useState(false)
+  const [limitError, setLimitError] = useState<string | null>(null)
+
   // Eliminación definitiva: `target` es la organización abierta en el modal.
   const [target, setTarget] = useState<OrgRow | null>(null)
   const [confirmText, setConfirmText] = useState('')
@@ -93,6 +99,27 @@ export default function Superadmin() {
       setCopiedId(id)
       setTimeout(() => setCopiedId(c => (c === id ? null : c)), 1500)
     } catch { /* sin portapapeles: el UUID igual está visible */ }
+  }
+
+  function startEditLimit(r: OrgRow) {
+    setEditingId(r.id)
+    setLimitInput(String((r.storage_limit_mb || 2048) / 1024))
+    setLimitError(null)
+  }
+
+  async function saveLimit(r: OrgRow) {
+    // Se acepta coma decimal: el panel está en es-DO y "2,5" es lo natural aquí.
+    const gb = parseFloat(limitInput.replace(',', '.'))
+    if (!isFinite(gb) || gb <= 0) { setLimitError('Valor inválido'); return }
+
+    const mb = Math.round(gb * 1024)
+    setSavingLimit(true); setLimitError(null)
+    const { error } = await supabase.rpc('set_org_storage_limit', { p_org_id: r.id, p_limit_mb: mb })
+    setSavingLimit(false)
+    if (error) { setLimitError(error.message); return }
+
+    setRows(rs => rs.map(x => (x.id === r.id ? { ...x, storage_limit_mb: mb } : x)))
+    setEditingId(null)
   }
 
   function downloadBackup(name: string, backup: unknown) {
@@ -239,13 +266,71 @@ export default function Superadmin() {
 
                     <td style={{ ...s.td, color: '#64748B', whiteSpace: 'nowrap' }}>{fmtDate(r.created_at)}</td>
 
-                    <td style={{ ...s.td, minWidth: 150 }}>
-                      <div style={{ fontSize: '0.78rem', color: '#64748B', marginBottom: '0.3rem' }}>
-                        {formatBytes(used)} de {formatBytes(limit)}
-                      </div>
-                      <div style={{ height: 5, background: '#E2E8F0', borderRadius: 999, overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 999 }} />
-                      </div>
+                    <td style={{ ...s.td, minWidth: 190 }}>
+                      {editingId === r.id ? (
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                            <input autoFocus type="number" step={0.5} min={0.1}
+                              value={limitInput} disabled={savingLimit}
+                              onChange={e => setLimitInput(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveLimit(r)
+                                if (e.key === 'Escape') setEditingId(null)
+                              }}
+                              style={s.limitInput} />
+                            <span style={{ fontSize: '0.75rem', color: '#64748B' }}>GB</span>
+                            <button onClick={() => saveLimit(r)} disabled={savingLimit}
+                              title="Guardar" style={{ ...s.iconBtn, color: '#15803D' }}>✓</button>
+                            <button onClick={() => setEditingId(null)} disabled={savingLimit}
+                              title="Cancelar" style={{ ...s.iconBtn, color: '#94A3B8' }}>✕</button>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.35rem' }}>
+                            {[2, 5, 10, 20].map(g => (
+                              <button key={g} onClick={() => setLimitInput(String(g))}
+                                disabled={savingLimit} style={s.chip}>{g} GB</button>
+                            ))}
+                          </div>
+
+                          <div style={{ fontSize: '0.7rem', color: '#94A3B8', marginTop: '0.35rem' }}>
+                            Usa {formatBytes(used)}
+                          </div>
+
+                          {/* Bajar por debajo del consumo se permite (degradar de
+                              plan es legítimo); solo se avisa de la consecuencia. */}
+                          {(() => {
+                            const gb = parseFloat(limitInput.replace(',', '.'))
+                            return isFinite(gb) && gb * 1024 * 1024 * 1024 < used ? (
+                              <div style={{ fontSize: '0.7rem', color: '#B45309', marginTop: '0.2rem' }}>
+                                Quedará por encima del límite
+                              </div>
+                            ) : null
+                          })()}
+
+                          {limitError && (
+                            <div style={{ fontSize: '0.7rem', color: '#B91C1C', marginTop: '0.25rem' }}>
+                              {limitError}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.3rem' }}>
+                            <span style={{ fontSize: '0.78rem', color: '#64748B' }}>
+                              {formatBytes(used)} de {formatBytes(limit)}
+                            </span>
+                            <button onClick={() => startEditLimit(r)} title="Editar límite"
+                              style={s.iconBtn}>
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>
+                              </svg>
+                            </button>
+                          </div>
+                          <div style={{ height: 5, background: '#E2E8F0', borderRadius: 999, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 999 }} />
+                          </div>
+                        </>
+                      )}
                     </td>
 
                     <td style={{ ...s.td, textAlign: 'center', fontWeight: 600 }}>{r.screen_count}</td>
@@ -369,6 +454,9 @@ const s: Record<string, React.CSSProperties> = {
   td: { padding: '0.875rem 1.25rem', color: '#0F172A', fontSize: '0.875rem', verticalAlign: 'middle' },
   badge: { display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.2rem 0.55rem', borderRadius: '999px', border: '1px solid', fontSize: '0.72rem', fontWeight: 600, whiteSpace: 'nowrap' },
   folderBtn: { background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '6px', padding: '0.3rem 0.5rem', cursor: 'pointer', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  limitInput: { width: 62, padding: '0.25rem 0.4rem', borderRadius: '6px', border: '1px solid #CBD5E1', background: '#fff', color: '#0F172A', fontSize: '0.78rem', outline: 'none' },
+  iconBtn: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', padding: '2px 3px', cursor: 'pointer', color: '#94A3B8', fontSize: '0.8rem', lineHeight: 1 },
+  chip: { padding: '0.15rem 0.4rem', borderRadius: '999px', border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#64748B', fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer' },
   // Mismo velo que el resto de modales de la app (Content.tsx).
   modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: '1rem' },
   modalCard: { background: '#fff', borderRadius: '14px', padding: '1.5rem', width: '100%', maxWidth: '460px', boxShadow: '0 12px 40px rgba(0,0,0,0.2)', border: '1px solid #E2E8F0' },
