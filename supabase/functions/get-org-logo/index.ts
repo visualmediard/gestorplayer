@@ -9,6 +9,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+const R2_PUBLIC_URL = (Deno.env.get('R2_PUBLIC_URL') ?? '').replace(/\/+$/, '')
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -52,6 +53,15 @@ Deno.serve(async (req) => {
     .from('organizations').select('logo_url').eq('id', prof.organization_id).single()
   const logoUrl = org?.logo_url
   if (!logoUrl) return json({ dataUrl: null })
+
+  // Control principal contra SSRF: logo_url es una columna que el cliente pudo
+  // escribir, y aquí se hace fetch() DESDE EL SERVIDOR devolviendo el cuerpo al
+  // que llama. Sin esta comprobación, cualquier admin podía apuntar al metadata
+  // del proveedor o a un servicio interno y leer la respuesta en base64.
+  // Mismo patrón que delete-from-r2, que ya validaba el prefijo.
+  if (!R2_PUBLIC_URL || !logoUrl.startsWith(R2_PUBLIC_URL + '/')) {
+    return json({ dataUrl: null })
+  }
 
   // Descarga del logo en el servidor (sin restricción CORS del navegador).
   let res: Response

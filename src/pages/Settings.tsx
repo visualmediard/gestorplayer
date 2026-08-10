@@ -114,7 +114,10 @@ function GeneralTab() {
     setUploading(true); setProgress(0); setError(null); setSaved(false)
     const { url, error: upErr } = await uploadToR2(file, setProgress, 'branding')
     if (upErr || !url) { setError(upErr?.message ?? 'Error al subir el logo.'); setUploading(false); return }
-    const { error: dbErr } = await supabase.from('organizations').update({ logo_url: url }).eq('id', orgId)
+    // Vía RPC y no con un update directo: logo_url ya no es escribible desde el
+    // cliente (la RPC valida la URL, porque get-org-logo hace fetch() de ella
+    // en el servidor).
+    const { error: dbErr } = await supabase.rpc('set_org_logo', { p_url: url })
     if (dbErr) { setError('Error al guardar: ' + dbErr.message); setUploading(false); return }
     setLogoUrl(url)
     if (previewUrl) URL.revokeObjectURL(previewUrl)
