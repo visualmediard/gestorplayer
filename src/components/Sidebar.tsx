@@ -110,11 +110,6 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
 
       {/* Nav */}
       <nav style={{ flex: 1, padding: '0.75rem 0.5rem', display: 'flex', flexDirection: 'column', gap: '2px', overflowY: 'auto' }}>
-        {(isMobile || !collapsed) && (
-          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#CBD5E1', letterSpacing: '0.1em', padding: '0.25rem 0.875rem 0.5rem', textTransform: 'uppercase' }}>
-            Menú
-          </div>
-        )}
         {nav.filter(item => hasRole(profile?.role, ...item.roles)).map(item => {
           const isActive = current === item.id
           const showLabel = isMobile || !collapsed
