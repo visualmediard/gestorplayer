@@ -187,23 +187,39 @@ BEGIN
 END $$;
 
 -- ── 5. Alta de código de vinculación ───────────────────────────────────────
--- El código se genera en el SERVIDOR con gen_random_bytes. Antes venía de
--- Math.random() en el cliente, que no es criptográficamente seguro y cuyo
--- substring podía devolver menos de 6 caracteres.
--- Alfabeto de 32 caracteres sin O/0 ni I/1 (se lee desde una TV). 256 % 32 = 0,
--- así que el módulo no introduce sesgo. 8 caracteres ≈ 10^12 combinaciones.
+-- El código se genera en el SERVIDOR. Antes venía de Math.random() en el
+-- cliente, que no es criptográficamente seguro y cuyo substring podía devolver
+-- menos de 6 caracteres.
+--
+-- La aleatoriedad sale de gen_random_uuid(), que es NATIVA de Postgres (13+) y
+-- criptográficamente segura. No se usa gen_random_bytes: esa sí es de pgcrypto,
+-- que en Supabase vive en el esquema `extensions` y no es visible con
+-- search_path = public.
+--
+-- De los 16 bytes de un UUID v4 no todos son aleatorios: el nibble de versión
+-- (carácter 13 del hex) y los bits de variante (carácter 17) son fijos. Se usan
+-- solo los tramos completamente aleatorios: caracteres 1-12 y 19-32.
+--
+-- Alfabeto de 32 sin O/0 ni I/1 (se lee desde una TV). 256 % 32 = 0, así que el
+-- módulo no introduce sesgo. 8 caracteres ≈ 10^12 combinaciones.
 CREATE OR REPLACE FUNCTION create_pairing_code()
   RETURNS text LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = public AS $$
 DECLARE
   v_alphabet constant text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  v_hex  text;
   v_code text;
   i int;
 BEGIN
   FOR attempt IN 1..5 LOOP
+    v_hex := replace(gen_random_uuid()::text, '-', '');
+    v_hex := substr(v_hex, 1, 12) || substr(v_hex, 19, 14);   -- 13 bytes puros
     v_code := '';
     FOR i IN 1..8 LOOP
-      v_code := v_code || substr(v_alphabet, 1 + (get_byte(gen_random_bytes(1), 0) % 32), 1);
+      v_code := v_code || substr(
+        v_alphabet,
+        1 + (('x' || substr(v_hex, (i - 1) * 2 + 1, 2))::bit(8)::int % 32),
+        1);
     END LOOP;
     BEGIN
       INSERT INTO device_pairings (code, token) VALUES (v_code, NULL);
