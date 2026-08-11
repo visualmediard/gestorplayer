@@ -28,6 +28,10 @@ const POLL_MS = 15_000           // poll de publicación/ajustes cada 15s (igual
 
 const FLUSH_INTERVAL_MS = 10 * 60 * 1000
 const BATCH_STORAGE_KEY = 'gp_pending_batch'
+// Cuándo reclamó esta pantalla. En localStorage y no en memoria a propósito:
+// tiene que sobrevivir a un reinicio para que el servidor pueda decir "te
+// liberaron mientras estabas apagado".
+const CLAIM_AT_KEY = 'gp_claimed_at'
 
 type BatchRow = { screen_id: string; zone_id: string; content_id: string; played_at: string; count: number }
 
@@ -159,7 +163,11 @@ function isWithinOperatingHours(start: string | null, end: string | null): boole
 // token en la URL) retoma solo, sin re-vincular.
 const TOKEN_STORAGE_KEY = 'gp_device_token'
 function readStoredToken(): string { try { return localStorage.getItem(TOKEN_STORAGE_KEY) || '' } catch { return '' } }
-// Código corto de vinculación (mismo formato que el player Android).
+// Momento del último claim. null si nunca reclamó: el servidor lo trata como
+// "anterior a cualquier liberación", que es lo correcto para un dispositivo
+// que aún no tenía asignada esta pantalla.
+function readClaimedAt(): string | null { try { return localStorage.getItem(CLAIM_AT_KEY) } catch { return null } }
+
 // Versión del bundle, enviada en cada heartbeat. Permite comprobar, antes de
 // cerrar las tablas al player anónimo (fase 5), que no queda ninguna pantalla
 // con la versión vieja — en Android el bundle va congelado dentro del APK.
@@ -168,7 +176,9 @@ const APP_VERSION = 'web-2026.08.10'
 export default function Player() {
   const urlToken = new URLSearchParams(window.location.search).get('token') || ''
   const [token, setToken] = useState(() => urlToken || readStoredToken())
-  const [status, setStatus] = useState<'loading' | 'no-token' | 'no-program' | 'playing' | 'locked' | 'released'>('loading')
+  // Ya no hay estado 'released': una liberación borra el token y devuelve al
+  // QR directamente, para poder instalar la pantalla en otro sitio.
+  const [status, setStatus] = useState<'loading' | 'no-token' | 'no-program' | 'playing' | 'locked'>('loading')
   // Vinculación por QR (cuando no hay token).
   const [pairCode, setPairCode] = useState('')
   const [qrDataUrl, setQrDataUrl] = useState('')
@@ -207,30 +217,44 @@ export default function Player() {
       // columnas que cualquier anónimo podía escribir).
       const mySession = getWebSessionId()
       const { data, error } = await supabase.rpc('get_player_payload', {
-        p_token: token, p_session: mySession || null,
+        p_token: token,
+        p_session: mySession || null,
+        p_had_claim: claimedRef.current,
+        p_claimed_at: readClaimedAt(),
       })
       if (error) return                      // red/servidor: reintento en 15s
       const res = data as (PlayerPayload & { status: string; screen: any }) | null
       if (!res) return
 
-      if (res.status === 'invalid') {
-        // Token inválido (borrado del panel o erróneo): se limpia el guardado y
-        // se vuelve a la pantalla de QR para re-vincular automáticamente.
-        try { localStorage.removeItem(TOKEN_STORAGE_KEY) } catch { /* noop */ }
+      // Token inválido (borrado del panel) o pantalla liberada: en ambos casos
+      // este dispositivo deja de estar asignado, así que se olvida el token y
+      // se vuelve al QR para poder instalarlo en otro sitio.
+      if (res.status === 'invalid' || res.status === 'released') {
+        claimedRef.current = false
+        try {
+          localStorage.removeItem(TOKEN_STORAGE_KEY)
+          localStorage.removeItem(CLAIM_AT_KEY)
+        } catch { /* noop */ }
+        setScreen(null); setProgramId(null); setPayload(null)
         setToken('')
         return
       }
 
-      if (res.status === 'locked') {
-        // Otra sesión es la dueña. Si ya habíamos reclamado, es que nos
-        // superaron o nos liberaron desde el panel.
-        const wasOwner = claimedRef.current
+      // 'taken' = otra sesión se quedó con la pantalla; 'locked' = nunca fuimos
+      // dueños. En ninguno de los dos se borra el token: no estamos liberados,
+      // solo desplazados, y podemos recuperar el turno si la otra sesión muere.
+      if (res.status === 'taken' || res.status === 'locked') {
         claimedRef.current = false
         setScreen(null); setProgramId(null); setPayload(null)
-        setStatus(wasOwner ? 'released' : 'locked')
+        setStatus('locked')
         return
       }
 
+      // Primera vez que somos dueños: se anota cuándo, para que una liberación
+      // futura sea detectable aunque el equipo se reinicie.
+      if (!claimedRef.current) {
+        try { localStorage.setItem(CLAIM_AT_KEY, new Date().toISOString()) } catch { /* noop */ }
+      }
       claimedRef.current = true
       const sc = res.screen
       setScreen({ id: sc.id, name: sc.name })
@@ -415,12 +439,6 @@ export default function Player() {
     <h1 style={title}>Este token ya está activo en otro dispositivo.</h1>
     <p style={msg}>Contacta a tu administrador para liberar el acceso.</p>
   </Center>
-  if (status === 'released') return <Center>
-    <div style={{ fontSize: '3rem' }}>🔓</div>
-    <h1 style={title}>Pantalla liberada</h1>
-    <p style={msg}>Esta pantalla fue liberada desde el panel de administración.</p>
-    <button onClick={() => window.location.reload()} style={btnRelink}>Volver a vincular</button>
-  </Center>
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', cursor: 'none' }}>
@@ -438,7 +456,6 @@ function Spinner() {
 }
 const title: React.CSSProperties = { fontSize: '1.4rem', fontWeight: 700, margin: '0.5rem 0 0' }
 const msg: React.CSSProperties = { color: '#CBD5E1', fontSize: '0.95rem', margin: 0 }
-const btnRelink: React.CSSProperties = { marginTop: '1rem', padding: '0.65rem 1.4rem', borderRadius: 8, border: 'none', background: '#3B82F6', color: '#fff', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer' }
 
 // Pantalla de vinculación por QR: misma línea gráfica que /pair y el login.
 const pairWrap: React.CSSProperties = { position: 'fixed', inset: 0, background: '#F8FAFC', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1.5rem', fontFamily: 'system-ui, -apple-system, sans-serif' }
