@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import QRCode from 'qrcode'
-import ScreenStage from '../components/ScreenStage'
+import ScreenStage, { type PlayerPayload } from '../components/ScreenStage'
 import logoNegro from '../assets/logo/logo-negro.png'
 
 // Dedicated anonymous client: a screen is never "logged in", and even when an
@@ -65,10 +65,14 @@ function persistBatchDebounced() {
 // reintenta en el próximo ciclo / evento online.
 async function flushBatch() {
   if (flushingNow || !navigator.onLine || batchMap.size === 0) return
+  const tok = readStoredToken()
+  if (!tok) return          // sin token no hay a qué organización atribuirlos
   flushingNow = true
   const payload = [...batchMap.values()].map(r => ({ ...r }))
   try {
-    const { error } = await supabase.from('playback_events').insert(payload)
+    // Vía RPC: el token acota a qué organización se puede escribir. Con el
+    // INSERT directo, cualquier anónimo podía falsear estadísticas ajenas.
+    const { error } = await supabase.rpc('player_log_events', { p_token: tok, p_events: payload })
     if (!error) {
       // Descuenta solo lo enviado; lo reproducido DURANTE el envío queda
       // para el próximo lote (no se pierde ni se duplica).
@@ -134,10 +138,8 @@ function getWebSessionId(): string {
   } catch { return '' }
 }
 
-// Umbral de liveness: si el dueño no refresca last_seen_at en este tiempo, se
-// considera muerto (pestaña cerrada / dispositivo reiniciado) y otra sesión
-// puede tomar el relevo. El dueño lo refresca en cada poll (15s).
-const OWNER_STALE_MS = 90_000
+// El umbral de liveness (90 s) vive ahora dentro de get_player_payload: quién
+// es el dueño lo decide el servidor, no el cliente.
 
 // Ventana operativa con hora LOCAL del dispositivo (paridad con Android). Sin
 // start/end → siempre activa. Soporta cruce de medianoche (ej. 06:00 a 02:00).
@@ -158,7 +160,10 @@ function isWithinOperatingHours(start: string | null, end: string | null): boole
 const TOKEN_STORAGE_KEY = 'gp_device_token'
 function readStoredToken(): string { try { return localStorage.getItem(TOKEN_STORAGE_KEY) || '' } catch { return '' } }
 // Código corto de vinculación (mismo formato que el player Android).
-function genPairCode(): string { return Math.random().toString(36).substring(2, 8).toUpperCase() }
+// Versión del bundle, enviada en cada heartbeat. Permite comprobar, antes de
+// cerrar las tablas al player anónimo (fase 5), que no queda ninguna pantalla
+// con la versión vieja — en Android el bundle va congelado dentro del APK.
+const APP_VERSION = 'web-2026.08.10'
 
 export default function Player() {
   const urlToken = new URLSearchParams(window.location.search).get('token') || ''
@@ -178,6 +183,8 @@ export default function Player() {
   const lastPublishedRef = useRef<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [withinHours, setWithinHours] = useState(true)
+  // Contenido resuelto por get_player_payload; se lo pasamos a ScreenStage.
+  const [payload, setPayload] = useState<PlayerPayload | null>(null)
 
   // Fuerza un re-fetch en ScreenStage SOLO si el published_at es nuevo. El poll
   // de 15s y el evento realtime comparan ambos contra esta misma referencia,
@@ -195,10 +202,18 @@ export default function Player() {
   async function checkScreen() {
     if (!token) { setStatus('no-token'); return }
     try {
-      const { data: sc } = await supabase.from('screens')
-        .select('id, name, current_program_id, device_fingerprint, last_seen_at, operating_start, operating_end, operating_hours, reset_requested_at')
-        .eq('device_token', token).maybeSingle()
-      if (!sc) {
+      // Una sola llamada: pantalla + programa + zonas + media. El bloqueo por
+      // sesión lo resuelve el servidor (antes lo decidía el cliente sobre
+      // columnas que cualquier anónimo podía escribir).
+      const mySession = getWebSessionId()
+      const { data, error } = await supabase.rpc('get_player_payload', {
+        p_token: token, p_session: mySession || null,
+      })
+      if (error) return                      // red/servidor: reintento en 15s
+      const res = data as (PlayerPayload & { status: string; screen: any }) | null
+      if (!res) return
+
+      if (res.status === 'invalid') {
         // Token inválido (borrado del panel o erróneo): se limpia el guardado y
         // se vuelve a la pantalla de QR para re-vincular automáticamente.
         try { localStorage.removeItem(TOKEN_STORAGE_KEY) } catch { /* noop */ }
@@ -206,60 +221,41 @@ export default function Player() {
         return
       }
 
-      // ── Device locking por SESIÓN (una pestaña a la vez) ──
-      const mySession = getWebSessionId()
-      const dbFp = (sc.device_fingerprint ?? null) as string | null
-      const lastSeen = (sc as any).last_seen_at as string | null
-      const ownerStale = !lastSeen || (Date.now() - new Date(lastSeen).getTime() > OWNER_STALE_MS)
-      const claim = async () => {
-        const { error } = await supabase.from('screens')
-          .update({ device_fingerprint: mySession, last_seen_at: new Date().toISOString() } as any)
-          .eq('id', sc.id)
-        if (!error) claimedRef.current = true
-      }
-      if (mySession) {
-        if (!claimedRef.current) {
-          if (!dbFp || dbFp === mySession) {
-            await claim()               // libre, o reload de esta misma pestaña
-          } else if (ownerStale) {
-            await claim()               // el dueño murió → tomar el relevo
-          } else {
-            // Otra sesión activa es la dueña → bloqueado.
-            setScreen(null); setProgramId(null); setStatus('locked')
-            return
-          }
-        } else if (dbFp !== mySession) {
-          // Me superó otra sesión o me liberaron desde el panel → detener.
-          claimedRef.current = false
-          setScreen(null); setProgramId(null); setStatus('released')
-          return
-        } else {
-          // Sigo siendo dueño → refresco last_seen_at (liveness para el relevo).
-          supabase.from('screens').update({ last_seen_at: new Date().toISOString() } as any).eq('id', sc.id)
-        }
+      if (res.status === 'locked') {
+        // Otra sesión es la dueña. Si ya habíamos reclamado, es que nos
+        // superaron o nos liberaron desde el panel.
+        const wasOwner = claimedRef.current
+        claimedRef.current = false
+        setScreen(null); setProgramId(null); setPayload(null)
+        setStatus(wasOwner ? 'released' : 'locked')
+        return
       }
 
+      claimedRef.current = true
+      const sc = res.screen
       setScreen({ id: sc.id, name: sc.name })
 
       // ── Horario operativo: fuera de horas → pantalla negra (sin stats) ──
-      setWithinHours(isWithinOperatingHours((sc as any).operating_start ?? null, (sc as any).operating_end ?? null))
+      setWithinHours(isWithinOperatingHours(sc.operating_start ?? null, sc.operating_end ?? null))
 
-      // ── Reset remoto: fuerza re-sync y limpia el flag (web es anon con
-      // permiso de UPDATE en screens). Compara con Date() (no strings ISO). ──
-      const resetAt = (sc as any).reset_requested_at as string | null
+      // ── Reset remoto: fuerza re-sync y limpia el flag vía RPC. Compara con
+      // Date() (no strings ISO). ──
+      const resetAt = sc.reset_requested_at as string | null
       if (resetAt && new Date(resetAt) > new Date(bootedAtRef.current)) {
-        supabase.from('screens').update({ reset_requested_at: null } as any).eq('id', sc.id)
+        supabase.rpc('player_ack_reset', { p_token: token })
         setReloadKey(k => k + 1)
       }
 
-      if (!sc.current_program_id) { setProgramId(null); setStatus('no-program'); return }
+      if (!sc.current_program_id) {
+        setProgramId(null); setPayload(null); setStatus('no-program'); return
+      }
       setProgramId(sc.current_program_id)   // mismo valor → ScreenStage no recarga por programId
+      setPayload({ program: res.program ?? null, zones: res.zones ?? [] })
       setStatus('playing')
 
       // ── Detección de nueva publicación (published_at, fallback updated_at) ──
-      const { data: prog } = await supabase.from('programs')
-        .select('published_at, updated_at').eq('id', sc.current_program_id).maybeSingle()
-      if (prog) bumpIfNewPublish(((prog as any).published_at ?? (prog as any).updated_at) ?? null)
+      const prog = res.program as any
+      if (prog) bumpIfNewPublish((prog.published_at ?? prog.updated_at) ?? null)
     } catch { /* offline: se reintenta en el próximo ciclo de 15s */ }
   }
 
@@ -274,8 +270,10 @@ export default function Player() {
   }
 
   async function heartbeat() {
-    if (!screen) return
-    await supabase.from('screens').update({ last_heartbeat: new Date().toISOString() } as any).eq('id', screen.id)
+    if (!screen || !token) return
+    // app_version viaja aquí para poder comprobar, antes de cerrar las tablas
+    // (fase 5), que ninguna pantalla sigue con el bundle viejo.
+    await supabase.rpc('player_heartbeat', { p_token: token, p_app_version: APP_VERSION })
   }
 
   // Re-chequea al montar y cada vez que el token cambia (p. ej. tras vincular
@@ -288,23 +286,20 @@ export default function Player() {
     let cancelled = false
     let poll: ReturnType<typeof setInterval> | null = null
     let lifetime: ReturnType<typeof setTimeout> | null = null
-    let currentCode = ''
 
     async function newCode() {
       if (cancelled) return
       if (poll) { clearInterval(poll); poll = null }
       if (lifetime) { clearTimeout(lifetime); lifetime = null }
-      // Al rotar, borra el código anterior para no dejar filas huérfanas.
-      if (currentCode) supabase.from('device_pairings').delete().eq('code', currentCode)
       setPairError(null); setQrDataUrl('')
 
-      const code = genPairCode()
-      currentCode = code
-      setPairCode(code)
-
-      const { error } = await supabase.from('device_pairings').insert({ code, token: null })
+      // El código lo genera el servidor con gen_random_bytes: Math.random() no
+      // es criptográficamente seguro. La RPC inserta la fila y devuelve el
+      // código, así que el player ya no escribe en device_pairings.
+      const { data: code, error } = await supabase.rpc('create_pairing_code')
       if (cancelled) return
-      if (error) { setPairError('No se pudo generar el código. Reintentando…'); lifetime = setTimeout(newCode, 5000); return }
+      if (error || !code) { setPairError('No se pudo generar el código. Reintentando…'); lifetime = setTimeout(newCode, 5000); return }
+      setPairCode(code as string)
 
       try {
         const dataUrl = await QRCode.toDataURL(`${window.location.origin}/pair?code=${code}`, {
@@ -313,15 +308,16 @@ export default function Player() {
         if (!cancelled) setQrDataUrl(dataUrl)
       } catch { if (!cancelled) setPairError('No se pudo generar el QR.') }
 
-      // Polling: cuando el admin vincula desde /pair, aparece el token.
+      // Polling: cuando el admin vincula desde /pair, la RPC devuelve el token
+      // y borra la fila en la misma transacción (sin ventana de robo). Mientras
+      // no esté vinculado devuelve null y la fila se queda intacta.
       poll = setInterval(async () => {
-        const { data } = await supabase.from('device_pairings').select('token').eq('code', code).maybeSingle()
-        if (cancelled || !data?.token) return
+        const { data: claimed } = await supabase.rpc('claim_pairing_token', { p_code: code })
+        if (cancelled || !claimed) return
         if (poll) clearInterval(poll)
         if (lifetime) clearTimeout(lifetime)
-        supabase.from('device_pairings').delete().eq('code', code)
-        try { localStorage.setItem(TOKEN_STORAGE_KEY, data.token) } catch { /* noop */ }
-        setToken(data.token as string)   // → dispara checkScreen y arranca a reproducir
+        try { localStorage.setItem(TOKEN_STORAGE_KEY, claimed as string) } catch { /* noop */ }
+        setToken(claimed as string)   // → dispara checkScreen y arranca a reproducir
       }, 2000)
 
       // Rota el código cada 5 min (las filas no expiran solas).
@@ -333,7 +329,9 @@ export default function Player() {
       cancelled = true
       if (poll) clearInterval(poll)
       if (lifetime) clearTimeout(lifetime)
-      if (currentCode) supabase.from('device_pairings').delete().eq('code', currentCode)
+      // Ya no se borra la fila desde aquí: el player deja de escribir en
+      // device_pairings. Los códigos sin vincular los recoge el job de pg_cron
+      // (cleanup_device_pairings, cada 10 min).
     }
   }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -426,7 +424,7 @@ export default function Player() {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', cursor: 'none' }}>
-      {withinHours && programId && <ScreenStage client={supabase} programId={programId} reloadKey={reloadKey} onPlay={logPlay} />}
+      {withinHours && programId && <ScreenStage payload={payload} programId={programId} reloadKey={reloadKey} onPlay={logPlay} />}
     </div>
   )
 }

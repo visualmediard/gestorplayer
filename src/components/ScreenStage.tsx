@@ -17,6 +17,36 @@ type PlayItem = {
 type Entry = { kind: 'item'; item: PlayItem } | { kind: 'sub'; items: PlayItem[] }
 type ZoneData = { zone: Zone; entries: Entry[] }
 
+// Forma que devuelve la RPC get_player_payload. El player anónimo ya no
+// consulta las tablas: recibe todo aquí y se lo pasa a este componente.
+export type PlayerPayload = {
+  program: (Program & { published_at?: string | null; updated_at?: string | null }) | null
+  zones: (Zone & {
+    sort_order: number
+    items: (PlayItem & { sort_order: number })[]
+    subs: { id: string; sort_order: number; items: (PlayItem & { sort_order: number })[] }[]
+  })[]
+}
+
+// Mismo armado que hacía la ruta de consultas: filtra caducados/no iniciados y
+// mezcla ítems sueltos con sub-playlists respetando sort_order.
+function buildFromPayload(payload: PlayerPayload): ZoneData[] {
+  return (payload.zones ?? []).map(z => {
+    const subItems: Record<string, PlayItem[]> = {}
+    for (const sub of (z.subs ?? [])) {
+      subItems[sub.id] = (sub.items ?? []).filter(i => !isExpired(i) && !isNotStarted(i))
+    }
+    const combined: { sort_order: number; entry: Entry }[] = [
+      ...(z.items ?? []).filter(i => !isExpired(i) && !isNotStarted(i))
+        .map(i => ({ sort_order: i.sort_order, entry: { kind: 'item' as const, item: i } })),
+      ...(z.subs ?? []).filter(s => (subItems[s.id] ?? []).length > 0)
+        .map(s => ({ sort_order: s.sort_order, entry: { kind: 'sub' as const, items: subItems[s.id] } })),
+    ]
+    combined.sort((a, b) => a.sort_order - b.sort_order)
+    return { zone: z as Zone, entries: combined.map(c => c.entry) }
+  })
+}
+
 function isExpired(item: PlayItem) {
   if (!item.expires_at) return false
   // Parsear como fecha LOCAL (no UTC) para no adelantar el vencimiento un día
@@ -107,12 +137,16 @@ function ZonePlayer({ z, program, pub, onPlay }: {
   )
 }
 
-export default function ScreenStage({ client, programId, reloadKey, onPlay, onEmpty }: {
-  client: SupabaseClient
+export default function ScreenStage({ client, programId, reloadKey, onPlay, onEmpty, payload }: {
+  // `client` solo se usa en la ruta de consultas directas (previsualización del
+  // panel, que va autenticada y respeta RLS). El player anónimo pasa `payload`
+  // y no consulta nada.
+  client?: SupabaseClient
   programId: string
   reloadKey?: number   // cambia para forzar re-fetch en caliente (softResync web)
   onPlay?: (contentId: string, zoneId: string) => void
   onEmpty?: (empty: boolean) => void
+  payload?: PlayerPayload | null
 }) {
   const [program, setProgram] = useState<Program | null>(null)
   const [zones, setZones] = useState<ZoneData[]>([])
@@ -122,6 +156,19 @@ export default function ScreenStage({ client, programId, reloadKey, onPlay, onEm
 
   useEffect(() => {
     let cancelled = false
+
+    // Ruta del player: los datos ya vienen resueltos por get_player_payload.
+    if (payload) {
+      const built = buildFromPayload(payload)
+      setProgram(payload.program ?? null)
+      setZones(built)
+      if (onEmpty) onEmpty(built.every(z => z.entries.length === 0))
+      return
+    }
+
+    // Ruta del panel: consultas directas bajo el RLS del usuario autenticado.
+    if (!client) { setProgram(null); setZones([]); return }
+
     ;(async () => {
       const { data: prog } = await client.from('programs')
         .select('id, name, width, height').eq('id', programId).maybeSingle()
@@ -160,7 +207,7 @@ export default function ScreenStage({ client, programId, reloadKey, onPlay, onEm
       if (onEmpty) onEmpty(built.every(z => z.entries.length === 0))
     })()
     return () => { cancelled = true }
-  }, [programId, reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [programId, reloadKey, payload]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The program canvas fills the whole surface (edge to edge); (0,0) is the
   // top-left corner. Areas not covered by a zone stay black.
