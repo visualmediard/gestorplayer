@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
+import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -59,6 +61,8 @@ class MainActivity : AppCompatActivity() {
         settings.domStorageEnabled = true
         settings.allowFileAccess = true
         settings.allowContentAccess = true
+        settings.allowFileAccessFromFileURLs = true
+        settings.allowUniversalAccessFromFileURLs = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -70,6 +74,13 @@ class MainActivity : AppCompatActivity() {
         settings.displayZoomControls = false
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                consoleMessage?.let {
+                    Log.d("WebViewConsole", "[${it.messageLevel()}] ${it.message()} -- From line ${it.lineNumber()} of ${it.sourceId()}")
+                }
+                return true
+            }
+
             override fun getDefaultVideoPoster(): Bitmap? {
                 // Devolver un bitmap negro/transparente para evitar el icono de play
                 val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
