@@ -2118,12 +2118,40 @@
         initOperatingState()
         await loadProgram()      // usa el snapshot y el caché de videos
         startOperatingWatch()
-        // Al recuperar la red, el propio watchConnection dispara la
-        // sincronización; recargamos para validar y retomar el ciclo normal.
+        // ── Reconexión tras arranque offline ────────────────────────────
+        // Este camino NO arranca startPolling(), así que no hay ningún ciclo
+        // que note el regreso de la red. Y no se puede depender del evento
+        // 'online': no es fiable en WebView Android, el mismo motivo por el
+        // que existe probeConn ("navigator.onLine miente en Android WebView").
+        // Se sondea de forma activa con un HEAD real a Supabase.
+        //
+        // Se recarga en vez de hacer softResync porque el arranque offline
+        // deja el player en modo reducido: screenData viene del snapshot con
+        // device_fingerprint null, no se reclamó la pantalla ni se guardó
+        // claimed_at, y no corren ni el poll ni el heartbeat. Un softResync
+        // traería contenido nuevo pero dejaría la pantalla invisible para el
+        // panel. La recarga rehace startPlayer con red: reclama, arranca los
+        // ciclos y reenvía el lote de reproducciones pendiente.
+        var reconnectTimer = null
+        var reconnecting   = false
+
+        function onReconnected(via) {
+          if (reconnecting) return   // una sola recarga, venga por donde venga
+          reconnecting = true
+          if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null }
+          dlog('Conexión recuperada (' + via + ') → revalidando', 'ok')
+          setTimeout(function() { location.reload() }, 2000)
+        }
+
+        reconnectTimer = setInterval(function() {
+          probeConn().then(function(ok) { if (ok) onReconnected('sondeo') })
+        }, 20000)
+
+        // El evento se conserva como ATAJO, no como mecanismo: si el WebView
+        // sí lo emite, se reacciona antes del siguiente sondeo.
         window.addEventListener('online', function onBack() {
           window.removeEventListener('online', onBack)
-          dlog('Conexión recuperada tras arranque offline → revalidando', 'ok')
-          setTimeout(function() { location.reload() }, 2000)
+          probeConn().then(function(ok) { if (ok) onReconnected('evento online') })
         })
         return
       }
