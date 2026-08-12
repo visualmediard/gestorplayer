@@ -285,6 +285,14 @@
 
       return {
         from: function(table) { return new QB(table) },
+        // Llamada a función de Postgres. El player pasa a leer y escribir por
+        // RPC en vez de tocar las tablas, para poder cerrarlas al rol anónimo.
+        // PostgREST devuelve el valor tal cual: escalar para las que retornan
+        // text, array para las SETOF/TABLE, objeto para las jsonb. `request`
+        // ya normaliza a { data, error } como el SDK.
+        rpc: function(fn, params) {
+          return request('POST', BASE + '/rpc/' + fn, params || {}, {})
+        },
         storage: {
           from: function(bucket) {
             return {
@@ -855,6 +863,11 @@
     //  Requiere la columna playback_events.count (migración 20260721).
     // ════════════════════════════════════════════════════════════
 
+    // Versión del bundle, enviada en cada heartbeat. Es lo que permitirá
+    // comprobar, antes de cerrar las tablas al rol anónimo, que ninguna TV
+    // sigue con un APK viejo: SELECT name, app_version FROM screens.
+    var APP_VERSION = 'android-2026.08.10'
+
     var FLUSH_INTERVAL_MS = 10 * 60 * 1000
     var batchMap       = {}    // 'content|zone' → {screen_id, zone_id, content_id, played_at, count}
     var batchSaveTimer = null
@@ -900,7 +913,13 @@
         return { screen_id: r.screen_id, zone_id: r.zone_id, content_id: r.content_id, played_at: r.played_at, count: r.count }
       })
       dlog('Enviando lote de reproducciones: ' + payload.length + ' fila(s)...', 'info')
-      sb.from('playback_events').insert(payload).then(function(res) {
+      // Vía RPC: el token acota a qué organización se pueden atribuir los
+      // eventos. Cada fila conserva su screen_id (el lote persiste en local y
+      // debe sobrevivir a un cambio de token), y el servidor solo valida que
+      // la pantalla sea de la MISMA organización.
+      sb.rpc('player_log_events', {
+        p_token: lsGet('device_token'), p_events: payload
+      }).then(function(res) {
         if (res.error) {
           dlog('Lote falló (' + res.error.message + ') — se conserva para reintentar', 'warn')
           flushingNow = false
@@ -1043,9 +1062,9 @@
 
     async function loadCounts() {
       try {
-        var res = await sb.from('screen_content_counts')
-          .select('content_id, total_plays, last_played_at')
-          .eq('screen_id', screenData.id)
+        // Vía RPC: la pantalla se deduce del token en el servidor, no se manda
+        // screen_id desde el cliente. Devuelve las mismas filas de la vista.
+        var res = await sb.rpc('player_content_counts', { p_token: lsGet('device_token') })
         var counts     = {}
         var lastPlayed = {}
         if (res.error) {
@@ -1553,18 +1572,19 @@
     function startHeartbeat() {
       function beat() {
         if (!sb || !screenData) return
-        sb.from('screens')
-          .update({ last_heartbeat: new Date().toISOString() })
-          .eq('id', screenData.id)
-          // Piggyback: el UPDATE ya devuelve la fila (return=representation),
-          // así que leer la huella aquí cuesta CERO requests extra.
-          .select('device_fingerprint')
-          .then(function(res) {
-            if (res.error) { dlog('Heartbeat error: ' + res.error.message, 'warn'); return }
-            dlog('Heartbeat OK', 'ok')
-            var row = (res.data && res.data.length) ? res.data[0] : null
-            if (row) checkDeviceStillOwner(row.device_fingerprint || null)
-          })
+        // La RPC devuelve si seguimos siendo dueños, así que se conserva el
+        // piggyback de antes: la detección de despareo no cuesta una petición
+        // extra. app_version viaja aquí para poder comprobar, antes de cerrar
+        // las tablas al rol anónimo, que no queda ninguna TV con bundle viejo.
+        sb.rpc('player_heartbeat', {
+          p_token: lsGet('device_token'),
+          p_app_version: APP_VERSION,
+          p_session: lsGet('device_id')
+        }).then(function(res) {
+          if (res.error) { dlog('Heartbeat error: ' + res.error.message, 'warn'); return }
+          dlog('Heartbeat OK', 'ok')
+          if (res.data) checkDeviceStillOwner(res.data.owner === true)
+        })
       }
       beat()
       setInterval(beat, 30000)
@@ -1655,7 +1675,7 @@
           var resetAt = r.data.reset_requested_at || null
           if (resetAt && new Date(resetAt) > new Date(playerBootedAt)) {
             dlog('Reset remoto detectado → ejecutando resync suave', 'ok')
-            sb.from('screens').update({ reset_requested_at: null }).eq('id', screenData.id)
+            sb.rpc('player_ack_reset', { p_token: lsGet('device_token') })
             if (!isOnline) setConnStatus(true)
             await softResync()
           }
@@ -1722,55 +1742,60 @@
     //  seguir reproduciendo sin interrupción.
     // ════════════════════════════════════════════════════════════
 
-    // Construye las entradas (items directos + sub-playlists ordenadas) de una zona.
-    async function fetchZoneEntries(zone) {
-      var itemsRes = await sb.from('media_content').select('*')
-        .eq('zone_id', zone.id).is('sub_playlist_id', null).is('archived_at', null).order('sort_order')
-      var subsRes  = await sb.from('sub_playlists').select('*')
-        .eq('zone_id', zone.id).is('archived_at', null).order('sort_order')
-
-      if (itemsRes.error) dlog('Error cargando media zona ' + zone.id.slice(0,8) + ': ' + itemsRes.error.message, 'err')
-      if (subsRes.error)  dlog('Error cargando sub-playlists: ' + subsRes.error.message, 'err')
-
-      var subs       = subsRes.data || []
-      var subEntries = []
-      for (var j = 0; j < subs.length; j++) {
-        var sub   = subs[j]
-        var siRes = await sb.from('media_content').select('*')
-          .eq('sub_playlist_id', sub.id).is('archived_at', null).order('sort_order')
-        if (siRes.error) dlog('Error sub-playlist ' + sub.id.slice(0,8) + ': ' + siRes.error.message, 'err')
-        subEntries.push({ kind: 'sub', sub: sub, items: siRes.data || [], subIndex: 0 })
-      }
-
-      var directEntries = (itemsRes.data || []).map(function(item) {
+    // Construye las entradas (items directos + sub-playlists ordenadas) de una
+    // zona. Ya no consulta: los datos vienen resueltos dentro del payload de
+    // get_player_payload. Antes eran 1 + 2N + M peticiones por recarga.
+    function buildZoneEntries(pz) {
+      var directEntries = (pz.items || []).map(function(item) {
         return { kind: 'item', item: item, sort_order: item.sort_order }
       })
-      var subEntriesOrdered = subEntries.map(function(e) {
-        return Object.assign({}, e, { sort_order: e.sub.sort_order })
+      var subEntries = (pz.subs || []).map(function(sub) {
+        // `sub` conserva la forma de antes (id, name, sort_order,
+        // daily_frequency, is_unlimited) porque el tope diario los usa.
+        return { kind: 'sub', sub: sub, items: sub.items || [], subIndex: 0, sort_order: sub.sort_order }
       })
-      var combined = directEntries.concat(subEntriesOrdered)
+      var combined = directEntries.concat(subEntries)
       combined.sort(function(a, b) { return a.sort_order - b.sort_order })
       return combined
     }
 
-    // Trae en vivo desde Supabase el programa, sus zonas, contadores y
-    // entradas de cada zona. Lanza excepción si algo falla. Reutilizado por
-    // loadProgram (arranque) y softResync (recarga suave sin reload).
+    // Trae en vivo el programa, sus zonas, contadores y entradas de cada zona.
+    // Lanza excepción si algo falla. Reutilizado por loadProgram (arranque) y
+    // softResync (recarga suave sin reload).
+    //
+    // Una sola llamada en vez de la cascada de antes. El token es la
+    // credencial: la RPC solo devuelve lo de ESTA pantalla, así que el player
+    // dejará de necesitar permiso de lectura sobre las tablas.
     async function fetchProgramData() {
-      var progRes = await sb.from('programs').select('*').eq('id', screenData.current_program_id).single()
-      if (progRes.error) throw new Error(progRes.error.message)
-      var program = progRes.data
+      var token = lsGet('device_token')
+      // getDeviceId() devuelve una Promise (calcula y cachea la huella), hay
+      // que resolverla: pasarla tal cual serializaría {} como sesión.
+      var deviceId = await getDeviceId()
+      var res = await sb.rpc('get_player_payload', {
+        p_token: token,
+        p_session: deviceId,
+        p_had_claim: deviceLockClaimed,
+        p_claimed_at: lsGet('claimed_at') || null
+      })
+      if (res.error) throw new Error(res.error.message)
 
-      var zonesRes = await sb.from('zones').select('*').eq('program_id', program.id).order('sort_order')
-      if (zonesRes.error) throw new Error(zonesRes.error.message)
-      var zones = zonesRes.data || []
+      var p = res.data
+      if (!p) throw new Error('Respuesta vacía del servidor')
+      // Los estados de propiedad (invalid/released/taken/locked) los resuelve
+      // quien llama; aquí solo interesa que haya contenido que montar.
+      if (p.status !== 'playing') throw new Error('Estado del player: ' + p.status)
+      if (!p.program) throw new Error('La pantalla no tiene programa asignado')
+
+      var program = p.program
+      var pzones  = p.zones || []
+      var zones   = pzones   // mismas claves que antes (id, x, y, width, height, ...)
 
       var remoteCounts = await loadCounts()
 
       var zoneEntriesMap = {}
-      for (var i = 0; i < zones.length; i++) {
-        zoneEntriesMap[zones[i].id] = await fetchZoneEntries(zones[i])
-        dlog('Zona ' + zones[i].id.slice(0,8) + ': ' + zoneEntriesMap[zones[i].id].length + ' entradas', 'ok')
+      for (var i = 0; i < pzones.length; i++) {
+        zoneEntriesMap[pzones[i].id] = buildZoneEntries(pzones[i])
+        dlog('Zona ' + pzones[i].id.slice(0,8) + ': ' + zoneEntriesMap[pzones[i].id].length + ' entradas', 'ok')
       }
       return { program: program, zones: zones, zoneEntriesMap: zoneEntriesMap, remoteCounts: remoteCounts }
     }
@@ -2122,11 +2147,14 @@
     // vinculación (QR). El reload es un evento único disparado por acción
     // del admin — mismo camino que el botón manual "cambiar pantalla" — y
     // con el caché en IndexedDB no re-descarga ningún video.
-    function checkDeviceStillOwner(dbFingerprint) {
+    // Recibe un booleano calculado en el servidor (antes comparaba la huella
+    // aquí). No se trae el fingerprint ajeno: quien tiene el token está
+    // autorizado sobre la pantalla, pero no necesita saber qué equipo se la
+    // quedó.
+    function checkDeviceStillOwner(isOwner) {
       if (!deviceLockClaimed || unpairing) return
-      var localId = lsGet('device_id')
-      if (!localId) return
-      if (dbFingerprint === localId) return   // seguimos siendo los dueños
+      if (!lsGet('device_id')) return
+      if (isOwner) return                     // seguimos siendo los dueños
       unpairing = true
       dlog('Dispositivo liberado desde el panel → volviendo a vinculación', 'warn')
       log('🔓 Pantalla liberada · re-vinculación...')
