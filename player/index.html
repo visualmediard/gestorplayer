@@ -1428,12 +1428,22 @@
       setInterval(async function() {
         if (!sb || !screenData || !screenData.current_program_id) return
         try {
-          var res = await sb.from('programs')
-            .select('published_at, updated_at')
-            .eq('id', screenData.current_program_id)
-            .single()
-
+          // Una sola llamada cubre publicación y ajustes de pantalla: antes
+          // eran dos peticiones por ciclo (programs + screens).
+          // SIN p_session a propósito: este poll es de LECTURA y no debe
+          // reclamar la pantalla. De la propiedad se ocupa el heartbeat, que
+          // ya devuelve `owner`.
+          var res = await sb.rpc('get_player_payload', { p_token: lsGet('device_token') })
           if (res.error) throw new Error(res.error.message)
+
+          var p = res.data
+          if (!p) throw new Error('Respuesta vacía del servidor')
+          if (p.status !== 'playing') {
+            // 'released' / 'invalid' / 'no-program' se atienden en el bloque de
+            // release. Aquí solo se deja constancia para no fallar en silencio.
+            dlog('Poll: estado ' + p.status, 'warn')
+            return
+          }
 
           if (!isOnline) {
             setConnStatus(true)
@@ -1451,8 +1461,8 @@
             })
           }
 
-          if (res.data) {
-            var latest = res.data.published_at
+          if (p.program) {
+            var latest = p.program.published_at
             if (lastPublishedAt === null) { lastPublishedAt = latest }
             else if (latest && latest !== lastPublishedAt) {
               dlog('Nueva publicación detectada → resync suave', 'ok')
@@ -1461,10 +1471,10 @@
             }
           }
 
-          // Cambios de la pantalla (horario operativo) NO tocan programs, así
-          // que se vigilan aparte y se aplican en caliente sin recargar ni
-          // requerir re-publicar la zona.
-          await checkScreenSettingsChange()
+          // Los cambios de la pantalla (horario operativo, reset) viajan en el
+          // mismo payload y se aplican en caliente, sin recargar ni requerir
+          // re-publicar la zona.
+          await checkScreenSettingsChange(p.screen)
         } catch(e) {
           if (isOnline) {
             setConnStatus(false)
@@ -1474,42 +1484,41 @@
       }, 15000)
     }
 
-    // Relee el horario operativo y el flag de reset de la pantalla, aplicando
-    // cambios en caliente sin recargar ni re-publicar.
-    function checkScreenSettingsChange() {
-      return sb.from('screens')
-        .select('operating_start, operating_end, operating_hours, reset_requested_at')
-        .eq('id', screenData.id)
-        .single()
-        .then(async function(r) {
-          if (r.error || !r.data) return
+    // Aplica en caliente el horario operativo y el flag de reset. Los datos
+    // llegan ya resueltos en el payload del poll: esta función no consulta.
+    //
+    // El try/catch no es decorativo: antes el fallo se tragaba el segundo
+    // callback del .then(). Sin él, una excepción de softResync() subiría al
+    // catch del poll y marcaría el player como desconectado sin estarlo.
+    async function checkScreenSettingsChange(scr) {
+      if (!scr) return
+      try {
+        // ── Horario operativo ─────────────────────────────────
+        var newStart = scr.operating_start || null
+        var newEnd   = scr.operating_end   || null
+        var curStart = screenData.operating_start || null
+        var curEnd   = screenData.operating_end   || null
+        if (newStart !== curStart || newEnd !== curEnd) {
+          dlog('Horario operativo actualizado: ' +
+               (newStart || '—') + ' a ' + (newEnd || '—') + ' → aplicando', 'ok')
+          screenData.operating_start = newStart
+          screenData.operating_end   = newEnd
+          if (scr.operating_hours != null) screenData.operating_hours = scr.operating_hours
+          persistScreenMeta()
+          applyOperatingState()
+        }
 
-          // ── Horario operativo ─────────────────────────────────
-          var newStart = r.data.operating_start || null
-          var newEnd   = r.data.operating_end   || null
-          var curStart = screenData.operating_start || null
-          var curEnd   = screenData.operating_end   || null
-          if (newStart !== curStart || newEnd !== curEnd) {
-            dlog('Horario operativo actualizado: ' +
-                 (newStart || '—') + ' a ' + (newEnd || '—') + ' → aplicando', 'ok')
-            screenData.operating_start = newStart
-            screenData.operating_end   = newEnd
-            if (r.data.operating_hours != null) screenData.operating_hours = r.data.operating_hours
-            persistScreenMeta()
-            applyOperatingState()
-          }
-
-          // ── Reset remoto ──────────────────────────────────────
-          // Si llegamos aquí es porque el query a Supabase tuvo éxito,
-          // lo que prueba conectividad real. No necesitamos probeConn().
-          var resetAt = r.data.reset_requested_at || null
-          if (resetAt && new Date(resetAt) > new Date(playerBootedAt)) {
-            dlog('Reset remoto detectado → ejecutando resync suave', 'ok')
-            sb.rpc('player_ack_reset', { p_token: lsGet('device_token') })
-            if (!isOnline) setConnStatus(true)
-            await softResync()
-          }
-        }, function() { /* fallo silencioso: se reintenta en el próximo ciclo */ })
+        // ── Reset remoto ──────────────────────────────────────
+        // La conectividad ya quedó probada por el get_player_payload del poll,
+        // un paso antes: no hace falta probeConn().
+        var resetAt = scr.reset_requested_at || null
+        if (resetAt && new Date(resetAt) > new Date(playerBootedAt)) {
+          dlog('Reset remoto detectado → ejecutando resync suave', 'ok')
+          sb.rpc('player_ack_reset', { p_token: lsGet('device_token') })
+          if (!isOnline) setConnStatus(true)
+          await softResync()
+        }
+      } catch(e) { /* fallo silencioso: se reintenta en el próximo ciclo */ }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1990,6 +1999,7 @@
       log('🔓 Pantalla liberada · re-vinculación...')
       stopAllZonesPlayback()
       lsDel('device_token')
+      lsDel('claimed_at')
       setTimeout(function() { location.reload() }, 800)
     }
 
@@ -2006,35 +2016,56 @@
         return true
       }
 
-      var stored = screenData.device_fingerprint || null
+      // La decisión la toma el SERVIDOR: antes se comparaba aquí la huella
+      // leída de screens, una columna que cualquier anónimo podía escribir.
+      // p_claimed_at permite detectar una liberación ocurrida mientras este
+      // equipo estaba apagado, que es el caso de "liberar para mover la
+      // pantalla a otro local".
+      var res = await sb.rpc('get_player_payload', {
+        p_token: lsGet('device_token'),
+        p_session: deviceId,
+        p_had_claim: deviceLockClaimed,
+        p_claimed_at: lsGet('claimed_at') || null
+      })
 
-      if (!stored) {
-        // Primer dispositivo: reclama la pantalla.
-        dlog('Pantalla sin dueño → registrando este dispositivo', 'ok')
-        var r = await sb.from('screens')
-          .update({ device_fingerprint: deviceId, last_seen_at: new Date().toISOString() })
-          .eq('id', screenData.id)
-        if (r && r.error) {
-          // Si no se pudo registrar (RLS/red), permitimos igualmente para no
-          // dejar la pantalla muerta; el próximo arranque reintentará.
-          // OJO: deviceLockClaimed queda en false → el despareo remoto no
-          // actúa (evita desparearse en bucle sin ser dueño confirmado).
-          dlog('No se pudo registrar fingerprint: ' + r.error.message + ' → acceso permitido', 'warn')
-        } else {
-          screenData.device_fingerprint = deviceId
-          deviceLockClaimed = true
-        }
+      if (res.error || !res.data) {
+        // Fail-open: si no se pudo verificar (RLS/red), se permite reproducir
+        // para no dejar la pantalla muerta; el próximo arranque reintentará.
+        // OJO: deviceLockClaimed queda en false → el despareo remoto no actúa
+        // (evita desparearse en bucle sin ser dueño confirmado).
+        var em = res.error ? res.error.message : 'respuesta vacía'
+        dlog('No se pudo verificar la propiedad: ' + em + ' → acceso permitido', 'warn')
         return true
       }
 
-      if (stored === deviceId) {
-        dlog('Dispositivo reconocido (mismo equipo) → acceso permitido', 'ok')
-        deviceLockClaimed = true
-        return true
+      var st = res.data.status
+
+      if (st === 'released' || st === 'invalid') {
+        // Este dispositivo dejó de estar asignado a la pantalla: se olvida el
+        // token y se vuelve al QR para poder instalarla en otro sitio.
+        dlog('Pantalla liberada (' + st + ') → volviendo a vinculación', 'warn')
+        log('🔓 Pantalla liberada · re-vinculación...')
+        unpairing = true
+        stopAllZonesPlayback && stopAllZonesPlayback()
+        lsDel('device_token')
+        lsDel('claimed_at')
+        setTimeout(function() { location.reload() }, 800)
+        return false
       }
 
-      // Huella distinta → otro equipo ya tiene el token.
-      return false
+      if (st === 'taken' || st === 'locked') {
+        // Otro equipo tiene la pantalla. NO se borra el token: puede ser un
+        // relevo temporal y así se recupera sin re-vincular a mano.
+        dlog('La pantalla la tiene otro equipo (' + st + ')', 'warn')
+        return false
+      }
+
+      // playing / no-program: el servidor nos concedió la propiedad.
+      if (!deviceLockClaimed) lsSet('claimed_at', new Date().toISOString())
+      deviceLockClaimed = true
+      screenData.device_fingerprint = deviceId
+      dlog('Propiedad confirmada por el servidor → acceso permitido', 'ok')
+      return true
     }
 
     // Actualiza last_seen_at del dueño cada 5 minutos (además del heartbeat
