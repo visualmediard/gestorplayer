@@ -334,7 +334,11 @@
 
           var res
           try {
-            res = await sb.from('screens').select('id, name').eq('device_token', input).single()
+            // Mismo criterio que el resto de lecturas: el estado viene en un
+            // campo del payload, no se deduce del texto de un error. Sin
+            // p_session: aquí solo se valida el token, la pantalla se reclama
+            // después, en startPlayer.
+            res = await sb.rpc('get_player_payload', { p_token: input })
           } catch(e) {
             dlog('Error verificando token: ' + e.message, 'err')
             document.getElementById('token-error').style.display = 'block'
@@ -342,14 +346,19 @@
             return
           }
 
-          if (res.error || !res.data) {
-            dlog('Token inválido: ' + (res.error ? res.error.message : 'sin datos'), 'err')
+          // 'released' se rechaza igual que 'invalid': una pantalla liberada
+          // está pendiente de re-vincularse desde el panel, no de que la
+          // reclame cualquiera tecleando su token.
+          if (res.error || !res.data ||
+              res.data.status === 'invalid' || res.data.status === 'released') {
+            var im = res.error ? res.error.message : ('estado ' + (res.data ? res.data.status : 'sin datos'))
+            dlog('Token inválido: ' + im, 'err')
             document.getElementById('token-error').style.display = 'block'
             document.getElementById('token-btn').textContent = 'Conectar pantalla'
             return
           }
 
-          dlog('Token válido: ' + res.data.name, 'ok')
+          dlog('Token válido: ' + res.data.screen.name, 'ok')
           lsSet('device_token', input)
           document.getElementById('token-screen').style.display = 'none'
           document.getElementById('screen').style.display = 'block'
@@ -2166,7 +2175,7 @@
 
       watchConnection()
       startHeartbeat()
-      startDeviceSeenWatch()  // actualiza last_seen_at cada 5 min
+      // last_seen_at lo refresca el heartbeat (ver player_heartbeat).
       startPolling()
       subscribeToChanges()
       startEventSync()
@@ -2272,20 +2281,9 @@
       return true
     }
 
-    // Actualiza last_seen_at del dueño cada 5 minutos (además del heartbeat
-    // de 30s que marca last_heartbeat). Sirve para saber cuándo se vio por
-    // última vez al dispositivo dueño del token.
-    function startDeviceSeenWatch() {
-      function seen() {
-        if (!sb || !screenData) return
-        sb.from('screens')
-          .update({ last_seen_at: new Date().toISOString() })
-          .eq('id', screenData.id)
-          .then(function () {}, function () {})
-      }
-      seen()
-      setInterval(seen, 5 * 60 * 1000)
-    }
+    // startDeviceSeenWatch se eliminó: last_seen_at lo refresca ahora
+    // player_heartbeat (cada 30 s, holgado dentro de la ventana de 90 s), y
+    // solo cuando quien late es realmente el dueño de la pantalla.
 
     // ════════════════════════════════════════════════════════════
     //  ARRANQUE
