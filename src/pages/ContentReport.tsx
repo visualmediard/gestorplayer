@@ -34,6 +34,19 @@ const fmtDay = (iso: string) => {
   return new Date(y, m - 1, d).toLocaleDateString('es-DO', { day: '2-digit', month: 'short' })
 }
 
+// Impactos estimados: cruce de reproducciones con el aforo del emplazamiento.
+// Misma forma que devuelve campaign_traffic_impacts.
+type TrafficImpacts = {
+  days_counted: number
+  days_with_plays: number
+  impacts: number
+  plays: number
+  breakdown: { pedestrians: number; cars: number; trucks: number; buses: number; bikes: number; motorcycles: number }
+  by_screen: { screen_name: string; days: number; impacts: number; plays: number }[]
+}
+
+const nfmt = (n: number) => (n || 0).toLocaleString('es-DO')
+
 export default function ContentReport({
   name, type, onBack,
 }: { name: string; type: string; onBack: () => void }) {
@@ -41,6 +54,7 @@ export default function ContentReport({
   const [placements, setPlacements] = useState<Placement[]>([])
   const [daily, setDaily] = useState<{ date: string; plays: number }[]>([])
   const [rangeByContent, setRangeByContent] = useState<Record<string, number>>({})
+  const [impacts, setImpacts] = useState<TrafficImpacts | null>(null)
   const [orgName, setOrgName] = useState('')
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const [orgContact, setOrgContact] = useState<{ address: string | null; phone: string | null; email: string | null }>({ address: null, phone: null, email: null })
@@ -159,6 +173,13 @@ export default function ContentReport({
     }
     setDaily(series)
     setRangeByContent(byContent)
+    // Impactos del mismo rango. Si la RPC falla (p. ej. aún sin correr la
+    // migración) se queda en null y la sección no aparece.
+    const { data: imp } = await supabase.rpc('content_traffic_impacts', {
+      p_name: name, p_from: from.toISOString(), p_to: toEx.toISOString(),
+    })
+    setImpacts((imp as TrafficImpacts) ?? null)
+
     setLastUpdate(new Date())
   }
   useEffect(() => { loadRange() }, [placements, fromIso, toIso]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -271,6 +292,41 @@ export default function ContentReport({
     line('Última rep.', lastPlay ? new Date(lastPlay).toLocaleString('es-DO') : '—')
 
     // Tabla — mismas columnas que el reporte de campaña.
+    if (impacts && impacts.days_counted > 0) {
+      y += 5
+      doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
+      doc.text('Impactos estimados', 14, y)
+      y += 8
+
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(19); doc.setTextColor(15, 23, 42)
+      doc.text(nfmt(impacts.impacts) + ' personas', 14, y)
+      y += 6
+
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(100, 116, 139)
+      doc.text('Cobertura de aforo: ' + impacts.days_counted + ' de ' + impacts.days_with_plays + ' dias con reproduccion', 14, y)
+      y += 5
+      doc.text('El anuncio salio ' + nfmt(impacts.plays) + ' veces en esos dias', 14, y)
+      y += 6
+
+      const b = impacts.breakdown
+      doc.setFontSize(8.5); doc.setTextColor(71, 85, 105)
+      doc.text('Peatones ' + nfmt(b.pedestrians) + '   Autos ' + nfmt(b.cars) + '   Motos ' + nfmt(b.motorcycles), 14, y)
+      y += 4.5
+      doc.text('Camiones ' + nfmt(b.trucks) + '   Autobuses ' + nfmt(b.buses) + '   Bicicletas ' + nfmt(b.bikes), 14, y)
+      y += 5
+
+      if (impacts.by_screen.length > 1) {
+        for (const r of impacts.by_screen) {
+          doc.text(r.screen_name + ': ' + r.days + ' dias, ' + nfmt(r.impacts) + ' impactos', 14, y)
+          y += 4.5
+        }
+      }
+
+      doc.setFontSize(7.5); doc.setTextColor(148, 163, 184)
+      doc.text('Fuente: reporte de conteo vehicular de terceros', 14, y)
+      y += 4
+    }
+
     autoTable(doc, {
       startY: y + 4,
       head: [['Pantalla', 'Publicidad', 'Zona', 'Rep/día', 'Reproducciones']],
@@ -404,6 +460,52 @@ export default function ContentReport({
           <div><div style={{ ...s.statVal, fontSize: '1.1rem' }}>{lastPlay ? new Date(lastPlay).toLocaleDateString('es-DO') : '—'}</div><div style={s.statLbl}>Última reproducción</div></div>
         </div>
       </div>
+
+      {impacts && impacts.days_counted > 0 && (
+        <div style={s.card}>
+          <h3 style={s.cardTitle}>Impactos estimados</h3>
+
+          <div style={{ fontSize: '2.1rem', fontWeight: 800, color: '#0F172A', lineHeight: 1.15, marginTop: '0.5rem' }}>
+            {nfmt(impacts.impacts)} <span style={{ fontSize: '1rem', fontWeight: 600, color: '#64748B' }}>personas</span>
+          </div>
+
+          {/* Siempre visible, también al 100%: cuando cubre todo es argumento
+              de venta, y estar siempre evita que el cliente desconfíe. */}
+          <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.3rem' }}>
+            Cobertura de aforo: {impacts.days_counted} de {impacts.days_with_plays} días con reproducción
+          </div>
+          <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.15rem' }}>
+            Este anuncio salió {nfmt(impacts.plays)} veces en esos días
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.9rem' }}>
+            {[
+              ['Peatones', impacts.breakdown.pedestrians], ['Autos', impacts.breakdown.cars],
+              ['Motos', impacts.breakdown.motorcycles], ['Camiones', impacts.breakdown.trucks],
+              ['Autobuses', impacts.breakdown.buses], ['Bicicletas', impacts.breakdown.bikes],
+            ].map(([label, v]) => (
+              <span key={label as string} style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '999px', padding: '0.2rem 0.6rem', fontSize: '0.75rem', color: '#475569' }}>
+                {label as string} <strong style={{ color: '#0F172A' }}>{nfmt(v as number)}</strong>
+              </span>
+            ))}
+          </div>
+
+          {impacts.by_screen.length > 1 && (
+            <div style={{ marginTop: '0.9rem', borderTop: '1px solid #F1F5F9', paddingTop: '0.7rem' }}>
+              {impacts.by_screen.map(r => (
+                <div key={r.screen_name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#475569', padding: '0.2rem 0' }}>
+                  <span>{r.screen_name}</span>
+                  <span>{r.days} días · <strong style={{ color: '#0F172A' }}>{nfmt(r.impacts)}</strong></span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ fontSize: '0.7rem', color: '#94A3B8', marginTop: '0.8rem' }}>
+            Fuente: reporte de conteo vehicular de terceros
+          </div>
+        </div>
+      )}
 
       {/* Chart por día */}
       <div style={s.card}>
