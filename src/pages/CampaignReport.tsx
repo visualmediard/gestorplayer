@@ -6,6 +6,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { drawReportHeader } from '../lib/reportHeader'
+import { drawImpactsSection } from '../lib/reportImpacts'
 
 type Campaign = {
   id: string; name: string; client_name: string | null
@@ -337,38 +338,9 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
 
     // ── Impactos estimados ──
     if (impacts && impacts.days_counted > 0) {
-      y += 5
-      doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
-      doc.text('Impactos estimados', 14, y)
-      y += 8
-
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(19); doc.setTextColor(15, 23, 42)
-      doc.text(nfmt(impacts.impacts) + ' personas', 14, y)
-      y += 6
-
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(100, 116, 139)
-      doc.text('Cobertura de aforo: ' + impacts.days_counted + ' de ' + impacts.days_with_plays + ' dias de campana', 14, y)
-      y += 5
-      doc.text('El anuncio salio ' + nfmt(impacts.plays) + ' veces en esos dias', 14, y)
-      y += 6
-
-      const b = impacts.breakdown
-      doc.setFontSize(8.5); doc.setTextColor(71, 85, 105)
-      doc.text('Peatones ' + nfmt(b.pedestrians) + '   Autos ' + nfmt(b.cars) + '   Motos ' + nfmt(b.motorcycles), 14, y)
-      y += 4.5
-      doc.text('Camiones ' + nfmt(b.trucks) + '   Autobuses ' + nfmt(b.buses) + '   Bicicletas ' + nfmt(b.bikes), 14, y)
-      y += 5
-
-      if (impacts.by_screen.length > 1) {
-        for (const r of impacts.by_screen) {
-          doc.text(r.screen_name + ': ' + r.days + ' dias, ' + nfmt(r.impacts) + ' impactos', 14, y)
-          y += 4.5
-        }
-      }
-
-      doc.setFontSize(7.5); doc.setTextColor(148, 163, 184)
-      doc.text('Fuente: reporte de conteo vehicular de terceros', 14, y)
-      y += 4
+      y = drawImpactsSection(doc, pageW, y + 5, impacts,
+        `Cobertura de aforo: ${impacts.days_counted} de ${impacts.days_with_plays} dias de campana`,
+        `El anuncio salio ${nfmt(impacts.plays)} veces en esos dias`)
     }
 
     // ── Tabla de reproducciones por pantalla ──
