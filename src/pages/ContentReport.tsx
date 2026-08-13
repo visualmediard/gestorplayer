@@ -295,8 +295,8 @@ export default function ContentReport({
     // Tabla — mismas columnas que el reporte de campaña.
     if (impacts && impacts.days_counted > 0) {
       y = drawImpactsSection(doc, pageW, y + 5, impacts,
-        `Medicion de trafico en ${impacts.days_counted} de los ${impacts.days_with_plays} dias que salio el anuncio`,
-        `En esos ${impacts.days_counted} dias salio ${nfmt(impacts.plays)} veces`)
+        `El anuncio salio ${impacts.days_with_plays} dias en este periodo.`,
+        `${impacts.days_counted} de esos dias tienen medicion de trafico, y en ellos salio ${nfmt(impacts.plays)} veces.`)
     }
 
     autoTable(doc, {
@@ -444,10 +444,10 @@ export default function ContentReport({
           {/* Siempre visible, también al 100%: cuando cubre todo es argumento
               de venta, y estar siempre evita que el cliente desconfíe. */}
           <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.3rem' }}>
-            Medición de tráfico en {impacts.days_counted} de los {impacts.days_with_plays} días que salió el anuncio
+            El anuncio salió {impacts.days_with_plays} días en este periodo.
           </div>
           <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.15rem' }}>
-            En esos {impacts.days_counted} días salió {nfmt(impacts.plays)} veces
+            {impacts.days_counted} de esos días tienen medición de tráfico, y en ellos salió {nfmt(impacts.plays)} veces.
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.9rem' }}>

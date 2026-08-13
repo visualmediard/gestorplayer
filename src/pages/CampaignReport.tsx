@@ -339,8 +339,8 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     // ── Impactos estimados ──
     if (impacts && impacts.days_counted > 0) {
       y = drawImpactsSection(doc, pageW, y + 5, impacts,
-        `Medicion de trafico en ${impacts.days_counted} de los ${impacts.days_with_plays} dias que salio la campana`,
-        `En esos ${impacts.days_counted} dias salio ${nfmt(impacts.plays)} veces`)
+        `La campana salio ${impacts.days_with_plays} dias en este periodo.`,
+        `${impacts.days_counted} de esos dias tienen medicion de trafico, y en ellos salio ${nfmt(impacts.plays)} veces.`)
     }
 
     // ── Tabla de reproducciones por pantalla ──
@@ -539,10 +539,10 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
             {/* Siempre visible, también al 100%: cuando cubre todo es argumento
                 de venta, y estar siempre evita que el cliente desconfíe. */}
             <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.3rem' }}>
-              Medición de tráfico en {impacts.days_counted} de los {impacts.days_with_plays} días que salió la campaña
+              La campaña salió {impacts.days_with_plays} días en este periodo.
             </div>
             <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.15rem' }}>
-              En esos {impacts.days_counted} días salió {nfmt(impacts.plays)} veces
+              {impacts.days_counted} de esos días tienen medición de tráfico, y en ellos salió {nfmt(impacts.plays)} veces.
             </div>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.9rem' }}>
