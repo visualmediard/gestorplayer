@@ -56,7 +56,7 @@ CREATE OR REPLACE FUNCTION content_traffic_impacts(
   ),
   by_screen AS (
     SELECT m.screen_id, s.name AS screen_name,
-           COUNT(*)::int                AS days_counted,
+           COUNT(DISTINCT m.day)::int   AS days_counted,
            SUM(m.total_impacts)::bigint AS impacts,
            SUM(m.plays)::bigint         AS plays
       FROM matched m JOIN screens s ON s.id = m.screen_id

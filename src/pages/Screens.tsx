@@ -124,8 +124,19 @@ type TrafficPreview = {
 // importado" sea una unidad con sentido y que borrar sea predecible; agrupar
 // por rangos contiguos se vuelve confuso en cuanto se reimporta un mes solapado.
 type TrafficImport = {
-  source_file: string; days: number
+  source_file: string; direction: string; days: number
   start: string; end: string; impacts: number
+}
+
+// Sentidos de circulación. El proveedor entrega un archivo por sentido y lo
+// pone en el nombre ("… - SN - …"), pero se propone, no se impone: es el dato
+// que decide si una importación sobrescribe a otra.
+const DIRECTIONS = ['SN', 'NS', 'OE', 'EO', 'NE', 'EN', 'NO', 'ON', 'SE', 'ES', 'SO', 'OS', 'ND']
+
+function guessDirection(fileName: string): string {
+  const m = fileName.match(/[-–]\s*([SNEOW]{2})\s*[-–]/i)
+  const d = m ? m[1].toUpperCase() : ''
+  return DIRECTIONS.includes(d) ? d : 'ND'
 }
 
 const fmtInt = (n: number) => (n || 0).toLocaleString('es-DO')
@@ -190,6 +201,11 @@ export default function Screens() {
   const [parsing, setParsing]         = useState(false)
   const [tPreview, setTPreview]       = useState<TrafficPreview | null>(null)
   const [savingTraffic, setSavingTraffic] = useState(false)
+  // El nombre se guarda al parsear y NO se lee del input al confirmar: el
+  // <input> vive dentro del bloque de "sin vista previa", así que React lo
+  // desmonta al mostrarla y el ref queda en null.
+  const [trafficFileName, setTrafficFileName] = useState('')
+  const [direction, setDirection] = useState('ND')
   const [trafficError, setTrafficError]   = useState<string | null>(null)
   const trafficFileRef = useRef<HTMLInputElement>(null)
   const [releasing, setReleasing] = useState<string | null>(null)
@@ -297,7 +313,7 @@ export default function Screens() {
     setLoadingImports(true)
     const { data, error } = await supabase
       .from('traffic_counts')
-      .select('date, total_impacts, source_file')
+      .select('date, total_impacts, source_file, direction')
       .eq('screen_id', screenId)
       .order('date')
     setLoadingImports(false)
@@ -305,10 +321,11 @@ export default function Screens() {
 
     const byFile: Record<string, TrafficImport> = {}
     for (const r of (data ?? []) as any[]) {
-      const key = r.source_file || '(sin archivo)'
+      const dir = r.direction || 'ND'
+      const key = (r.source_file || '(sin archivo)') + '|' + dir
       const g = byFile[key]
       if (!g) {
-        byFile[key] = { source_file: key, days: 1, start: r.date, end: r.date, impacts: r.total_impacts || 0 }
+        byFile[key] = { source_file: r.source_file || '(sin archivo)', direction: dir, days: 1, start: r.date, end: r.date, impacts: r.total_impacts || 0 }
       } else {
         g.days += 1
         if (r.date < g.start) g.start = r.date
@@ -328,6 +345,8 @@ export default function Screens() {
   // No guarda nada: la confirmación es un paso aparte, después de la vista previa.
   async function parseTrafficFile(file: File) {
     setParsing(true); setTrafficError(null); setTPreview(null)
+    setTrafficFileName(file.name)
+    setDirection(guessDirection(file.name))
     try {
       const form = new FormData()
       form.append('file', file)
@@ -348,15 +367,16 @@ export default function Screens() {
   async function saveTraffic() {
     if (!trafficFor || !tPreview || tPreview.rows.length === 0) return
     setSavingTraffic(true); setTrafficError(null)
-    const fileName = trafficFileRef.current?.files?.[0]?.name ?? 'reporte.xlsx'
     const rows = tPreview.rows.map(r => ({
-      ...r, screen_id: trafficFor.id, source_file: fileName,
+      ...r, screen_id: trafficFor.id,
+      source_file: trafficFileName || 'reporte.xlsx',
+      direction,
     }))
     // upsert por (screen_id, date): reimportar un mes corregido ACTUALIZA los
     // días en vez de duplicarlos.
     const { error } = await supabase
       .from('traffic_counts')
-      .upsert(rows, { onConflict: 'screen_id,date' })
+      .upsert(rows, { onConflict: 'screen_id,date,direction' })
     setSavingTraffic(false)
     if (error) { setTrafficError(error.message); return }
     setTPreview(null)
@@ -367,13 +387,15 @@ export default function Screens() {
   async function deleteImport(imp: TrafficImport) {
     if (!trafficFor) return
     if (!await confirm({
-      title: `¿Eliminar el aforo importado de "${imp.source_file}"?`,
+      title: `¿Eliminar el conteo ${imp.direction} de "${imp.source_file}"?`,
       message: `Se borrarán ${imp.days} día(s) de conteo de esta pantalla. Los reportes de campaña dejarán de mostrar esos impactos.`,
       confirmLabel: 'Eliminar', danger: true,
     })) return
     const { error } = await supabase
       .from('traffic_counts').delete()
-      .eq('screen_id', trafficFor.id).eq('source_file', imp.source_file)
+      .eq('screen_id', trafficFor.id)
+      .eq('source_file', imp.source_file)
+      .eq('direction', imp.direction)
     if (error) { setTrafficError(error.message); return }
     loadImports(trafficFor.id)
   }
@@ -968,10 +990,13 @@ export default function Screens() {
                       </div>
                     </div>
                   ) : imports.map(imp => (
-                    <div key={imp.source_file} style={s.trafficRow}>
+                    <div key={imp.source_file + imp.direction} style={s.trafficRow}>
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {imp.source_file}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
+                          <span style={s.dirBadge}>{imp.direction}</span>
+                          <span style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {imp.source_file}
+                          </span>
                         </div>
                         <div style={{ fontSize: '0.76rem', color: '#64748B', marginTop: '0.1rem' }}>
                           {fmtDay(imp.start)} – {fmtDay(imp.end)} · {imp.days} día(s) · {fmtInt(imp.impacts)} impactos
@@ -998,7 +1023,9 @@ export default function Screens() {
                 // Días que ya tienen dato: se avisa ANTES de confirmar, porque
                 // el upsert los sobrescribe en silencio.
                 const rango = tPreview.rows.map(r => r.date)
+                // Solo pisan los días del MISMO sentido: otro sentido convive.
                 for (const imp of imports) {
+                  if (imp.direction !== direction) continue
                   for (const d of rango) if (d >= imp.start && d <= imp.end) yaImportados.add(d)
                 }
                 const t = tPreview.totals || {}
@@ -1020,6 +1047,22 @@ export default function Screens() {
                       </div>
                     </div>
 
+                    <div style={{ marginTop: '0.75rem', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.7rem 0.9rem' }}>
+                      <div style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600, marginBottom: '0.35rem' }}>
+                        SENTIDO DE CIRCULACIÓN
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <select value={direction} onChange={e => setDirection(e.target.value)}
+                          style={{ padding: '0.35rem 0.5rem', borderRadius: '8px', border: '1px solid #CBD5E1', background: '#fff', fontSize: '0.82rem', color: '#0F172A' }}>
+                          {DIRECTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <span style={{ fontSize: '0.75rem', color: '#64748B' }}>
+                          Deducido del nombre del archivo. Corrígelo si no es correcto:
+                          decide si este conteo se suma al de otro sentido o lo reemplaza.
+                        </span>
+                      </div>
+                    </div>
+
                     {/* Los warnings van destacados y ANTES del botón de confirmar. */}
                     {tPreview.warnings.length > 0 && (
                       <div style={s.warnBox}>
@@ -1035,7 +1078,7 @@ export default function Screens() {
                     {yaImportados.size > 0 && (
                       <div style={{ ...s.warnBox, marginTop: '0.6rem' }}>
                         <span style={{ fontSize: '0.79rem', color: '#92400E' }}>
-                          {yaImportados.size} día(s) ya tienen datos y <strong>se actualizarán</strong>.
+                          {yaImportados.size} día(s) ya tienen datos en el sentido {direction} y <strong>se actualizarán</strong>.
                         </span>
                       </div>
                     )}
@@ -1118,6 +1161,7 @@ const s: Record<string, React.CSSProperties> = {
   btnPrimary: { display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.1rem', borderRadius: '8px', border: 'none', background: '#3B82F6', color: '#fff', fontWeight: 600, fontSize: '0.875rem', whiteSpace: 'nowrap', cursor: 'pointer' },
   btnOutline: { padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontWeight: 500, fontSize: '0.875rem', cursor: 'pointer' },
   modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' },
+  dirBadge: { flexShrink: 0, background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE', borderRadius: '6px', padding: '1px 6px', fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.03em' },
   trafficRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.6rem 0.75rem', border: '1px solid #E2E8F0', borderRadius: '10px', background: '#F8FAFC', marginBottom: '0.5rem' },
   warnBox: { background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '0.7rem 0.85rem', marginTop: '0.85rem' },
   tTable: { width: '100%', borderCollapse: 'collapse', fontSize: '0.76rem' },
