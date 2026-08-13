@@ -37,7 +37,8 @@ CREATE OR REPLACE FUNCTION campaign_traffic_impacts(
   WITH play_days AS (
     -- Días en que ESTA campaña se reprodujo, por pantalla.
     -- SECURITY INVOKER: el RLS del usuario ya acota a su organización.
-    SELECT DISTINCT pe.screen_id, (pe.played_at AT TIME ZONE 'America/Santo_Domingo')::date AS day
+    SELECT DISTINCT pe.zone_id, pe.screen_id,
+           (pe.played_at AT TIME ZONE 'America/Santo_Domingo')::date AS day
       FROM playback_events pe
       JOIN media_content mc ON mc.id = pe.content_id
      WHERE mc.campaign_id = p_campaign_id
@@ -45,7 +46,9 @@ CREATE OR REPLACE FUNCTION campaign_traffic_impacts(
        AND pe.played_at <  p_to
   ),
   plays AS (
-    SELECT pe.screen_id, (pe.played_at AT TIME ZONE 'America/Santo_Domingo')::date AS day, SUM(COALESCE(pe.count, 1))::bigint AS plays
+    SELECT pe.zone_id,
+           (pe.played_at AT TIME ZONE 'America/Santo_Domingo')::date AS day,
+           SUM(COALESCE(pe.count, 1))::bigint AS plays
       FROM playback_events pe
       JOIN media_content mc ON mc.id = pe.content_id
      WHERE mc.campaign_id = p_campaign_id
@@ -55,20 +58,22 @@ CREATE OR REPLACE FUNCTION campaign_traffic_impacts(
   ),
   -- La intersección: día con reproducción Y con aforo.
   matched AS (
-    SELECT pd.screen_id, pd.day, tc.total_impacts, tc.total_count,
+    SELECT pd.zone_id, pd.screen_id, pd.day, tc.total_impacts, tc.total_count,
            tc.pedestrians, tc.cars, tc.trucks, tc.buses, tc.bikes, tc.motorcycles,
            COALESCE(p.plays, 0) AS plays
       FROM play_days pd
-      JOIN traffic_counts tc ON tc.screen_id = pd.screen_id AND tc.date = pd.day
-      LEFT JOIN plays p ON p.screen_id = pd.screen_id AND p.day = pd.day
+      JOIN traffic_counts tc ON tc.zone_id = pd.zone_id AND tc.date = pd.day
+      LEFT JOIN plays p ON p.zone_id = pd.zone_id AND p.day = pd.day
   ),
-  by_screen AS (
-    SELECT m.screen_id, s.name AS screen_name,
+  by_zone AS (
+    SELECT m.zone_id, z.name AS zone_name, s.name AS screen_name,
            COUNT(DISTINCT m.day)::int AS days_counted,
            SUM(m.total_impacts)::bigint AS impacts,
            SUM(m.plays)::bigint         AS plays
-      FROM matched m JOIN screens s ON s.id = m.screen_id
-     GROUP BY m.screen_id, s.name
+      FROM matched m
+           JOIN zones z   ON z.id = m.zone_id
+           JOIN screens s ON s.id = m.screen_id
+     GROUP BY m.zone_id, z.name, s.name
   )
   SELECT jsonb_build_object(
     -- Cobertura: días contados frente a días en que el anuncio salió. Se
@@ -88,9 +93,10 @@ CREATE OR REPLACE FUNCTION campaign_traffic_impacts(
     ),
     'by_screen', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
-               'screen_name', screen_name, 'days', days_counted,
+               'screen_name', screen_name || ' · ' || zone_name,
+               'days', days_counted,
                'impacts', impacts, 'plays', plays) ORDER BY impacts DESC)
-        FROM by_screen), '[]'::jsonb)
+        FROM by_zone), '[]'::jsonb)
   );
 $$;
 

@@ -124,19 +124,26 @@ type TrafficPreview = {
 // importado" sea una unidad con sentido y que borrar sea predecible; agrupar
 // por rangos contiguos se vuelve confuso en cuanto se reimporta un mes solapado.
 type TrafficImport = {
-  source_file: string; direction: string; days: number
-  start: string; end: string; impacts: number
+  source_file: string; zone_id: string; zone_name: string
+  days: number; start: string; end: string; impacts: number
 }
+type TrafficZone = { id: string; name: string }
 
-// Sentidos de circulación. El proveedor entrega un archivo por sentido y lo
-// pone en el nombre ("… - SN - …"), pero se propone, no se impone: es el dato
-// que decide si una importación sobrescribe a otra.
-const DIRECTIONS = ['SN', 'NS', 'OE', 'EO', 'NE', 'EN', 'NO', 'ON', 'SE', 'ES', 'SO', 'OS', 'ND']
-
-function guessDirection(fileName: string): string {
+// El conteo cuelga de la ZONA porque cada zona es una cara del rótulo: un
+// reproductor reparte su lienzo entre las caras, y un anuncio que solo sale en
+// la cara SN no debe sumar el tráfico de las otras tres.
+//
+// El proveedor pone el sentido en el nombre del archivo ("… - SN - …"), así
+// que se propone la zona cuyo nombre lo contenga. Se propone, no se impone:
+// es el dato que decide a qué cara se atribuyen los impactos.
+function guessZone(fileName: string, zones: TrafficZone[]): string {
   const m = fileName.match(/[-–]\s*([SNEOW]{2})\s*[-–]/i)
-  const d = m ? m[1].toUpperCase() : ''
-  return DIRECTIONS.includes(d) ? d : 'ND'
+  if (m) {
+    const tag = m[1].toLowerCase()
+    const hit = zones.find(z => z.name.toLowerCase().includes(tag))
+    if (hit) return hit.id
+  }
+  return zones.length === 1 ? zones[0].id : ''
 }
 
 const fmtInt = (n: number) => (n || 0).toLocaleString('es-DO')
@@ -205,7 +212,8 @@ export default function Screens() {
   // <input> vive dentro del bloque de "sin vista previa", así que React lo
   // desmonta al mostrarla y el ref queda en null.
   const [trafficFileName, setTrafficFileName] = useState('')
-  const [direction, setDirection] = useState('ND')
+  const [zones, setZones] = useState<TrafficZone[]>([])
+  const [zoneId, setZoneId] = useState('')
   const [trafficError, setTrafficError]   = useState<string | null>(null)
   const trafficFileRef = useRef<HTMLInputElement>(null)
   const [releasing, setReleasing] = useState<string | null>(null)
@@ -311,21 +319,29 @@ export default function Screens() {
   // Agrupa las filas por archivo de origen para listar "periodos importados".
   async function loadImports(screenId: string) {
     setLoadingImports(true)
+    // El conteo cuelga de la zona, así que se piden las de esta pantalla.
+    const sc = screens.find(x => x.id === screenId)
+    const { data: zs } = sc?.current_program_id
+      ? await supabase.from('zones').select('id').eq('program_id', sc.current_program_id)
+      : { data: [] as { id: string }[] }
+    const zoneIds = (zs ?? []).map(z => z.id)
+    if (zoneIds.length === 0) { setImports([]); setLoadingImports(false); return }
+
     const { data, error } = await supabase
       .from('traffic_counts')
-      .select('date, total_impacts, source_file, direction')
-      .eq('screen_id', screenId)
+      .select('date, total_impacts, source_file, zone_id, zones(name)')
+      .in('zone_id', zoneIds)
       .order('date')
     setLoadingImports(false)
     if (error) { setTrafficError(error.message); return }
 
     const byFile: Record<string, TrafficImport> = {}
     for (const r of (data ?? []) as any[]) {
-      const dir = r.direction || 'ND'
-      const key = (r.source_file || '(sin archivo)') + '|' + dir
+      const zn = (r.zones && r.zones.name) || '(zona)'
+      const key = (r.source_file || '(sin archivo)') + '|' + r.zone_id
       const g = byFile[key]
       if (!g) {
-        byFile[key] = { source_file: r.source_file || '(sin archivo)', direction: dir, days: 1, start: r.date, end: r.date, impacts: r.total_impacts || 0 }
+        byFile[key] = { source_file: r.source_file || '(sin archivo)', zone_id: r.zone_id, zone_name: zn, days: 1, start: r.date, end: r.date, impacts: r.total_impacts || 0 }
       } else {
         g.days += 1
         if (r.date < g.start) g.start = r.date
@@ -337,8 +353,22 @@ export default function Screens() {
   }
 
   function openTraffic(sc: Screen) {
-    setTrafficFor(sc); setTPreview(null); setTrafficError(null); setImports([])
+    setTrafficFor(sc); setTPreview(null); setTrafficError(null)
+    setImports([]); setZones([]); setZoneId('')
+    loadZones(sc)
     loadImports(sc.id)
+  }
+
+  // Las zonas viven en el PROGRAMA asignado a la pantalla. Sin programa no hay
+  // caras donde colgar el conteo, y hay que decirlo en vez de mostrar un
+  // desplegable vacío.
+  async function loadZones(sc: Screen) {
+    if (!sc.current_program_id) { setZones([]); return }
+    const { data, error } = await supabase
+      .from('zones').select('id, name')
+      .eq('program_id', sc.current_program_id).order('sort_order')
+    if (error) { setTrafficError(error.message); return }
+    setZones((data ?? []) as TrafficZone[])
   }
 
   // Sube el .xlsx a la Edge Function, que lo interpreta y devuelve las filas.
@@ -346,7 +376,7 @@ export default function Screens() {
   async function parseTrafficFile(file: File) {
     setParsing(true); setTrafficError(null); setTPreview(null)
     setTrafficFileName(file.name)
-    setDirection(guessDirection(file.name))
+    setZoneId(guessZone(file.name, zones))
     try {
       const form = new FormData()
       form.append('file', file)
@@ -365,18 +395,17 @@ export default function Screens() {
   }
 
   async function saveTraffic() {
-    if (!trafficFor || !tPreview || tPreview.rows.length === 0) return
+    if (!trafficFor || !tPreview || tPreview.rows.length === 0 || !zoneId) return
     setSavingTraffic(true); setTrafficError(null)
     const rows = tPreview.rows.map(r => ({
-      ...r, screen_id: trafficFor.id,
+      ...r, zone_id: zoneId,
       source_file: trafficFileName || 'reporte.xlsx',
-      direction,
     }))
     // upsert por (screen_id, date): reimportar un mes corregido ACTUALIZA los
     // días en vez de duplicarlos.
     const { error } = await supabase
       .from('traffic_counts')
-      .upsert(rows, { onConflict: 'screen_id,date,direction' })
+      .upsert(rows, { onConflict: 'zone_id,date' })
     setSavingTraffic(false)
     if (error) { setTrafficError(error.message); return }
     setTPreview(null)
@@ -387,15 +416,14 @@ export default function Screens() {
   async function deleteImport(imp: TrafficImport) {
     if (!trafficFor) return
     if (!await confirm({
-      title: `¿Eliminar el conteo ${imp.direction} de "${imp.source_file}"?`,
+      title: `¿Eliminar el conteo de "${imp.zone_name}"?`,
       message: `Se borrarán ${imp.days} día(s) de conteo de esta pantalla. Los reportes de campaña dejarán de mostrar esos impactos.`,
       confirmLabel: 'Eliminar', danger: true,
     })) return
     const { error } = await supabase
       .from('traffic_counts').delete()
-      .eq('screen_id', trafficFor.id)
+      .eq('zone_id', imp.zone_id)
       .eq('source_file', imp.source_file)
-      .eq('direction', imp.direction)
     if (error) { setTrafficError(error.message); return }
     loadImports(trafficFor.id)
   }
@@ -990,10 +1018,10 @@ export default function Screens() {
                       </div>
                     </div>
                   ) : imports.map(imp => (
-                    <div key={imp.source_file + imp.direction} style={s.trafficRow}>
+                    <div key={imp.source_file + imp.zone_id} style={s.trafficRow}>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
-                          <span style={s.dirBadge}>{imp.direction}</span>
+                          <span style={s.dirBadge}>{imp.zone_name}</span>
                           <span style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {imp.source_file}
                           </span>
@@ -1009,10 +1037,24 @@ export default function Screens() {
                     </div>
                   ))}
 
+                  {zones.length === 0 ? (
+                    <div style={{ ...s.warnBox, marginTop: '0.85rem' }}>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#B45309', marginBottom: '0.25rem' }}>
+                        Esta pantalla no tiene zonas
+                      </div>
+                      <div style={{ fontSize: '0.79rem', color: '#92400E', lineHeight: 1.5 }}>
+                        El conteo se asocia a una zona, que representa cada cara del
+                        rótulo. Asígnale un programa a la pantalla y crea sus zonas en
+                        Programas → Editar zonas antes de importar.
+                      </div>
+                    </div>
+                  ) : null}
+
                   <input ref={trafficFileRef} type="file" accept=".xlsx" style={{ display: 'none' }}
                     onChange={e => { const f = e.target.files?.[0]; if (f) parseTrafficFile(f) }} />
-                  <button onClick={() => trafficFileRef.current?.click()} disabled={parsing}
-                    style={{ ...s.btnAct, marginTop: '0.85rem', opacity: parsing ? 0.6 : 1 }}>
+                  <button onClick={() => trafficFileRef.current?.click()} disabled={parsing || zones.length === 0}
+                    style={{ ...s.btnAct, marginTop: '0.85rem', opacity: (parsing || zones.length === 0) ? 0.5 : 1,
+                             cursor: zones.length === 0 ? 'not-allowed' : 'pointer' }}>
                     {parsing ? 'Leyendo el archivo…' : 'Importar reporte (.xlsx)'}
                   </button>
                 </>
@@ -1025,7 +1067,7 @@ export default function Screens() {
                 const rango = tPreview.rows.map(r => r.date)
                 // Solo pisan los días del MISMO sentido: otro sentido convive.
                 for (const imp of imports) {
-                  if (imp.direction !== direction) continue
+                  if (imp.zone_id !== zoneId) continue
                   for (const d of rango) if (d >= imp.start && d <= imp.end) yaImportados.add(d)
                 }
                 const t = tPreview.totals || {}
@@ -1049,16 +1091,17 @@ export default function Screens() {
 
                     <div style={{ marginTop: '0.75rem', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.7rem 0.9rem' }}>
                       <div style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600, marginBottom: '0.35rem' }}>
-                        SENTIDO DE CIRCULACIÓN
+                        CARA DEL RÓTULO (ZONA)
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <select value={direction} onChange={e => setDirection(e.target.value)}
+                        <select value={zoneId} onChange={e => setZoneId(e.target.value)}
                           style={{ padding: '0.35rem 0.5rem', borderRadius: '8px', border: '1px solid #CBD5E1', background: '#fff', fontSize: '0.82rem', color: '#0F172A' }}>
-                          {DIRECTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                          <option value="">— Elige la zona —</option>
+                          {zones.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
                         </select>
                         <span style={{ fontSize: '0.75rem', color: '#64748B' }}>
-                          Deducido del nombre del archivo. Corrígelo si no es correcto:
-                          decide si este conteo se suma al de otro sentido o lo reemplaza.
+                          Deducida del nombre del archivo. Corrígela si no es correcta:
+                          decide a qué cara se atribuyen estos impactos.
                         </span>
                       </div>
                     </div>
@@ -1078,7 +1121,7 @@ export default function Screens() {
                     {yaImportados.size > 0 && (
                       <div style={{ ...s.warnBox, marginTop: '0.6rem' }}>
                         <span style={{ fontSize: '0.79rem', color: '#92400E' }}>
-                          {yaImportados.size} día(s) ya tienen datos en el sentido {direction} y <strong>se actualizarán</strong>.
+                          {yaImportados.size} día(s) ya tienen datos en esta zona y <strong>se actualizarán</strong>.
                         </span>
                       </div>
                     )}
@@ -1137,9 +1180,9 @@ export default function Screens() {
                   <button onClick={() => { setTPreview(null); if (trafficFileRef.current) trafficFileRef.current.value = '' }}
                     disabled={savingTraffic} style={s.btnAct}>Cancelar</button>
                   {/* Sin días válidos no hay nada que guardar: el archivo no se entendió. */}
-                  <button onClick={saveTraffic} disabled={savingTraffic || tPreview.rows.length === 0}
-                    style={{ ...s.btnAct, background: tPreview.rows.length === 0 ? '#CBD5E1' : '#2563EB', color: '#fff', border: 'none',
-                             cursor: tPreview.rows.length === 0 || savingTraffic ? 'not-allowed' : 'pointer' }}>
+                  <button onClick={saveTraffic} disabled={savingTraffic || tPreview.rows.length === 0 || !zoneId}
+                    style={{ ...s.btnAct, background: (tPreview.rows.length === 0 || !zoneId) ? '#CBD5E1' : '#2563EB', color: '#fff', border: 'none',
+                             cursor: (tPreview.rows.length === 0 || !zoneId || savingTraffic) ? 'not-allowed' : 'pointer' }}>
                     {savingTraffic ? 'Guardando…' : 'Confirmar e importar'}
                   </button>
                 </>
