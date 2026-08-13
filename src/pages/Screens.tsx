@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
@@ -106,6 +106,34 @@ const IconLayout = ({ size }: { size?: number }) => <Svg size={size}><rect x="3"
 const IconClock = ({ size }: { size?: number }) => <Svg size={size}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></Svg>
 const IconLock = ({ size }: { size?: number }) => <Svg size={size}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></Svg>
 const IconMonitor = ({ size }: { size?: number }) => <Svg size={size}><rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></Svg>
+// Conteo vehicular: filas de traffic_counts tal como las devuelve
+// parse-traffic-report y como se guardan (mismas claves).
+type TrafficRow = {
+  date: string; pedestrians: number; cars: number; trucks: number
+  buses: number; bikes: number; motorcycles: number
+  total_count: number; total_impacts: number
+}
+type TrafficPreview = {
+  location: string | null
+  period: { start: string | null; end: string | null } | null
+  rows: TrafficRow[]
+  totals: Record<string, number> | null
+  warnings: string[]
+}
+// Una importación = un archivo. Agrupar por source_file hace que "periodo
+// importado" sea una unidad con sentido y que borrar sea predecible; agrupar
+// por rangos contiguos se vuelve confuso en cuanto se reimporta un mes solapado.
+type TrafficImport = {
+  source_file: string; days: number
+  start: string; end: string; impacts: number
+}
+
+const fmtInt = (n: number) => (n || 0).toLocaleString('es-DO')
+const fmtDay = (iso: string) =>
+  new Date(iso + 'T12:00:00').toLocaleDateString('es-DO', { day: '2-digit', month: 'short' })
+
+const IconChart = ({ size }: { size?: number }) => <Svg size={size}><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></Svg>
+
 const IconKey = ({ size }: { size?: number }) => <Svg size={size}><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></Svg>
 
 function OccupancyRing({ used, capacity }: { used: number; capacity: number }) {
@@ -154,6 +182,16 @@ export default function Screens() {
   const [hoursValue, setHoursValue] = useState(20)
   const [copied, setCopied] = useState<string | null>(null)
   const [preview, setPreview] = useState<Screen | null>(null)
+
+  // ── Conteo vehicular ──────────────────────────────────────────────────
+  const [trafficFor, setTrafficFor]   = useState<Screen | null>(null)
+  const [imports, setImports]         = useState<TrafficImport[]>([])
+  const [loadingImports, setLoadingImports] = useState(false)
+  const [parsing, setParsing]         = useState(false)
+  const [tPreview, setTPreview]       = useState<TrafficPreview | null>(null)
+  const [savingTraffic, setSavingTraffic] = useState(false)
+  const [trafficError, setTrafficError]   = useState<string | null>(null)
+  const trafficFileRef = useRef<HTMLInputElement>(null)
   const [releasing, setReleasing] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   // Vista lista/tarjeta, recordada entre sesiones por página.
@@ -253,6 +291,92 @@ export default function Screens() {
     }
   }
 
+
+  // Agrupa las filas por archivo de origen para listar "periodos importados".
+  async function loadImports(screenId: string) {
+    setLoadingImports(true)
+    const { data, error } = await supabase
+      .from('traffic_counts')
+      .select('date, total_impacts, source_file')
+      .eq('screen_id', screenId)
+      .order('date')
+    setLoadingImports(false)
+    if (error) { setTrafficError(error.message); return }
+
+    const byFile: Record<string, TrafficImport> = {}
+    for (const r of (data ?? []) as any[]) {
+      const key = r.source_file || '(sin archivo)'
+      const g = byFile[key]
+      if (!g) {
+        byFile[key] = { source_file: key, days: 1, start: r.date, end: r.date, impacts: r.total_impacts || 0 }
+      } else {
+        g.days += 1
+        if (r.date < g.start) g.start = r.date
+        if (r.date > g.end) g.end = r.date
+        g.impacts += r.total_impacts || 0
+      }
+    }
+    setImports(Object.values(byFile).sort((a, b) => (a.start < b.start ? 1 : -1)))
+  }
+
+  function openTraffic(sc: Screen) {
+    setTrafficFor(sc); setTPreview(null); setTrafficError(null); setImports([])
+    loadImports(sc.id)
+  }
+
+  // Sube el .xlsx a la Edge Function, que lo interpreta y devuelve las filas.
+  // No guarda nada: la confirmación es un paso aparte, después de la vista previa.
+  async function parseTrafficFile(file: File) {
+    setParsing(true); setTrafficError(null); setTPreview(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const { data, error } = await supabase.functions.invoke('parse-traffic-report', { body: form })
+      if (error) {
+        let msg = error.message
+        try { const j = await (error as any).context?.json(); if (j?.error) msg = j.error } catch { /* generico */ }
+        setTrafficError(msg)
+      } else {
+        setTPreview({ ...(data as TrafficPreview), warnings: (data as any)?.warnings ?? [] })
+      }
+    } catch (e) {
+      setTrafficError((e as Error).message)
+    }
+    setParsing(false)
+  }
+
+  async function saveTraffic() {
+    if (!trafficFor || !tPreview || tPreview.rows.length === 0) return
+    setSavingTraffic(true); setTrafficError(null)
+    const fileName = trafficFileRef.current?.files?.[0]?.name ?? 'reporte.xlsx'
+    const rows = tPreview.rows.map(r => ({
+      ...r, screen_id: trafficFor.id, source_file: fileName,
+    }))
+    // upsert por (screen_id, date): reimportar un mes corregido ACTUALIZA los
+    // días en vez de duplicarlos.
+    const { error } = await supabase
+      .from('traffic_counts')
+      .upsert(rows, { onConflict: 'screen_id,date' })
+    setSavingTraffic(false)
+    if (error) { setTrafficError(error.message); return }
+    setTPreview(null)
+    if (trafficFileRef.current) trafficFileRef.current.value = ''
+    loadImports(trafficFor.id)
+  }
+
+  async function deleteImport(imp: TrafficImport) {
+    if (!trafficFor) return
+    if (!await confirm({
+      title: `¿Eliminar el aforo importado de "${imp.source_file}"?`,
+      message: `Se borrarán ${imp.days} día(s) de conteo de esta pantalla. Los reportes de campaña dejarán de mostrar esos impactos.`,
+      confirmLabel: 'Eliminar', danger: true,
+    })) return
+    const { error } = await supabase
+      .from('traffic_counts').delete()
+      .eq('screen_id', trafficFor.id).eq('source_file', imp.source_file)
+    if (error) { setTrafficError(error.message); return }
+    loadImports(trafficFor.id)
+  }
 
   async function handleReset(id: string) {
     setResetSent(id)
@@ -569,6 +693,15 @@ export default function Screens() {
 
                 <div style={s.cardActions}>
                   {canManage && <button style={s.btnAct} onClick={() => { setAssigningScreen(sc.id); setSelectedProgram(sc.current_program_id ?? '') }}>Asignar programa</button>}
+                  {canManage && (
+                    <button style={s.btnAct} onClick={() => openTraffic(sc)}
+                      title="Importar el conteo vehicular de este emplazamiento">
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                        <IconChart size={13} />
+                        Conteo vehicular
+                      </span>
+                    </button>
+                  )}
                   <button style={s.btnAct} onClick={() => setPreview(sc)} title="Ver una captura de lo que se está reproduciendo">
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -798,6 +931,182 @@ export default function Screens() {
         </div>,
         document.body
       )}
+
+      {/* ── Conteo vehicular ─────────────────────────────────────────── */}
+      {trafficFor && createPortal(
+        <div style={s.modalBackdrop} onClick={() => { if (!savingTraffic && !parsing) setTrafficFor(null) }}>
+          <div style={{ ...s.modalCard, maxWidth: '760px', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}
+            onClick={e => e.stopPropagation()}>
+
+            <div style={{ padding: '1.1rem 1.35rem', borderBottom: '1px solid #F1F5F9' }}>
+              <div style={{ fontSize: '1.02rem', fontWeight: 700, color: '#0F172A' }}>Conteo vehicular</div>
+              <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.15rem' }}>{trafficFor.name}</div>
+            </div>
+
+            <div style={{ padding: '1.1rem 1.35rem', overflowY: 'auto', flex: 1 }}>
+
+              {trafficError && (
+                <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C', borderRadius: '10px', padding: '0.7rem 0.85rem', fontSize: '0.82rem', marginBottom: '0.9rem' }}>
+                  {trafficError}
+                </div>
+              )}
+
+              {!tPreview && (
+                <>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.04em', marginBottom: '0.6rem' }}>
+                    PERIODOS IMPORTADOS
+                  </div>
+
+                  {loadingImports ? (
+                    <div style={{ color: '#94A3B8', fontSize: '0.85rem' }}>Cargando…</div>
+                  ) : imports.length === 0 ? (
+                    <div style={{ background: '#F8FAFC', border: '1px dashed #E2E8F0', borderRadius: '10px', padding: '1.4rem', textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.88rem', color: '#0F172A', fontWeight: 600 }}>Sin conteo importado</div>
+                      <div style={{ fontSize: '0.8rem', color: '#64748B', marginTop: '0.3rem', lineHeight: 1.5 }}>
+                        Sube el reporte de aforo del emplazamiento para que los reportes<br />
+                        de campaña muestren los impactos estimados.
+                      </div>
+                    </div>
+                  ) : imports.map(imp => (
+                    <div key={imp.source_file} style={s.trafficRow}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: '0.82rem', color: '#0F172A', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {imp.source_file}
+                        </div>
+                        <div style={{ fontSize: '0.76rem', color: '#64748B', marginTop: '0.1rem' }}>
+                          {fmtDay(imp.start)} – {fmtDay(imp.end)} · {imp.days} día(s) · {fmtInt(imp.impacts)} impactos
+                        </div>
+                      </div>
+                      <button onClick={() => deleteImport(imp)}
+                        style={{ ...s.btnAct, color: '#B91C1C', borderColor: '#FECACA', flexShrink: 0 }}>
+                        Eliminar
+                      </button>
+                    </div>
+                  ))}
+
+                  <input ref={trafficFileRef} type="file" accept=".xlsx" style={{ display: 'none' }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) parseTrafficFile(f) }} />
+                  <button onClick={() => trafficFileRef.current?.click()} disabled={parsing}
+                    style={{ ...s.btnAct, marginTop: '0.85rem', opacity: parsing ? 0.6 : 1 }}>
+                    {parsing ? 'Leyendo el archivo…' : 'Importar reporte (.xlsx)'}
+                  </button>
+                </>
+              )}
+
+              {tPreview && (() => {
+                const yaImportados = new Set<string>()
+                // Días que ya tienen dato: se avisa ANTES de confirmar, porque
+                // el upsert los sobrescribe en silencio.
+                const rango = tPreview.rows.map(r => r.date)
+                for (const imp of imports) {
+                  for (const d of rango) if (d >= imp.start && d <= imp.end) yaImportados.add(d)
+                }
+                const t = tPreview.totals || {}
+                const sinDatos = tPreview.rows.length === 0
+                return (
+                  <>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.04em', marginBottom: '0.6rem' }}>
+                      VISTA PREVIA
+                    </div>
+
+                    <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.8rem 0.9rem' }}>
+                      <div style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600 }}>UBICACIÓN SEGÚN EL ARCHIVO</div>
+                      <div style={{ fontSize: '0.84rem', color: '#0F172A', marginTop: '0.2rem', lineHeight: 1.45 }}>
+                        {tPreview.location || <span style={{ color: '#94A3B8' }}>No especificada</span>}
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: '#64748B', marginTop: '0.45rem' }}>
+                        {tPreview.rows.length} día(s)
+                        {tPreview.rows.length > 0 && <> · {fmtDay(tPreview.rows[0].date)} – {fmtDay(tPreview.rows[tPreview.rows.length - 1].date)}</>}
+                      </div>
+                    </div>
+
+                    {/* Los warnings van destacados y ANTES del botón de confirmar. */}
+                    {tPreview.warnings.length > 0 && (
+                      <div style={s.warnBox}>
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#B45309', marginBottom: '0.3rem' }}>
+                          Revisa antes de guardar
+                        </div>
+                        <ul style={{ margin: 0, paddingLeft: '1.1rem', color: '#92400E', fontSize: '0.79rem', lineHeight: 1.55 }}>
+                          {tPreview.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                        </ul>
+                      </div>
+                    )}
+
+                    {yaImportados.size > 0 && (
+                      <div style={{ ...s.warnBox, marginTop: '0.6rem' }}>
+                        <span style={{ fontSize: '0.79rem', color: '#92400E' }}>
+                          {yaImportados.size} día(s) ya tienen datos y <strong>se actualizarán</strong>.
+                        </span>
+                      </div>
+                    )}
+
+                    {!sinDatos && (
+                      <div style={{ marginTop: '0.9rem', border: '1px solid #E2E8F0', borderRadius: '10px', overflow: 'auto', maxHeight: '260px' }}>
+                        <table style={s.tTable}>
+                          <thead>
+                            <tr>
+                              <th style={{ ...s.tTh, textAlign: 'left' }}>Fecha</th>
+                              <th style={s.tTh}>Peat.</th><th style={s.tTh}>Autos</th>
+                              <th style={s.tTh}>Cam.</th><th style={s.tTh}>Bus</th>
+                              <th style={s.tTh}>Bici</th><th style={s.tTh}>Motos</th>
+                              <th style={s.tTh}>Conteo</th><th style={s.tTh}>Impactos</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tPreview.rows.map(r => (
+                              <tr key={r.date}>
+                                <td style={{ ...s.tTd, textAlign: 'left', color: '#0F172A' }}>{fmtDay(r.date)}</td>
+                                <td style={s.tTd}>{fmtInt(r.pedestrians)}</td>
+                                <td style={s.tTd}>{fmtInt(r.cars)}</td>
+                                <td style={s.tTd}>{fmtInt(r.trucks)}</td>
+                                <td style={s.tTd}>{fmtInt(r.buses)}</td>
+                                <td style={s.tTd}>{fmtInt(r.bikes)}</td>
+                                <td style={s.tTd}>{fmtInt(r.motorcycles)}</td>
+                                <td style={s.tTd}>{fmtInt(r.total_count)}</td>
+                                <td style={{ ...s.tTd, fontWeight: 700, color: '#0F172A' }}>{fmtInt(r.total_impacts)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr style={{ background: '#F8FAFC' }}>
+                              <td style={{ ...s.tTd, textAlign: 'left', fontWeight: 700 }}>Total</td>
+                              <td style={{ ...s.tTd, fontWeight: 600 }}>{fmtInt(t.pedestrians)}</td>
+                              <td style={{ ...s.tTd, fontWeight: 600 }}>{fmtInt(t.cars)}</td>
+                              <td style={{ ...s.tTd, fontWeight: 600 }}>{fmtInt(t.trucks)}</td>
+                              <td style={{ ...s.tTd, fontWeight: 600 }}>{fmtInt(t.buses)}</td>
+                              <td style={{ ...s.tTd, fontWeight: 600 }}>{fmtInt(t.bikes)}</td>
+                              <td style={{ ...s.tTd, fontWeight: 600 }}>{fmtInt(t.motorcycles)}</td>
+                              <td style={{ ...s.tTd, fontWeight: 600 }}>{fmtInt(t.total_count)}</td>
+                              <td style={{ ...s.tTd, fontWeight: 700, color: '#059669' }}>{fmtInt(t.total_impacts)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
+
+            <div style={{ padding: '0.9rem 1.35rem', borderTop: '1px solid #F1F5F9', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+              {tPreview ? (
+                <>
+                  <button onClick={() => { setTPreview(null); if (trafficFileRef.current) trafficFileRef.current.value = '' }}
+                    disabled={savingTraffic} style={s.btnAct}>Cancelar</button>
+                  {/* Sin días válidos no hay nada que guardar: el archivo no se entendió. */}
+                  <button onClick={saveTraffic} disabled={savingTraffic || tPreview.rows.length === 0}
+                    style={{ ...s.btnAct, background: tPreview.rows.length === 0 ? '#CBD5E1' : '#2563EB', color: '#fff', border: 'none',
+                             cursor: tPreview.rows.length === 0 || savingTraffic ? 'not-allowed' : 'pointer' }}>
+                    {savingTraffic ? 'Guardando…' : 'Confirmar e importar'}
+                  </button>
+                </>
+              ) : (
+                <button onClick={() => setTrafficFor(null)} style={s.btnAct}>Cerrar</button>
+              )}
+            </div>
+          </div>
+        </div>, document.body)}
+
     </div>
   )
 }
@@ -809,6 +1118,11 @@ const s: Record<string, React.CSSProperties> = {
   btnPrimary: { display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.1rem', borderRadius: '8px', border: 'none', background: '#3B82F6', color: '#fff', fontWeight: 600, fontSize: '0.875rem', whiteSpace: 'nowrap', cursor: 'pointer' },
   btnOutline: { padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontWeight: 500, fontSize: '0.875rem', cursor: 'pointer' },
   modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' },
+  trafficRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.6rem 0.75rem', border: '1px solid #E2E8F0', borderRadius: '10px', background: '#F8FAFC', marginBottom: '0.5rem' },
+  warnBox: { background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '0.7rem 0.85rem', marginTop: '0.85rem' },
+  tTable: { width: '100%', borderCollapse: 'collapse', fontSize: '0.76rem' },
+  tTh: { textAlign: 'right', padding: '0.35rem 0.5rem', color: '#94A3B8', fontWeight: 600, borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' },
+  tTd: { textAlign: 'right', padding: '0.3rem 0.5rem', color: '#334155', whiteSpace: 'nowrap' },
   modalCard: { background: '#fff', borderRadius: '14px', width: '100%', maxWidth: '640px', overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' },
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '0.75rem 1rem', borderBottom: '1px solid #F1F5F9' },
   modalClose: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '7px', border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#64748B', cursor: 'pointer', flexShrink: 0 },
