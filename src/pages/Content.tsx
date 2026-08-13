@@ -23,6 +23,13 @@ type DeleteDlg = {
 
 const TAG_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#64748B']
 
+// "Recién subido": se calcula al vuelo comparando created_at con las últimas
+// 24 h. No se guarda ni se limpia nada — la etiqueta caduca sola.
+const NEW_WINDOW_MS = 24 * 60 * 60 * 1000
+function isNew(item: MediaItem) {
+  return Date.now() - new Date(item.created_at).getTime() < NEW_WINDOW_MS
+}
+
 // Tamaño recomendado (solo informativo, NO bloquea). El único límite real es
 // el cupo de almacenamiento de la organización, validado en la Edge Function.
 const RECOMMENDED_MB = 100
@@ -74,6 +81,13 @@ export default function Content() {
   // Vista previa dentro de la app (imágenes/videos)
   const [preview, setPreview] = useState<MediaItem | null>(null)
   const [previewZoom, setPreviewZoom] = useState(false)
+  // Recalcula la etiqueta "NUEVO" al cruzar las 24 h, sin recargar ni
+  // consultar la base: solo fuerza un re-render cada minuto.
+  const [, setMinuteTick] = useState(0)
+  useEffect(() => {
+    const iv = setInterval(() => setMinuteTick(t => t + 1), 60_000)
+    return () => clearInterval(iv)
+  }, [])
   function closePreview() { setPreview(null); setPreviewZoom(false) }
 
   // ── LOAD ────────────────────────────────────────────────────────────────
@@ -716,7 +730,10 @@ export default function Content() {
                               }
                             </div>
                             <div style={{ minWidth: 0 }}>
-                              <div style={{ color: '#0F172A', fontWeight: 500, fontSize: '0.875rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '200px' }}>{item.name}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
+                                <div style={{ color: '#0F172A', fontWeight: 500, fontSize: '0.875rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '200px' }}>{item.name}</div>
+                                {isNew(item) && <span style={s.newBadge}>NUEVO</span>}
+                              </div>
                               {itemTags.length > 0 && (
                                 <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
                                   {itemTags.map(t => (
@@ -815,6 +832,14 @@ export default function Content() {
 }
 
 const s: Record<string, React.CSSProperties> = {
+  // Verde de la tarjeta "Mis pantallas" del dashboard (#E8FBF1 / #B7EAD0), con
+  // el texto en el tono oscuro para que se lea sobre un fondo tan claro.
+  newBadge: {
+    flexShrink: 0, background: '#E8FBF1', color: '#059669',
+    border: '1px solid #B7EAD0', borderRadius: '999px',
+    padding: '1px 7px', fontSize: '0.62rem', fontWeight: 700,
+    letterSpacing: '0.04em', lineHeight: 1.6,
+  },
   topbar:      { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '1rem' },
   title:       { fontSize: '1.6rem', fontWeight: 700, color: '#0F172A' },
   sub:         { color: '#64748B', fontSize: '0.875rem', marginTop: '0.2rem' },
