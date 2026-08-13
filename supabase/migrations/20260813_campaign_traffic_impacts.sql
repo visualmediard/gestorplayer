@@ -29,10 +29,15 @@ CREATE OR REPLACE FUNCTION campaign_traffic_impacts(
 )
   RETURNS jsonb LANGUAGE sql STABLE SECURITY INVOKER
   SET search_path = public AS $$
+  -- Los días se calculan en hora local de RD, no en la del servidor: el aforo
+  -- del proveedor viene en fechas locales, así que agrupar en UTC metería las
+  -- reproducciones de la noche en el día siguiente y el cruce fallaría por un
+  -- día. AT TIME ZONE convierte explícitamente, sin depender de cómo esté
+  -- configurado el servidor.
   WITH play_days AS (
-    -- Días (en hora local del servidor) en que ESTA campaña se reprodujo, por
-    -- pantalla. SECURITY INVOKER: el RLS del usuario ya acota a su organización.
-    SELECT DISTINCT pe.screen_id, (pe.played_at)::date AS day
+    -- Días en que ESTA campaña se reprodujo, por pantalla.
+    -- SECURITY INVOKER: el RLS del usuario ya acota a su organización.
+    SELECT DISTINCT pe.screen_id, (pe.played_at AT TIME ZONE 'America/Santo_Domingo')::date AS day
       FROM playback_events pe
       JOIN media_content mc ON mc.id = pe.content_id
      WHERE mc.campaign_id = p_campaign_id
@@ -40,7 +45,7 @@ CREATE OR REPLACE FUNCTION campaign_traffic_impacts(
        AND pe.played_at <  p_to
   ),
   plays AS (
-    SELECT pe.screen_id, (pe.played_at)::date AS day, SUM(COALESCE(pe.count, 1))::bigint AS plays
+    SELECT pe.screen_id, (pe.played_at AT TIME ZONE 'America/Santo_Domingo')::date AS day, SUM(COALESCE(pe.count, 1))::bigint AS plays
       FROM playback_events pe
       JOIN media_content mc ON mc.id = pe.content_id
      WHERE mc.campaign_id = p_campaign_id
