@@ -16,6 +16,8 @@ import Pair from './pages/Pair'
 import Invite from './pages/Invite'
 import Player from './pages/Player'
 import logoNegro from './assets/logo/logo-negro.png'
+import { supabase } from './lib/supabase'
+import { resolveMediaUrl } from './lib/mediaUrl'
 
 type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns' | 'settings' | 'superadmin'
 
@@ -53,6 +55,9 @@ function Gate() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [pageKey, setPageKey] = useState(0)
+  // Logo de la organización, centrado en la barra superior. Se carga aquí y no
+  // en AuthContext porque solo lo usa este header.
+  const [orgLogo, setOrgLogo] = useState<string | null>(null)
   const [editProgramId, setEditProgramId] = useState<string | null>(null)
   const [campaignReportId, setCampaignReportId] = useState<string | null>(null)
   const isMobile = useIsMobile()
@@ -75,6 +80,15 @@ function Gate() {
       if (back) { localStorage.removeItem('post_login_redirect'); window.location.replace(back) }
     }
   }, [session])
+
+  useEffect(() => {
+    let alive = true
+    const oid = profile?.organization_id
+    if (!oid) { setOrgLogo(null); return }
+    supabase.from('organizations').select('logo_url').eq('id', oid).single()
+      .then(({ data }) => { if (alive) setOrgLogo(data?.logo_url ?? null) })
+    return () => { alive = false }
+  }, [profile?.organization_id])
 
   useEffect(() => {
     if (isTablet) setCollapsed(true)
@@ -175,6 +189,20 @@ function Gate() {
               {pageLabel[page]}
             </span>
           </div>
+
+          {/* Logo de la organización, centrado. Va en posición absoluta para
+              que quede centrado respecto a la barra y no lo desplacen los
+              anchos variables de los lados (el nombre del usuario cambia). En
+              móvil no se muestra: se solaparía con el título de la página. */}
+          {orgLogo && !isMobile && (
+            <img src={resolveMediaUrl(orgLogo)} alt=""
+              style={{
+                position: 'absolute', left: '50%', top: '50%',
+                transform: 'translate(-50%, -50%)',
+                maxHeight: '34px', maxWidth: '190px', objectFit: 'contain',
+                pointerEvents: 'none',
+              }} />
+          )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
             {!isMobile && (
