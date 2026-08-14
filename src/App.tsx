@@ -185,21 +185,27 @@ function Gate() {
                 </svg>
               </button>
             )}
-            <span style={{ color: '#94A3B8', fontSize: '0.8rem', fontWeight: 500 }}>
-              {pageLabel[page]}
-            </span>
+            {/* En móvil el título cede su sitio al logo: comparten el centro de
+                la barra y no caben los dos. No se pierde información, porque
+                la página ya lo repite en su propio encabezado. */}
+            {!(isMobile && orgLogo) && (
+              <span style={{ color: '#94A3B8', fontSize: '0.8rem', fontWeight: 500 }}>
+                {pageLabel[page]}
+              </span>
+            )}
           </div>
 
           {/* Logo de la organización, centrado. Va en posición absoluta para
               que quede centrado respecto a la barra y no lo desplacen los
-              anchos variables de los lados (el nombre del usuario cambia). En
-              móvil no se muestra: se solaparía con el título de la página. */}
-          {orgLogo && !isMobile && (
+              anchos variables de los lados (el nombre del usuario cambia). */}
+          {orgLogo && (
             <img src={resolveMediaUrl(orgLogo)} alt=""
               style={{
                 position: 'absolute', left: '50%', top: '50%',
                 transform: 'translate(-50%, -50%)',
-                maxHeight: '34px', maxWidth: '190px', objectFit: 'contain',
+                maxHeight: isMobile ? '26px' : '34px',
+                maxWidth: isMobile ? '120px' : '190px',
+                objectFit: 'contain',
                 pointerEvents: 'none',
               }} />
           )}
