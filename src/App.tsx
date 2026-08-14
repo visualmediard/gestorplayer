@@ -203,8 +203,8 @@ function Gate() {
               style={{
                 position: 'absolute', left: '50%', top: '50%',
                 transform: 'translate(-50%, -50%)',
-                maxHeight: isMobile ? '26px' : '34px',
-                maxWidth: isMobile ? '120px' : '190px',
+                maxHeight: isMobile ? '38px' : '46px',
+                maxWidth: isMobile ? '170px' : '280px',
                 objectFit: 'contain',
                 pointerEvents: 'none',
               }} />
