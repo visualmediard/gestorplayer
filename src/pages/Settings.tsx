@@ -5,9 +5,9 @@ import { notifyStorageChanged } from '../lib/storage'
 import { useDialog } from '../components/Dialog'
 
 const ROLE_LABELS: Record<string, string> = {
-  admin: 'Administrador', operator: 'Operador', seller: 'Vendedor', client: 'Cliente',
+  admin: 'Administrador', operator: 'Operador', seller: 'Vendedor',
 }
-const ROLES = ['admin', 'operator', 'seller', 'client']
+const ROLES = ['admin', 'operator', 'seller']
 
 type Tab = 'general' | 'users'
 

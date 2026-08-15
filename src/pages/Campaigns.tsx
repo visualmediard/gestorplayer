@@ -54,7 +54,7 @@ const DEFAULT_FREQ = 0 // 0 = ∞ Ilimitado (matches zone editor default)
 export default function Campaigns({ initialReportId }: { initialReportId?: string | null }) {
   const { profile } = useAuth()
   const { confirm, alert } = useDialog()
-  // Solo admin y operador gestionan campañas; vendedor y cliente son de lectura.
+  // Solo admin y operador gestionan campañas; el vendedor es de lectura.
   const canManage = hasRole(profile?.role, 'admin', 'operator')
   const [orgId, setOrgId]         = useState<string | null>(null)
   const [stats, setStats]         = useState<CampaignStat[]>([])

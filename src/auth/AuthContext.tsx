@@ -1,12 +1,15 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
+import type { Role } from '../lib/roles'
 
 type Profile = {
   id: string
   email: string
   full_name: string | null
-  role: 'admin' | 'operator' | 'seller' | 'client'
+  // `Role` se importa en vez de repetir la unión: duplicarla ya había abierto
+  // la puerta a que las dos listas se desincronizaran.
+  role: Role
   organization_id: string | null
   // Superadmin de la plataforma (dueño de GestPlayer). Ortogonal a `role`, que
   // es el permiso DENTRO de una organización.
