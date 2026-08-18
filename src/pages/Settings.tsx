@@ -9,7 +9,7 @@ const ROLE_LABELS: Record<string, string> = {
 }
 const ROLES = ['admin', 'operator', 'seller']
 
-type Tab = 'general' | 'users'
+type Tab = 'general' | 'users' | 'traffic'
 
 export default function Settings() {
   const [tab, setTab] = useState<Tab>('general')
@@ -35,10 +35,16 @@ export default function Settings() {
           style={{ ...s.tab, ...(tab === 'users' ? s.tabActive : {}) }}>
           Usuarios
         </button>
+        <button
+          onClick={() => setTab('traffic')}
+          style={{ ...s.tab, ...(tab === 'traffic' ? s.tabActive : {}) }}>
+          Conteo vehicular
+        </button>
       </div>
 
       {tab === 'general' && <GeneralTab />}
       {tab === 'users' && <UsersTab />}
+      {tab === 'traffic' && <TrafficTab />}
     </div>
   )
 }
@@ -486,6 +492,307 @@ function UsersTab() {
                 {savingEdit ? 'Guardando…' : 'Guardar'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Tab Conteo vehicular: credenciales de DataVisiooh ───────────────────────
+// El token se escribe y no se vuelve a leer nunca: la RPC set_datavisiooh_token
+// lo guarda en una tabla que el frontend no puede consultar, y ninguna función
+// lo devuelve. Aquí solo se manejan los últimos 4 caracteres y la fecha, que sí
+// son legibles desde traffic_providers.
+type ProviderCfg = {
+  hash: string | null
+  token_last4: string | null
+  token_set_at: string | null
+  docs_url: string | null
+}
+
+type ProviderPanel = {
+  id: number
+  name: string
+  description: string | null
+  address: string | null
+  sensor_status: number | null
+  sensor_updated: string | null
+  sensor_stale: boolean
+  looks_inactive: boolean
+}
+
+function TrafficTab() {
+  const { confirm } = useDialog()
+
+  const [cfg, setCfg] = useState<ProviderCfg | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [token, setToken] = useState('')
+  const [busy, setBusy] = useState<null | 'saving' | 'validating' | 'panels' | 'clearing'>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [clientName, setClientName] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [panels, setPanels] = useState<ProviderPanel[] | null>(null)
+  // Enlace a la documentación del proveedor. Es solo de consulta: se abre en el
+  // navegador del admin, el servidor no lo visita nunca.
+  const [docsUrl, setDocsUrl] = useState('')
+  const [docsSaved, setDocsSaved] = useState(false)
+
+  // La RLS ya acota la fila a la organización del admin, así que no hace falta
+  // filtrar por organization_id: si hay fila, es la suya.
+  async function loadCfg() {
+    const { data } = await supabase
+      .from('traffic_providers').select('hash, token_last4, token_set_at, docs_url').maybeSingle()
+    setCfg((data as ProviderCfg) ?? null)
+    setDocsUrl((data as ProviderCfg)?.docs_url ?? '')
+    setLoading(false)
+  }
+
+  useEffect(() => { loadCfg() }, [])
+
+  // Extrae el mensaje real del cuerpo cuando la función responde con error,
+  // igual que callManageUser en la pestaña de usuarios.
+  async function invokeProvider(action: 'validate' | 'panels') {
+    const { data, error: fnErr } = await supabase.functions.invoke('traffic-provider', { body: { action } })
+    if (fnErr) {
+      let msg = fnErr.message
+      try { const j = await (fnErr as any).context?.json(); if (j?.error) msg = j.error } catch { /* ignore */ }
+      return { ok: false as const, error: msg, data: null as any }
+    }
+    return { ok: true as const, error: null, data }
+  }
+
+  async function validate(): Promise<boolean> {
+    setBusy('validating')
+    const res = await invokeProvider('validate')
+    setBusy(null)
+    if (!res.ok) { setError(res.error); return false }
+    setClientName(res.data?.client_name ?? null)
+    // Varias cuentas bajo el mismo token: se conectó a la primera. Se avisa en
+    // vez de dejar al admin creyendo que eligió.
+    if (res.data?.needs_choice) {
+      setNotice(`Este token da acceso a ${res.data.clients_total} cuentas; se conectó a la primera.`)
+    }
+    await loadCfg()
+    return true
+  }
+
+  // Guardar y validar en un solo clic. Si la validación falla, el token queda
+  // guardado igual: el fallo suele ser del proveedor, no del token, y obligar a
+  // pegarlo otra vez sería castigar al admin por algo ajeno.
+  async function saveToken() {
+    setError(null); setNotice(null)
+    const t = token.trim()
+    if (t.length < 8) { setError('El token parece incompleto.'); return }
+
+    setBusy('saving')
+    const { error: rpcErr } = await supabase.rpc('set_datavisiooh_token', { p_token: t })
+    setBusy(null)
+    if (rpcErr) { setError(rpcErr.message); return }
+
+    setToken('')          // no se conserva en memoria más de lo necesario
+    setPanels(null)       // la lista anterior puede ser de otra cuenta
+    setClientName(null)
+    await loadCfg()
+    await validate()
+  }
+
+  async function clearToken() {
+    const ok = await confirm({
+      title: 'Quitar el token',
+      message: 'Se borrará el token de tu empresa de conteo vehicular y el conteo dejará de sincronizarse. ¿Continuar?',
+      confirmLabel: 'Quitar token', danger: true,
+    })
+    if (!ok) return
+
+    setError(null); setNotice(null)
+    setBusy('clearing')
+    const { error: rpcErr } = await supabase.rpc('clear_datavisiooh_token')
+    setBusy(null)
+    if (rpcErr) { setError(rpcErr.message); return }
+
+    setClientName(null); setPanels(null)
+    await loadCfg()
+  }
+
+  async function saveDocsUrl() {
+    setError(null); setDocsSaved(false)
+    const { error: rpcErr } = await supabase.rpc('set_traffic_docs_url', { p_url: docsUrl.trim() || null })
+    if (rpcErr) { setError(rpcErr.message); return }
+    setDocsSaved(true)
+    await loadCfg()
+  }
+
+  async function loadPanels() {
+    setError(null)
+    setBusy('panels')
+    const res = await invokeProvider('panels')
+    setBusy(null)
+    if (!res.ok) { setError(res.error); return }
+    setPanels((res.data?.panels ?? []) as ProviderPanel[])
+  }
+
+  if (loading) {
+    return <div style={s.formCard}><span style={{ color: '#94A3B8', fontSize: '0.875rem' }}>Cargando…</span></div>
+  }
+
+  const hasToken = !!cfg?.token_set_at
+  const validated = !!cfg?.hash
+  const fecha = (iso: string) => new Date(iso).toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' })
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div style={s.formCard}>
+        <div style={s.formTitle}>Conteo vehicular</div>
+        <p style={{ color: '#64748B', fontSize: '0.82rem', marginBottom: '1rem' }}>
+          Pega el token que te entregó tu empresa de conteo vehicular. Se guarda del lado del
+          servidor, fuera del alcance del panel: no vuelve a mostrarse ni se puede consultar desde aquí.
+        </p>
+
+        {hasToken ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.7rem', borderRadius: '999px', background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#047857', fontSize: '0.8rem', fontWeight: 600 }}>
+              Token configurado ✓ · ••••{cfg?.token_last4 ?? '????'}
+            </span>
+            {cfg?.token_set_at && (
+              <span style={{ color: '#94A3B8', fontSize: '0.78rem' }}>guardado el {fecha(cfg.token_set_at)}</span>
+            )}
+          </div>
+        ) : (
+          <div style={{ marginBottom: '1rem', color: '#94A3B8', fontSize: '0.82rem' }}>
+            Todavía no hay ningún token configurado.
+          </div>
+        )}
+
+        <label style={s.fieldLabel}>{hasToken ? 'Reemplazar el token' : 'Token de conteo vehicular'}</label>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <input
+            type="password"
+            style={{ ...s.field, flex: 1, minWidth: '220px' }}
+            value={token}
+            onChange={e => setToken(e.target.value)}
+            placeholder="Pega aquí tu token"
+            autoComplete="off"
+          />
+          <button onClick={saveToken} disabled={!!busy || token.trim().length === 0}
+            style={{ ...s.btnPrimary, opacity: (busy || token.trim().length === 0) ? 0.6 : 1 }}>
+            {busy === 'saving' ? 'Guardando…' : busy === 'validating' ? 'Validando…' : 'Guardar y validar'}
+          </button>
+          {hasToken && (
+            <button onClick={clearToken} disabled={!!busy} style={{ ...s.btnOutline, opacity: busy ? 0.6 : 1 }}>
+              {busy === 'clearing' ? 'Quitando…' : 'Quitar token'}
+            </button>
+          )}
+        </div>
+
+        {hasToken && (
+          <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {validated ? (
+              <span style={{ color: '#047857', fontSize: '0.82rem', fontWeight: 600 }}>
+                Conectado{clientName ? `: ${clientName}` : ' · conexión validada'}
+              </span>
+            ) : (
+              <span style={{ color: '#B45309', fontSize: '0.82rem' }}>
+                Sin validar. Valida la conexión para poder sincronizar el conteo.
+              </span>
+            )}
+            <button onClick={validate} disabled={!!busy} style={{ ...s.btnOutline, opacity: busy ? 0.6 : 1 }}>
+              {busy === 'validating' ? 'Validando…' : 'Validar conexión'}
+            </button>
+            {validated && (
+              <button onClick={loadPanels} disabled={!!busy} style={{ ...s.btnOutline, opacity: busy ? 0.6 : 1 }}>
+                {busy === 'panels' ? 'Consultando…' : 'Ver emplazamientos'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Documentación del proveedor. Va después del token porque es de
+            consulta, no parte de la conexión: el servidor nunca abre esta URL. */}
+        <div style={{ marginTop: '1.25rem', paddingTop: '1.25rem', borderTop: '1px solid #F1F5F9' }}>
+          <label style={s.fieldLabel}>Documentación de la API (opcional)</label>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <input
+              type="url"
+              style={{ ...s.field, flex: 1, minWidth: '220px' }}
+              value={docsUrl}
+              onChange={e => { setDocsUrl(e.target.value); setDocsSaved(false) }}
+              placeholder="https://ejemplo.com/docs"
+            />
+            <button onClick={saveDocsUrl} disabled={!!busy}
+              style={{ ...s.btnOutline, opacity: busy ? 0.6 : 1 }}>
+              Guardar enlace
+            </button>
+          </div>
+          <div style={{ marginTop: '0.45rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span style={{ color: '#94A3B8', fontSize: '0.76rem' }}>
+              Solo para consultarla: se guarda como enlace y se abre en tu navegador.
+            </span>
+            {cfg?.docs_url && (
+              // rel="noopener noreferrer": la página destino no debe poder tocar
+              // esta pestaña. El esquema https ya lo impuso la RPC al guardar.
+              <a href={cfg.docs_url} target="_blank" rel="noopener noreferrer"
+                style={{ color: '#2563EB', fontSize: '0.78rem', fontWeight: 600, textDecoration: 'none' }}>
+                Abrir documentación ↗
+              </a>
+            )}
+            {docsSaved && <span style={{ color: '#047857', fontSize: '0.78rem', fontWeight: 600 }}>Guardado ✓</span>}
+          </div>
+        </div>
+
+        {notice && (
+          <div style={{ marginTop: '0.9rem', padding: '0.6rem 0.85rem', borderRadius: '8px', background: '#FFFBEB', border: '1px solid #FDE68A', color: '#B45309', fontSize: '0.8rem' }}>
+            {notice}
+          </div>
+        )}
+        {error && (
+          <div style={{ marginTop: '0.9rem', padding: '0.6rem 0.85rem', borderRadius: '8px', background: '#FFF5F5', border: '1px solid #FECACA', color: '#EF4444', fontSize: '0.8rem', fontWeight: 500 }}>
+            {error}
+          </div>
+        )}
+      </div>
+
+      {/* Lista de emplazamientos: solo lectura. El mapeo con las zonas se hace
+          en el editor de zonas, no aquí. */}
+      {panels && (
+        <div style={s.formCard}>
+          <div style={s.formTitle}>
+            Emplazamientos ({panels.length})
+          </div>
+          <p style={{ color: '#64748B', fontSize: '0.8rem', marginBottom: '1rem' }}>
+            Los marcados como inactivos por el proveedor aparecen al final, atenuados. No se ocultan:
+            la marca es una convención de texto suya y podría equivocarse.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '420px', overflowY: 'auto' }}>
+            {panels.map(p => (
+              <div key={p.id} style={{
+                display: 'flex', alignItems: 'center', gap: '0.75rem',
+                padding: '0.6rem 0.75rem', borderRadius: '8px',
+                border: '1px solid #F1F5F9', background: p.looks_inactive ? '#F8FAFC' : '#fff',
+                opacity: p.looks_inactive ? 0.6 : 1,
+              }}>
+                <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#94A3B8', flexShrink: 0, width: '48px' }}>
+                  {p.id}
+                </span>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#0F172A' }}>{p.name}</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.description ?? p.address ?? '—'}
+                  </div>
+                </div>
+                {p.looks_inactive && (
+                  <span style={{ fontSize: '0.7rem', color: '#94A3B8', border: '1px solid #E2E8F0', borderRadius: '999px', padding: '2px 8px', flexShrink: 0 }}>
+                    Inactivo según el proveedor
+                  </span>
+                )}
+                {p.sensor_stale && (
+                  <span title={p.sensor_updated ? `Último reporte: ${fecha(p.sensor_updated)}` : 'Sin datos de sensor'}
+                    style={{ fontSize: '0.7rem', color: '#B45309', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '999px', padding: '2px 8px', flexShrink: 0 }}>
+                    {p.sensor_updated ? `Sin reportar desde ${fecha(p.sensor_updated)}` : 'Sin sensor'}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
