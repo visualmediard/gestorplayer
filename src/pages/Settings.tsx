@@ -522,6 +522,16 @@ type ProviderPanel = {
   looks_inactive: boolean
 }
 
+type CoverageRow = {
+  zone_id: string
+  zone_name: string
+  program_name: string
+  panel_id: number
+  first_date: string | null
+  last_date: string | null
+  days: number
+}
+
 function TrafficTab() {
   const { confirm } = useDialog()
 
@@ -540,6 +550,14 @@ function TrafficTab() {
   // navegador del admin, el servidor no lo visita nunca.
   const [docsUrl, setDocsUrl] = useState('')
   const [docsSaved, setDocsSaved] = useState(false)
+  // Qué tráfico hay cargado por zona. Sale de la RPC traffic_coverage(), que
+  // es SECURITY INVOKER: el aislamiento por organización lo impone la RLS, no
+  // un filtro escrito aquí.
+  const [coverage, setCoverage] = useState<CoverageRow[] | null>(null)
+  // Rango histórico opcional. Cerrado, el botón se comporta como siempre.
+  const [rangeOpen, setRangeOpen] = useState(false)
+  const [rangeFrom, setRangeFrom] = useState('')
+  const [rangeTo, setRangeTo] = useState('')
 
   // La RLS ya acota la fila a la organización del admin, así que no hace falta
   // filtrar por organization_id: si hay fila, es la suya.
@@ -551,12 +569,21 @@ function TrafficTab() {
     setLoading(false)
   }
 
-  useEffect(() => { loadCfg() }, [])
+  async function loadCoverage() {
+    const { data, error: rpcErr } = await supabase.rpc('traffic_coverage')
+    // Si la RPC falla (migración sin correr, por ejemplo) se deja en null y la
+    // tarjeta no se pinta. Con [] diría "ninguna zona mapeada", que es un dato
+    // falso: no es que no haya zonas, es que no pudimos preguntarlo.
+    if (rpcErr) { setCoverage(null); return }
+    setCoverage((data as CoverageRow[]) ?? [])
+  }
+
+  useEffect(() => { loadCfg(); loadCoverage() }, [])
 
   // Extrae el mensaje real del cuerpo cuando la función responde con error,
   // igual que callManageUser en la pestaña de usuarios.
-  async function invokeProvider(action: 'validate' | 'panels' | 'sync') {
-    const { data, error: fnErr } = await supabase.functions.invoke('traffic-provider', { body: { action } })
+  async function invokeProvider(action: 'validate' | 'panels' | 'sync', extra?: Record<string, unknown>) {
+    const { data, error: fnErr } = await supabase.functions.invoke('traffic-provider', { body: { action, ...extra } })
     if (fnErr) {
       let msg = fnErr.message
       try { const j = await (fnErr as any).context?.json(); if (j?.error) msg = j.error } catch { /* ignore */ }
@@ -620,10 +647,29 @@ function TrafficTab() {
 
   // Sincronización manual. El cron automático vendrá después; este botón es el
   // que permite comprobar el ciclo completo con datos reales.
+  //
+  // Sin rango, los últimos 7 días. Con rango, el periodo que se pida: sirve
+  // para traer histórico puntual (un reporte de julio, por ejemplo).
   async function syncNow() {
+    const custom = rangeOpen && rangeFrom && rangeTo
+    if (rangeOpen && rangeError) return
+
+    // El diálogo solo aparece con rango personalizado. Traer 7 días recientes
+    // es inocuo; traer un mes entero puede pisar meses de importaciones
+    // manuales de golpe, y esa es una acción de otra magnitud.
+    if (custom) {
+      const dias = spanDays(rangeFrom, rangeTo)
+      const ok = await confirm({
+        title: 'Sincronizar un periodo histórico',
+        message: `Se traerán ${dias} día(s), del ${rangeFrom} al ${rangeTo}, y se sobrescribirán los días de ese periodo que ya estén importados, incluidos los que subiste por Excel.`,
+        confirmLabel: 'Sincronizar',
+      })
+      if (!ok) return
+    }
+
     setError(null); setSyncResult(null)
     setBusy('syncing')
-    const res = await invokeProvider('sync')
+    const res = await invokeProvider('sync', custom ? { from: rangeFrom, to: rangeTo } : undefined)
     setBusy(null)
     if (!res.ok) { setError(res.error); return }
     setSyncResult({
@@ -634,6 +680,8 @@ function TrafficTab() {
       note: res.data?.note,
       warnings: res.data?.warnings ?? [],
     })
+    // El efecto del botón se ve de inmediato en la tabla de cobertura.
+    await loadCoverage()
   }
 
   async function saveDocsUrl() {
@@ -657,9 +705,32 @@ function TrafficTab() {
     return <div style={s.formCard}><span style={{ color: '#94A3B8', fontSize: '0.875rem' }}>Cargando…</span></div>
   }
 
+  // Mismas reglas que valida el servidor. Aquí sirven para no dejar pulsar y
+  // explicar el motivo; allí, porque la función es un endpoint autenticado y
+  // la validación del navegador no es una garantía.
+  const MAX_SYNC_DAYS = 90
+  function spanDays(a: string, b: string): number {
+    return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000) + 1
+  }
+  const rangeError: string | null = (() => {
+    if (!rangeOpen) return null
+    if (!rangeFrom || !rangeTo) return 'Elige las dos fechas.'
+    if (spanDays(rangeFrom, rangeTo) < 1) return 'La fecha inicial no puede ser posterior a la final.'
+    const n = spanDays(rangeFrom, rangeTo)
+    if (n > MAX_SYNC_DAYS) return `El rango es de ${n} días y el máximo es ${MAX_SYNC_DAYS}. Divídelo en tramos: pueden solaparse sin problema.`
+    return null
+  })()
+
   const hasToken = !!cfg?.token_set_at
   const validated = !!cfg?.hash
   const fecha = (iso: string) => new Date(iso).toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' })
+
+  // Para columnas `date` puras (AAAA-MM-DD), que NO son marcas de tiempo.
+  // new Date('2026-07-01') las interpreta como medianoche UTC y, al pintarlas
+  // en hora de RD (UTC-4), retroceden al día anterior. Añadir la hora sin 'Z'
+  // fuerza a interpretarlas como medianoche LOCAL, que es lo que significan.
+  const fechaDia = (ymd: string) =>
+    new Date(`${ymd}T00:00:00`).toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' })
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -726,11 +797,46 @@ function TrafficTab() {
               </button>
             )}
             {validated && (
-              <button onClick={syncNow} disabled={!!busy}
-                style={{ ...s.btnPrimary, opacity: busy ? 0.6 : 1 }}>
-                {busy === 'syncing' ? 'Sincronizando…' : 'Sincronizar ahora'}
+              <button onClick={syncNow} disabled={!!busy || !!rangeError}
+                style={{ ...s.btnPrimary, opacity: (busy || rangeError) ? 0.6 : 1 }}>
+                {busy === 'syncing'
+                  ? 'Sincronizando…'
+                  : (rangeOpen && rangeFrom && rangeTo && !rangeError)
+                    ? `Sincronizar ${rangeFrom} → ${rangeTo}`
+                    : 'Sincronizar ahora'}
               </button>
             )}
+            {validated && !rangeOpen && (
+              <button onClick={() => setRangeOpen(true)}
+                style={{ background: 'none', border: 'none', color: '#2563EB', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+                Rango personalizado
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Rango histórico. Cerrado no existe: el botón trae los últimos 7 días
+            como siempre, sin preguntar nada. */}
+        {validated && rangeOpen && (
+          <div style={{ marginTop: '0.75rem', padding: '0.7rem 0.85rem', borderRadius: '8px', background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div>
+                <label style={s.fieldLabel}>Desde</label>
+                <input type="date" style={{ ...s.field, width: '160px' }} value={rangeFrom} onChange={e => setRangeFrom(e.target.value)} />
+              </div>
+              <div>
+                <label style={s.fieldLabel}>Hasta</label>
+                <input type="date" style={{ ...s.field, width: '160px' }} value={rangeTo} onChange={e => setRangeTo(e.target.value)} />
+              </div>
+              <button
+                onClick={() => { setRangeOpen(false); setRangeFrom(''); setRangeTo('') }}
+                style={{ ...s.btnOutline, padding: '0.5rem 0.8rem' }}>
+                Volver a los últimos 7 días
+              </button>
+            </div>
+            <div style={{ marginTop: '0.5rem', fontSize: '0.76rem', color: rangeError ? '#B45309' : '#94A3B8' }}>
+              {rangeError ?? `Se sincronizarán ${spanDays(rangeFrom, rangeTo)} día(s). Los días ya importados en ese periodo se sobrescriben.`}
+            </div>
           </div>
         )}
 
@@ -795,6 +901,53 @@ function TrafficTab() {
           </div>
         )}
       </div>
+
+      {/* Qué tráfico hay cargado. Solo primer y último día: la columna "Días"
+          es la que delata los huecos — si dice 49 sobre un rango de 49, está
+          completo; si dice 9, faltan datos en medio. */}
+      {coverage && (
+        <div style={s.formCard}>
+          <div style={s.formTitle}>Tráfico cargado por zona</div>
+          {coverage.length === 0 ? (
+            <p style={{ color: '#94A3B8', fontSize: '0.82rem' }}>
+              Ninguna zona tiene emplazamiento asignado todavía. Se asigna al editar la zona,
+              en Programas → Editar zonas.
+            </p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr style={{ color: '#94A3B8', fontSize: '0.72rem', textAlign: 'left' }}>
+                    <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Zona</th>
+                    <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Panel</th>
+                    <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Datos</th>
+                    <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600, textAlign: 'right' }}>Días</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {coverage.map(r => (
+                    <tr key={r.zone_id} style={{ borderTop: '1px solid #F1F5F9' }}>
+                      <td style={{ padding: '0.5rem' }}>
+                        <div style={{ fontWeight: 600, color: '#0F172A' }}>{r.zone_name}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>{r.program_name}</div>
+                      </td>
+                      <td style={{ padding: '0.5rem', fontFamily: 'monospace', fontSize: '0.76rem', color: '#64748B' }}>
+                        {r.panel_id}
+                      </td>
+                      <td style={{ padding: '0.5rem', color: r.days > 0 ? '#0F172A' : '#94A3B8' }}>
+                        {r.days > 0 ? `${fechaDia(r.first_date!)} → ${fechaDia(r.last_date!)}` : 'Sin datos'}
+                      </td>
+                      <td style={{ padding: '0.5rem', textAlign: 'right', fontWeight: 700, color: r.days > 0 ? '#0F172A' : '#94A3B8' }}>
+                        {r.days}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Lista de emplazamientos: solo lectura. El mapeo con las zonas se hace
           en el editor de zonas, no aquí. */}

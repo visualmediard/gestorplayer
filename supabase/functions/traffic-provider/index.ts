@@ -81,6 +81,12 @@ function isoDay(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 
+// Formato estricto AAAA-MM-DD. No vale con que Date() sepa parsearlo: acepta
+// medio mundo ('1 jul 2026', '2026/07/01') y aquí queremos una sola forma.
+function isYmd(v: unknown): v is string {
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+}
+
 // Enumera los días del rango, extremos incluidos. Se necesita completo porque
 // un panel vivo sin datos escribe CEROS, y para eso hay que saber qué días
 // tocaba escribir aunque el proveedor no devuelva ninguna fila de ellos.
@@ -197,7 +203,7 @@ Deno.serve(async (req) => {
   }
   const orgId = caller.organization_id as string
 
-  let body: { action?: string; days?: number }
+  let body: { action?: string; days?: number; from?: string; to?: string }
   try { body = await req.json() } catch { return json({ error: 'Cuerpo inválido' }, 400) }
 
   const action = body.action
@@ -267,9 +273,50 @@ Deno.serve(async (req) => {
 
   // ── sync ────────────────────────────────────────────────────────────────
   if (action === 'sync') {
-    const days = Math.min(MAX_DAYS, Math.max(1, Number(body.days) || DEFAULT_DAYS))
-    const end = rdToday()
-    const start = new Date(end.getTime() - (days - 1) * 86_400_000)
+    // Rango: por defecto los últimos DEFAULT_DAYS días; con `from`/`to`, el
+    // periodo que pida el usuario (traer histórico para un reporte puntual).
+    //
+    // La validación se repite aquí aunque la UI ya la haga: esto es un
+    // endpoint HTTP autenticado, y cualquiera con sesión de admin puede
+    // llamarlo con lo que quiera. Un rango de diez años acabaría en un timeout
+    // de la función con el trabajo a medias.
+    let start: Date
+    let end: Date
+
+    if (body.from || body.to) {
+      if (!isYmd(body.from) || !isYmd(body.to)) {
+        return json({ error: 'El rango debe traer dos fechas con formato AAAA-MM-DD' }, 400)
+      }
+      start = new Date(`${body.from}T00:00:00Z`)
+      end   = new Date(`${body.to}T00:00:00Z`)
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return json({ error: 'El rango tiene alguna fecha inválida' }, 400)
+      }
+      if (start.getTime() > end.getTime()) {
+        return json({ error: 'La fecha inicial no puede ser posterior a la final' }, 400)
+      }
+
+      // Pedir "hasta fin de año" es una forma natural de decir "hasta donde
+      // haya": se recorta en vez de rechazar. Si el inicio ya es futuro, no.
+      const today = rdToday()
+      if (end.getTime() > today.getTime()) end = today
+      if (start.getTime() > today.getTime()) {
+        return json({ error: 'La fecha inicial es posterior a hoy' }, 400)
+      }
+
+      const span = Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1
+      if (span > MAX_DAYS) {
+        return json({
+          error: `El rango es de ${span} días y el máximo por sincronización es ${MAX_DAYS}. `
+               + 'Divídelo en tramos: se pueden solapar sin problema, porque cada pasada sobrescribe.',
+        }, 400)
+      }
+    } else {
+      const days = Math.min(MAX_DAYS, Math.max(1, Number(body.days) || DEFAULT_DAYS))
+      end = rdToday()
+      start = new Date(end.getTime() - (days - 1) * 86_400_000)
+    }
+
     // end_date es INCLUSIVO (comprobado contra la API: start=end devuelve ese
     // día), así que la ventana es [hoy-(n-1), hoy] y no hace falta sumar uno.
     const startParam = `${isoDay(start)}T00:00:00`
