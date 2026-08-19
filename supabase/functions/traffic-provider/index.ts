@@ -6,6 +6,8 @@
 //               un vistazo que pegó el token correcto.
 //   - panels:   lista los emplazamientos del cliente, cruzados con el estado
 //               de sus sensores, para mapearlos a las zonas de GestPlayer.
+//   - sync:     trae el conteo de los últimos días y lo vuelca en
+//               traffic_counts, una fila por zona y día.
 //
 // EL TOKEN NUNCA SALE DE AQUÍ. Se lee con service_role desde
 // traffic_provider_secrets --tabla que el frontend no puede ni consultar-- se
@@ -39,6 +41,74 @@ function json(body: unknown, status = 200): Response {
 }
 
 type Panel = { id: number; name: string; description: string | null; address: string | null }
+
+// Una fila por bucket Y POR TIPO: hay que pivotarla a una fila por día.
+type DataRow = { event_date: string; total: number; type: string }
+type PanelBlock = { panel_id: number; data: DataRow[] | null }
+
+// Tipos del proveedor → columnas de traffic_counts. El resto se ignora en
+// silencio: si mañana añaden una categoría, la carga no debe romperse.
+const TYPE_TO_COLUMN: Record<string, string> = {
+  person: 'pedestrians',
+  car: 'cars',
+  truck: 'trucks',
+  bus: 'buses',
+  bicycle: 'bikes',
+  motorbike: 'motorcycles',
+}
+
+// Ventana por defecto. Se re-pide una ventana entera en vez del último día
+// porque el proveedor corrige datos recientes: al hacer upsert, cada
+// sincronización repara sola lo que hubiera quedado mal.
+const DEFAULT_DAYS = 7
+const MAX_DAYS = 90
+
+// Fecha "de hoy" en República Dominicana (UTC-4 todo el año, sin horario de
+// verano). Se usa la hora local y no UTC porque los días del proveedor son
+// días naturales de allí, y con UTC las últimas cuatro horas de cada jornada
+// caerían en el día siguiente.
+//
+// PENDIENTE: el proveedor no documenta la zona horaria de event_date. Esto es
+// la hipótesis razonable, no una certeza confirmada por ellos.
+const RD_OFFSET_MS = 4 * 60 * 60 * 1000
+
+function rdToday(): Date {
+  const now = new Date(Date.now() - RD_OFFSET_MS)
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+}
+
+function isoDay(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+
+// Enumera los días del rango, extremos incluidos. Se necesita completo porque
+// un panel vivo sin datos escribe CEROS, y para eso hay que saber qué días
+// tocaba escribir aunque el proveedor no devuelva ninguna fila de ellos.
+function daysBetween(start: Date, end: Date): string[] {
+  const out: string[] = []
+  for (let t = start.getTime(); t <= end.getTime(); t += 86_400_000) {
+    out.push(isoDay(new Date(t)))
+  }
+  return out
+}
+
+// data[] → { '2026-08-13': { cars: 32354, buses: 533, ... , _total: 97858 } }
+function pivotByDay(rows: DataRow[] | null): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {}
+  for (const r of rows ?? []) {
+    const day = (r.event_date ?? '').slice(0, 10)
+    if (!day) continue
+    const col = TYPE_TO_COLUMN[r.type]
+    const n = Number(r.total) || 0
+    const bucket = out[day] ?? (out[day] = { _total: 0 })
+    if (col) bucket[col] = (bucket[col] ?? 0) + n
+    // El total del día suma TODOS los tipos, incluidos los que no tienen
+    // columna propia: si no, el total dejaría de cuadrar con el desglose real
+    // del proveedor en cuanto añadieran una categoría.
+    bucket._total += n
+  }
+  return out
+}
 type SensorEntry = { status: number | null; updated: string | null }
 type SensorsRow = { panel_id: number; sensors_status: Record<string, SensorEntry> | null }
 
@@ -127,11 +197,11 @@ Deno.serve(async (req) => {
   }
   const orgId = caller.organization_id as string
 
-  let body: { action?: string }
+  let body: { action?: string; days?: number }
   try { body = await req.json() } catch { return json({ error: 'Cuerpo inválido' }, 400) }
 
   const action = body.action
-  if (action !== 'validate' && action !== 'panels') {
+  if (action !== 'validate' && action !== 'panels' && action !== 'sync') {
     return json({ error: 'Acción no reconocida' }, 400)
   }
 
@@ -178,15 +248,157 @@ Deno.serve(async (req) => {
     })
   }
 
-  // ── panels ──────────────────────────────────────────────────────────────
+  // ── hash de cliente, necesario para todo lo que no sea /clients ─────────
+  // Guardar un token nuevo lo pone a NULL a propósito (puede ser de otra
+  // cuenta), así que este corte es el caso normal tras cambiar el token, no
+  // una rareza. Sin él, el proveedor respondería un error mucho menos claro.
   const { data: cfg } = await admin
     .from('traffic_providers').select('hash')
     .eq('organization_id', orgId).single()
 
   if (!cfg?.hash) {
-    return json({ error: 'Valida el token antes de listar los emplazamientos' }, 400)
+    return json({
+      error: action === 'sync'
+        ? 'Valida la conexión antes de sincronizar'
+        : 'Valida el token antes de listar los emplazamientos',
+    }, 400)
   }
   const hash = cfg.hash as string
+
+  // ── sync ────────────────────────────────────────────────────────────────
+  if (action === 'sync') {
+    const days = Math.min(MAX_DAYS, Math.max(1, Number(body.days) || DEFAULT_DAYS))
+    const end = rdToday()
+    const start = new Date(end.getTime() - (days - 1) * 86_400_000)
+    // end_date es INCLUSIVO (comprobado contra la API: start=end devuelve ese
+    // día), así que la ventana es [hoy-(n-1), hoy] y no hace falta sumar uno.
+    const startParam = `${isoDay(start)}T00:00:00`
+    const endParam   = `${isoDay(end)}T00:00:00`
+
+    // Zonas mapeadas de ESTA organización, en dos consultas explícitas.
+    //
+    // Esta es la ÚNICA barrera entre organizaciones para esta ruta: `admin` es
+    // el cliente de service_role, que salta la RLS, así que las políticas de
+    // zones y traffic_counts no se evalúan aquí.
+    //
+    // Se resuelve con un IN sobre ids obtenidos a partir de orgId --y no
+    // filtrando por un recurso embebido-- porque aquella forma dependía del
+    // sufijo `!inner`: sin él, PostgREST devuelve TODAS las zonas con el
+    // embebido en null en vez de filtrarlas. La consulta seguiría siendo
+    // válida y el aislamiento se rompería en silencio, sin error. Una consulta
+    // de más es un precio ridículo por que el fallo sea imposible.
+    const { data: progs, error: pErr } = await admin
+      .from('programs').select('id').eq('organization_id', orgId)
+
+    if (pErr) return json({ error: 'No se pudieron leer los programas: ' + pErr.message }, 500)
+
+    const programIds = (progs ?? []).map(p => p.id as string)
+    if (programIds.length === 0) {
+      return json({ ok: true, zones: 0, rows: 0, warnings: [], note: 'la organización no tiene programas' })
+    }
+
+    const { data: zoneRows, error: zErr } = await admin
+      .from('zones')
+      .select('id, name, traffic_panel_id')
+      .in('program_id', programIds)
+      .not('traffic_panel_id', 'is', null)
+
+    if (zErr) return json({ error: 'No se pudieron leer las zonas: ' + zErr.message }, 500)
+
+    const zones = (zoneRows ?? []) as { id: string; name: string; traffic_panel_id: number }[]
+    if (zones.length === 0) {
+      return json({ ok: true, zones: 0, rows: 0, warnings: [], note: 'ninguna zona tiene emplazamiento asignado' })
+    }
+
+    // DOS llamadas en total, no dos por zona: /all_panels devuelve un bloque
+    // por panel con su propio panel_id, así que se piden una vez y se indexan.
+    const qs = `?start_date=${startParam}&end_date=${endParam}&group_by=day&types=all`
+    let counts: PanelBlock[]
+    let impacts: PanelBlock[]
+    try {
+      const [c, i] = await Promise.all([
+        callProvider(`/all_panels/processed_data${qs}`, token, hash),
+        callProvider(`/all_panels/impact_processed_data${qs}`, token, hash),
+      ])
+      counts  = ((c as { panels?: PanelBlock[] })?.panels ?? [])
+      impacts = ((i as { panels?: PanelBlock[] })?.panels ?? [])
+    } catch (e) {
+      return json({ error: (e as Error).message }, 502)
+    }
+
+    const countsBy  = new Map<number, PanelBlock>(counts.map(p => [p.panel_id, p]))
+    const impactsBy = new Map<number, PanelBlock>(impacts.map(p => [p.panel_id, p]))
+
+    const allDays = daysBetween(start, end)
+    const rows: Record<string, unknown>[] = []
+    const warnings: { zone: string; panel_id: number; reason: string }[] = []
+    const nowIso = new Date().toISOString()
+
+    for (const z of zones) {
+      const panelId = z.traffic_panel_id
+      const cBlock = countsBy.get(panelId)
+
+      // Un panel mapeado que el proveedor no lista entre los activos: se avisa
+      // y NO se escribe nada. Escribir ceros aquí sería inventar que el
+      // emplazamiento midió cero, cuando en realidad no sabemos qué midió.
+      if (!cBlock) {
+        warnings.push({
+          zone: z.name, panel_id: panelId,
+          reason: 'El proveedor no lo incluye entre sus emplazamientos activos. No se escribió nada.',
+        })
+        continue
+      }
+
+      const byDayCounts  = pivotByDay(cBlock.data)
+      const byDayImpacts = pivotByDay(impactsBy.get(panelId)?.data ?? null)
+
+      // Se recorren TODOS los días de la ventana, no solo los que devolvió el
+      // proveedor: un panel activo sin datos ese día se guarda como cero, que
+      // es información real (no hubo tráfico medido) y evita huecos que luego
+      // se confundan con "todavía no sincronizado".
+      for (const day of allDays) {
+        const c = byDayCounts[day] ?? {}
+        const i = byDayImpacts[day] ?? {}
+        rows.push({
+          zone_id: z.id,
+          date: day,
+          pedestrians: c.pedestrians ?? 0,
+          cars:        c.cars ?? 0,
+          trucks:      c.trucks ?? 0,
+          buses:       c.buses ?? 0,
+          bikes:       c.bikes ?? 0,
+          motorcycles: c.motorcycles ?? 0,
+          total_count: c._total ?? 0,
+          // Se guarda tal cual lo entrega el proveedor, sin recalcular: ese
+          // factor lo firma él y es lo que hace la cifra defendible.
+          total_impacts: i._total ?? 0,
+          source_file: `datavisiooh:panel_${panelId}`,
+          source_location: String(panelId),
+          imported_at: nowIso,
+          imported_by: user.id,
+        })
+      }
+    }
+
+    if (rows.length > 0) {
+      // La API manda sobre lo importado a mano: un día que ya existiera por
+      // Excel se sobrescribe, y source_file deja constancia de quién lo puso.
+      const { error: upErr } = await admin
+        .from('traffic_counts').upsert(rows, { onConflict: 'zone_id,date' })
+      if (upErr) return json({ error: 'No se pudo guardar el conteo: ' + upErr.message, warnings }, 500)
+    }
+
+    return json({
+      ok: true,
+      zones: zones.length - warnings.length,
+      rows: rows.length,
+      from: isoDay(start),
+      to: isoDay(end),
+      warnings,
+    })
+  }
+
+  // ── panels ──────────────────────────────────────────────────────────────
 
   let panels: Panel[]
   let sensors: SensorsRow[]

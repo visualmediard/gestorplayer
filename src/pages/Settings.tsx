@@ -528,7 +528,10 @@ function TrafficTab() {
   const [cfg, setCfg] = useState<ProviderCfg | null>(null)
   const [loading, setLoading] = useState(true)
   const [token, setToken] = useState('')
-  const [busy, setBusy] = useState<null | 'saving' | 'validating' | 'panels' | 'clearing'>(null)
+  const [busy, setBusy] = useState<null | 'saving' | 'validating' | 'panels' | 'clearing' | 'syncing'>(null)
+  const [syncResult, setSyncResult] = useState<
+    { rows: number; zones: number; from: string; to: string; note?: string; warnings: { zone: string; panel_id: number; reason: string }[] } | null
+  >(null)
   const [error, setError] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -552,7 +555,7 @@ function TrafficTab() {
 
   // Extrae el mensaje real del cuerpo cuando la función responde con error,
   // igual que callManageUser en la pestaña de usuarios.
-  async function invokeProvider(action: 'validate' | 'panels') {
+  async function invokeProvider(action: 'validate' | 'panels' | 'sync') {
     const { data, error: fnErr } = await supabase.functions.invoke('traffic-provider', { body: { action } })
     if (fnErr) {
       let msg = fnErr.message
@@ -613,6 +616,24 @@ function TrafficTab() {
 
     setClientName(null); setPanels(null)
     await loadCfg()
+  }
+
+  // Sincronización manual. El cron automático vendrá después; este botón es el
+  // que permite comprobar el ciclo completo con datos reales.
+  async function syncNow() {
+    setError(null); setSyncResult(null)
+    setBusy('syncing')
+    const res = await invokeProvider('sync')
+    setBusy(null)
+    if (!res.ok) { setError(res.error); return }
+    setSyncResult({
+      rows: res.data?.rows ?? 0,
+      zones: res.data?.zones ?? 0,
+      from: res.data?.from ?? '',
+      to: res.data?.to ?? '',
+      note: res.data?.note,
+      warnings: res.data?.warnings ?? [],
+    })
   }
 
   async function saveDocsUrl() {
@@ -703,6 +724,29 @@ function TrafficTab() {
               <button onClick={loadPanels} disabled={!!busy} style={{ ...s.btnOutline, opacity: busy ? 0.6 : 1 }}>
                 {busy === 'panels' ? 'Consultando…' : 'Ver emplazamientos'}
               </button>
+            )}
+            {validated && (
+              <button onClick={syncNow} disabled={!!busy}
+                style={{ ...s.btnPrimary, opacity: busy ? 0.6 : 1 }}>
+                {busy === 'syncing' ? 'Sincronizando…' : 'Sincronizar ahora'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {syncResult && (
+          <div style={{ marginTop: '0.9rem', padding: '0.7rem 0.85rem', borderRadius: '8px', background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#047857', fontSize: '0.8rem' }}>
+            {syncResult.note
+              ? syncResult.note
+              : <>Sincronizado: <strong>{syncResult.zones}</strong> zona(s) · <strong>{syncResult.rows}</strong> día(s) escritos, del {syncResult.from} al {syncResult.to}.</>}
+            {syncResult.warnings.length > 0 && (
+              <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem', color: '#B45309' }}>
+                {syncResult.warnings.map(w => (
+                  <li key={`${w.zone}-${w.panel_id}`} style={{ marginTop: '0.2rem' }}>
+                    <strong>{w.zone}</strong> (panel {w.panel_id}): {w.reason}
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}
