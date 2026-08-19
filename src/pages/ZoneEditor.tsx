@@ -10,7 +10,7 @@ import { useAuth } from '../auth/AuthContext'
 import { useDialog } from '../components/Dialog'
 
 type Program = { id: string; name: string; width: number; height: number; organization_id: string | null }
-type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean; fit_mode: string | null }
+type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean; fit_mode: string | null; traffic_panel_id: number | null }
 type SubPlaylist = { id: string; name: string; sort_order: number; is_unlimited: boolean; daily_frequency: number | null }
 type MediaItem = { id: string; name: string; type: 'image' | 'video' | 'url'; storage_path: string; url?: string; duration_seconds: number | null; sort_order: number; daily_frequency: number | null; is_unlimited: boolean; sub_playlist_id: string | null; expires_at: string | null; schedule_days: number[] | null; schedule_start: string | null; schedule_end: string | null; campaign_id: string | null }
 type PlaylistEntry = { kind: 'item'; item: MediaItem } | { kind: 'sub'; sub: SubPlaylist; items: MediaItem[] }
@@ -126,6 +126,9 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   const [schedStart, setSchedStart] = useState('06:00')
   const [schedEnd, setSchedEnd] = useState('22:00')
   const [editingZone, setEditingZone] = useState<Zone | null>(null)
+  // Emplazamiento del proveedor de conteo asociado a la zona que se edita.
+  // NULL = sin mapear, que es un estado perfectamente válido.
+  const [editZonePanelId, setEditZonePanelId] = useState<number | null>(null)
   const [editZoneName, setEditZoneName] = useState('')
   const [editZoneX, setEditZoneX] = useState(0)
   const [editZoneY, setEditZoneY] = useState(0)
@@ -303,7 +306,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
 
   async function handleSaveZone() {
     if (!editingZone) return
-    await supabase.from('zones').update({ name: editZoneName.trim(), x: editZoneX, y: editZoneY, width: editZoneW, height: editZoneH, background_color: editZoneColor, fit_mode: editZoneFit }).eq('id', editingZone.id)
+    await supabase.from('zones').update({ name: editZoneName.trim(), x: editZoneX, y: editZoneY, width: editZoneW, height: editZoneH, background_color: editZoneColor, fit_mode: editZoneFit, traffic_panel_id: editZonePanelId }).eq('id', editingZone.id)
     setEditingZone(null); load()
   }
 
@@ -592,7 +595,7 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                     <span style={{ color: '#0F172A', fontWeight: 600, fontSize: '0.875rem' }}>{z.name}</span>
                   </div>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button style={s.btnSm} onClick={e => { e.stopPropagation(); setEditingZone(z); setEditZoneName(z.name); setEditZoneX(z.x); setEditZoneY(z.y); setEditZoneW(z.width); setEditZoneH(z.height); setEditZoneColor(z.background_color); setEditZoneFit(z.fit_mode || 'cover') }}>Editar</button>
+                    <button style={s.btnSm} onClick={e => { e.stopPropagation(); setEditingZone(z); setEditZoneName(z.name); setEditZoneX(z.x); setEditZoneY(z.y); setEditZoneW(z.width); setEditZoneH(z.height); setEditZoneColor(z.background_color); setEditZoneFit(z.fit_mode || 'cover'); setEditZonePanelId(z.traffic_panel_id ?? null) }}>Editar</button>
                     <button style={s.btnSmDanger} onClick={e => { e.stopPropagation(); handleDeleteZone(z.id) }}>Eliminar</button>
                   </div>
                 </div>
@@ -608,6 +611,18 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                       <div style={s.formGroup}><label style={s.label}>Color</label><div style={{ display: 'flex', gap: '0.3rem' }}>{COLORS.map(c => <div key={c} onClick={() => setEditZoneColor(c)} style={{ width: '20px', height: '20px', borderRadius: '3px', background: c, cursor: 'pointer', border: editZoneColor === c ? '2px solid #3B82F6' : '2px solid #E2E8F0' }} />)}</div></div>
                       <div style={s.formGroup}><label style={s.label}>Ajuste del video</label><select style={s.input} value={editZoneFit} onChange={e => setEditZoneFit(e.target.value)}>{FIT_MODES.map(f => <option key={f.v} value={f.v}>{f.l} — {f.d}</option>)}</select></div>
                     </div>
+                    {/* Mapeo con el proveedor de conteo. Solo para admins: la
+                        Edge Function devuelve 403 a quien no lo sea, así que
+                        mostrarlo a un operador sería ofrecerle un botón roto. */}
+                    {profile?.role === 'admin' && (
+                      <TrafficPanelPicker
+                        value={editZonePanelId}
+                        onChange={setEditZonePanelId}
+                        zones={zones}
+                        currentZoneId={z.id}
+                      />
+                    )}
+
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button style={s.btnPrimary} onClick={handleSaveZone}>Guardar</button>
                       <button style={s.btnOutline} onClick={() => setEditingZone(null)}>Cancelar</button>
@@ -958,6 +973,199 @@ export default function ZoneEditor({ programId, onBack }: Props) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Selector de emplazamiento del proveedor de conteo ───────────────────────
+// Asocia esta zona (una cara del rótulo) con un panel de DataVisiooh.
+//
+// Carga perezosa a propósito: no pide nada hasta que el usuario abre la lista.
+// Abrir el editor de zonas no debe costar dos llamadas a un tercero, y una
+// organización sin conteo vehicular no llega a hacer ni una.
+type ProviderPanel = {
+  id: number
+  name: string
+  description: string | null
+  address: string | null
+  sensor_status: number | null
+  sensor_updated: string | null
+  sensor_stale: boolean
+  looks_inactive: boolean
+}
+
+function TrafficPanelPicker({ value, onChange, zones, currentZoneId }: {
+  value: number | null
+  onChange: (v: number | null) => void
+  zones: Zone[]
+  currentZoneId: string
+}) {
+  const { confirm } = useDialog()
+  const [open, setOpen] = useState(false)
+  const [panels, setPanels] = useState<ProviderPanel[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [q, setQ] = useState('')
+
+  async function openPicker() {
+    setOpen(true)
+    if (panels || loading) return          // ya cargado en esta sesión
+    setLoading(true); setError(null)
+
+    const { data, error: fnErr } = await supabase.functions.invoke('traffic-provider', {
+      body: { action: 'panels' },
+    })
+    setLoading(false)
+
+    if (fnErr) {
+      // El mensaje real viaja en el cuerpo; el de supabase-js es genérico.
+      // Sin token configurado la función responde 400 con una frase que ya
+      // explica qué hacer, así que se muestra tal cual.
+      let msg = fnErr.message
+      try { const j = await (fnErr as any).context?.json(); if (j?.error) msg = j.error } catch { /* ignore */ }
+      setError(msg)
+      return
+    }
+    setPanels((data?.panels ?? []) as ProviderPanel[])
+  }
+
+  const fecha = (iso: string) => new Date(iso).toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' })
+
+  // Aviso de duplicado: dos caras distintas deberían apuntar a paneles
+  // distintos. Solo alcanza a las zonas de ESTE programa, que son las que el
+  // editor tiene cargadas; un duplicado en otro programa no se detecta.
+  function zoneUsing(panelId: number): Zone | undefined {
+    return zones.find(z => z.id !== currentZoneId && z.traffic_panel_id === panelId)
+  }
+
+  async function pick(p: ProviderPanel) {
+    // Freno, no bloqueo: un sensor puede estar en mantenimiento y volver
+    // mañana. Se explica la consecuencia y se deja decidir.
+    if (p.looks_inactive || p.sensor_stale) {
+      const motivo = p.looks_inactive
+        ? 'El proveedor lo tiene marcado como inactivo.'
+        : `Su sensor no reporta desde ${p.sensor_updated ? fecha(p.sensor_updated) : 'hace tiempo'}.`
+      if (!await confirm({
+        title: `¿Mapear a "${p.name}" de todos modos?`,
+        message: `${motivo} Mientras siga así, el conteo de esta zona saldrá en cero.`,
+        confirmLabel: 'Mapear igual',
+      })) return
+    }
+
+    const otra = zoneUsing(p.id)
+    if (otra) {
+      if (!await confirm({
+        title: 'Este emplazamiento ya está en uso',
+        message: `La zona "${otra.name}" ya apunta al panel ${p.id}. Dos caras del rótulo deberían usar paneles distintos, o el mismo tráfico se contará dos veces. ¿Continuar?`,
+        confirmLabel: 'Usarlo igual',
+      })) return
+    }
+
+    onChange(p.id)
+    setOpen(false)
+  }
+
+  const filtered = (panels ?? []).filter(p => {
+    if (!q.trim()) return true
+    const hay = `${p.id} ${p.name} ${p.description ?? ''} ${p.address ?? ''}`.toLowerCase()
+    return hay.includes(q.trim().toLowerCase())
+  })
+
+  const mapped = panels?.find(p => p.id === value)
+
+  return (
+    <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '0.75rem', marginTop: '0.25rem' }}>
+      <label style={{ ...s.label, display: 'block', marginBottom: '0.4rem' }}>
+        Emplazamiento de conteo vehicular
+      </label>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {value ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.35rem 0.7rem', borderRadius: '999px', background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#2563EB', fontSize: '0.78rem', fontWeight: 600 }}>
+            #{value}{mapped ? ` · ${mapped.name}` : ''}
+          </span>
+        ) : (
+          <span style={{ color: '#94A3B8', fontSize: '0.78rem' }}>Sin mapear</span>
+        )}
+
+        <button type="button" style={s.btnSm} onClick={openPicker}>
+          {value ? 'Cambiar' : 'Elegir emplazamiento'}
+        </button>
+        {value && (
+          <button type="button" style={s.btnSm} onClick={() => onChange(null)}>Quitar mapeo</button>
+        )}
+      </div>
+
+      {open && (
+        <div style={{ marginTop: '0.6rem', border: '1px solid #E2E8F0', borderRadius: '10px', background: '#fff', padding: '0.6rem' }}>
+          {loading && <div style={{ color: '#94A3B8', fontSize: '0.8rem', padding: '0.5rem' }}>Consultando al proveedor…</div>}
+
+          {/* Degradación con gracia: sin token, la función responde con una
+              frase accionable. El resto del editor sigue funcionando. */}
+          {error && (
+            <div style={{ padding: '0.6rem 0.75rem', borderRadius: '8px', background: '#F8FAFC', border: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.78rem' }}>
+              {error}
+              <div style={{ marginTop: '0.35rem', color: '#94A3B8' }}>
+                Se configura en Configuración → Conteo vehicular. El mapeo es opcional:
+                una zona sin emplazamiento funciona igual que hasta ahora.
+              </div>
+            </div>
+          )}
+
+          {panels && !error && (
+            <>
+              <input
+                style={{ ...s.input, width: '100%', boxSizing: 'border-box', marginBottom: '0.5rem' }}
+                value={q}
+                onChange={e => setQ(e.target.value)}
+                placeholder={`Buscar entre ${panels.length} emplazamientos…`}
+              />
+              <div style={{ maxHeight: '260px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                {filtered.length === 0 && (
+                  <div style={{ color: '#94A3B8', fontSize: '0.78rem', padding: '0.5rem' }}>Ningún emplazamiento coincide.</div>
+                )}
+                {filtered.map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => pick(p)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '0.6rem', textAlign: 'left',
+                      padding: '0.5rem 0.6rem', borderRadius: '8px', cursor: 'pointer',
+                      border: p.id === value ? '1px solid #BFDBFE' : '1px solid #F1F5F9',
+                      background: p.id === value ? '#EFF6FF' : (p.looks_inactive ? '#F8FAFC' : '#fff'),
+                      opacity: p.looks_inactive ? 0.6 : 1,
+                    }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: '#94A3B8', width: '44px', flexShrink: 0 }}>{p.id}</span>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#0F172A' }}>{p.name}</span>
+                      <span style={{ display: 'block', fontSize: '0.72rem', color: '#64748B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {p.description ?? p.address ?? '—'}
+                      </span>
+                    </span>
+                    {zoneUsing(p.id) && (
+                      <span style={{ fontSize: '0.68rem', color: '#2563EB', border: '1px solid #BFDBFE', borderRadius: '999px', padding: '1px 7px', flexShrink: 0 }}>En uso</span>
+                    )}
+                    {p.looks_inactive && (
+                      <span style={{ fontSize: '0.68rem', color: '#94A3B8', border: '1px solid #E2E8F0', borderRadius: '999px', padding: '1px 7px', flexShrink: 0 }}>Inactivo</span>
+                    )}
+                    {p.sensor_stale && (
+                      <span title={p.sensor_updated ? `Último reporte: ${fecha(p.sensor_updated)}` : 'Sin datos de sensor'}
+                        style={{ fontSize: '0.68rem', color: '#B45309', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '999px', padding: '1px 7px', flexShrink: 0 }}>
+                        Sin reportar
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div style={{ marginTop: '0.5rem', textAlign: 'right' }}>
+            <button type="button" style={s.btnSm} onClick={() => setOpen(false)}>Cerrar</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
