@@ -297,7 +297,23 @@ export default function Player() {
     if (!screen || !token) return
     // app_version viaja aquí para poder comprobar, antes de cerrar las tablas
     // (fase 5), que ninguna pantalla sigue con el bundle viejo.
-    await supabase.rpc('player_heartbeat', { p_token: token, p_app_version: APP_VERSION })
+    //
+    // p_synced_published_at es el acuse de recibo de la publicación: le dice al
+    // panel QUÉ versión tiene aplicada esta pantalla, para que pueda distinguir
+    // "sincronizada" de "esperando conexión" sin adivinarlo. Viaja dentro del
+    // latido y no en una llamada aparte: si llega uno, llega el otro.
+    //
+    // Se manda lastPublishedRef, que es el valor que bumpIfNewPublish dio por
+    // aplicado. Entre que se marca y que ScreenStage termina de recargar pasan
+    // milisegundos, y el latido es cada 30 s, así que en la práctica el acuse
+    // siempre va por detrás de la recarga real. Mientras el player no haya
+    // leído todavía ninguna publicación va NULL, que el panel interpreta como
+    // "desconocido" y nunca como "desincronizada".
+    await supabase.rpc('player_heartbeat', {
+      p_token: token,
+      p_app_version: APP_VERSION,
+      p_synced_published_at: lastPublishedRef.current,
+    })
   }
 
   // Re-chequea al montar y cada vez que el token cambia (p. ej. tras vincular

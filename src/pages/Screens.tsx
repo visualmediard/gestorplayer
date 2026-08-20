@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../auth/AuthContext'
 import { hasRole } from '../lib/roles'
+import { ONLINE_THRESHOLD_MIN } from '../lib/screenSync'
 import { useDialog } from '../components/Dialog'
 import ScreenStage from '../components/ScreenStage'
 
@@ -84,7 +85,9 @@ function getStatus(hb: string | null, prog: string | null) {
   if (!prog) return { label: 'Sin programa', color: '#F59E0B', dot: '#F59E0B' }
   if (!hb) return { label: 'Player no corriendo', color: '#94A3B8', dot: '#CBD5E1' }
   const mins = (Date.now() - new Date(hb).getTime()) / 60000
-  if (mins < 2) return { label: 'Activa', color: '#10B981', dot: '#10B981' }
+  // El umbral vive en lib/screenSync para que este estado, el contador del
+  // dashboard y el semáforo de publicación no puedan desfasarse.
+  if (mins < ONLINE_THRESHOLD_MIN) return { label: 'Activa', color: '#10B981', dot: '#10B981' }
   if (mins < 5) return { label: 'Sin respuesta', color: '#F59E0B', dot: '#F59E0B' }
   return { label: 'Player no corriendo', color: '#94A3B8', dot: '#CBD5E1' }
 }

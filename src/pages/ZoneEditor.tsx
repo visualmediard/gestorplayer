@@ -8,6 +8,7 @@ import { isResting, scheduleRangeLabel, campaignDateState } from '../lib/dailySc
 import { checkStorageFits, notifyStorageChanged } from '../lib/storage'
 import { useAuth } from '../auth/AuthContext'
 import { useDialog } from '../components/Dialog'
+import { syncState, SYNC_UI, sortByAttention, type ScreenSync, type SyncState } from '../lib/screenSync'
 
 type Program = { id: string; name: string; width: number; height: number; organization_id: string | null }
 type Zone = { id: string; name: string; x: number; y: number; width: number; height: number; background_color: string; daily_frequency: number | null; is_unlimited: boolean; fit_mode: string | null; traffic_panel_id: number | null }
@@ -80,6 +81,9 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   // organización, no de este programa, así que el conteo no puede salir de
   // `zones` (que solo tiene las de aquí) y se pide aparte. Es solo el aviso:
   // la barrera real es el trigger de la base.
+  const [syncOpen, setSyncOpen] = useState(false)
+  const [syncScreens, setSyncScreens] = useState<ScreenSync[]>([])
+  const [syncPublishedAt, setSyncPublishedAt] = useState<string | null>(null)
   const [zoneLimit, setZoneLimit] = useState<number | null>(null)
   const [orgZoneCount, setOrgZoneCount] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
@@ -148,6 +152,19 @@ export default function ZoneEditor({ programId, onBack }: Props) {
   const [replacing, setReplacing] = useState(false)
   const [replaceProgress, setReplaceProgress] = useState(0)
   const replaceRef = useRef<HTMLInputElement>(null)
+
+  // Refresco mientras el modal está abierto. Se corta solo a los ~45 s: pasado
+  // ese punto, lo que falte es porque la pantalla no está conectada, y seguir
+  // consultando no aportaría nada.
+  useEffect(() => {
+    if (!syncOpen || !syncPublishedAt) return
+    const started = Date.now()
+    const iv = setInterval(() => {
+      if (Date.now() - started > 45_000) { clearInterval(iv); return }
+      loadSyncStatus(syncPublishedAt)
+    }, 5_000)
+    return () => clearInterval(iv)
+  }, [syncOpen, syncPublishedAt])
   const [showReplaceLibrary, setShowReplaceLibrary] = useState(false)
   const [replaceLibrarySearch, setReplaceLibrarySearch] = useState('')
 
@@ -302,6 +319,17 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     return <video src={getPublicUrl(item.storage_path)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} preload="metadata" muted onLoadedMetadata={e => { e.currentTarget.currentTime = 1 }} />
   }
 
+  // Estado de las pantallas que usan ESTE programa. La publicación es por
+  // programa, no por pantalla: una zona pertenece a un programa que puede estar
+  // en varias, y cada una puede ir por su cuenta.
+  async function loadSyncStatus(publishedAt: string) {
+    const { data } = await supabase
+      .from('screens').select('id, name, last_heartbeat, synced_published_at')
+      .eq('current_program_id', programId).order('name')
+    setSyncScreens((data ?? []) as ScreenSync[])
+    setSyncPublishedAt(publishedAt)
+  }
+
   async function handlePublish() {
     setPublishing(true)
     const now = new Date().toISOString()
@@ -309,6 +337,13 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     await supabase.from('screens').update({ updated_at: now } as any).eq('current_program_id', programId)
     setPublishing(false); setPublished(true)
     setTimeout(() => setPublished(false), 3000)
+
+    // El modal se abre de inmediato con el estado del momento --que será azul o
+    // ámbar, nunca verde-- y se refresca solo: sin eso verías siempre la foto
+    // inicial y parecería que nada avanza. El poll del player es de 15 s, así
+    // que 5 s de refresco durante ~45 s cubre el ciclo con margen.
+    await loadSyncStatus(now)
+    setSyncOpen(true)
   }
 
   async function handleCreateZone() {
@@ -538,6 +573,69 @@ export default function ZoneEditor({ programId, onBack }: Props) {
           </button>
         </div>
       </div>
+
+      {/* Estado de la publicación. Con varias pantallas no se resume en un
+          único estado: cualquier resumen escondería que una está al día y otra
+          no. El titular cuenta, y la lista da el detalle. */}
+      {syncOpen && (() => {
+        const rows = syncScreens
+          .map(sc => ({ sc, st: syncState(sc, syncPublishedAt) }))
+          .sort((a, b) => sortByAttention(a.st, b.st))
+        const n = rows.length
+        const count = (st: SyncState) => rows.filter(r => r.st === st).length
+        const allSame = n > 0 && rows.every(r => r.st === rows[0].st)
+
+        let title: string
+        if (n === 0) title = 'Publicado · ninguna pantalla usa este programa todavía'
+        else if (allSame) title = `Publicado · ${SYNC_UI[rows[0].st].label.replace('…', '')} en ${n} pantalla${n === 1 ? '' : 's'}`
+        else title = `Publicado · ${count('synced')} de ${n} sincronizadas`
+
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: '1rem' }}
+            onClick={() => setSyncOpen(false)}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: '#fff', borderRadius: '14px', padding: '1.5rem', width: '100%', maxWidth: '440px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#0F172A', marginBottom: '0.35rem' }}>{title}</h3>
+              <p style={{ fontSize: '0.82rem', color: '#64748B', marginBottom: '0.5rem' }}>
+                {count('waiting') > 0
+                  ? 'Hay pantallas desconectadas ahora mismo.'
+                  : count('unknown') === n && n > 0
+                    ? 'No se puede confirmar la sincronización: estas pantallas necesitan la app actualizada.'
+                    : 'El contenido ya está guardado. Las pantallas lo aplican en unos segundos.'}
+              </p>
+
+              {/* Esta frase va SIEMPRE, también con todo en verde: la duda que
+                  quita --"¿y si se apaga justo ahora?"-- aparece igual cuando
+                  todo está bien. Decirlo solo al fallar la convierte en una
+                  disculpa; decirlo siempre la convierte en una garantía. */}
+              <p style={{ fontSize: '0.8rem', color: '#047857', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: '8px', padding: '0.55rem 0.7rem', marginBottom: '1rem' }}>
+                Tu anuncio queda guardado. Si una pantalla se apaga o pierde conexión, se publicará
+                sola en cuanto vuelva a estar en línea — no hace falta volver a publicar.
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '260px', overflowY: 'auto' }}>
+                {rows.map(({ sc, st }) => {
+                  const ui = SYNC_UI[st]
+                  return (
+                    <div key={sc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.55rem 0.7rem', borderRadius: '8px', background: ui.bg, border: `1px solid ${ui.border}` }}>
+                      <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: ui.dot, flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, fontSize: '0.85rem', fontWeight: 600, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {sc.name}
+                      </span>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: ui.fg, flexShrink: 0 }}>{ui.label}</span>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <button style={{ ...s.btnPrimary, width: '100%', marginTop: '1rem', justifyContent: 'center' }}
+                onClick={() => setSyncOpen(false)}>
+                Entendido
+              </button>
+            </div>
+          </div>
+        )
+      })()}
 
       {showZoneForm && (
         <div style={s.card}>
