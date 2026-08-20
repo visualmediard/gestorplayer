@@ -66,7 +66,6 @@ export default function Register() {
         {/* Logo */}
         <div style={s.logoWrap}>
           <img src={logoNegro} alt="GestPlayer" style={{ height: '44px', width: 'auto' }} />
-          <span style={s.betaBadge}>BETA</span>
         </div>
 
         <div style={s.divider} />
@@ -135,7 +134,6 @@ const s: Record<string, React.CSSProperties> = {
   logoWrap: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '1.5rem' },
   logoIcon: { width: '36px', height: '36px', background: '#3B82F6', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   logoText: { fontWeight: 800, fontSize: '1.25rem', color: '#0F172A' },
-  betaBadge: { fontSize: '0.6rem', fontWeight: 700, background: '#EFF6FF', color: '#3B82F6', border: '1px solid #BFDBFE', borderRadius: '4px', padding: '2px 6px', letterSpacing: '0.05em' },
   divider: { height: '1px', background: '#F1F5F9', marginBottom: '1.5rem' },
   heading: { fontSize: '1.1rem', fontWeight: 700, color: '#0F172A', textAlign: 'center', margin: 0 },
   subheading: { color: '#94A3B8', fontSize: '0.82rem', textAlign: 'center', marginTop: '0.25rem' },

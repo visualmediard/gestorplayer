@@ -78,7 +78,7 @@ export default function Invite() {
         </div>
       )
     }
-    return <div style={s.logoWrap}><img src={logoNegro} alt="GestPlayer" style={{ height: '44px' }} /><span style={s.betaBadge}>BETA</span></div>
+    return <div style={s.logoWrap}><img src={logoNegro} alt="GestPlayer" style={{ height: '44px' }} /></div>
   }
 
   if (loading) {
@@ -165,7 +165,6 @@ const s: Record<string, React.CSSProperties> = {
   page: { minHeight: '100vh', background: '#F8FAFC', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Inter', system-ui, sans-serif", padding: '1.5rem' },
   card: { background: '#fff', borderRadius: '16px', padding: '2.5rem', width: '100%', maxWidth: '420px', boxShadow: '0 4px 24px rgba(0,0,0,0.08)', border: '1px solid #E2E8F0' },
   logoWrap: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '1.5rem' },
-  betaBadge: { fontSize: '0.6rem', fontWeight: 700, background: '#EFF6FF', color: '#3B82F6', border: '1px solid #BFDBFE', borderRadius: '4px', padding: '2px 6px', letterSpacing: '0.05em' },
   divider: { height: '1px', background: '#F1F5F9', marginBottom: '1.5rem' },
   heading: { fontSize: '1.1rem', fontWeight: 700, color: '#0F172A', textAlign: 'center', margin: 0 },
   subheading: { color: '#94A3B8', fontSize: '0.82rem', textAlign: 'center', marginTop: '0.25rem' },

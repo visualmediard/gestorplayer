@@ -92,7 +92,6 @@ export default function Sidebar({ current, onChange, collapsed, onToggle, isMobi
             <button onClick={() => onChange('home')} title="Ir al inicio"
               style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
               <img src={logoNegro} alt="GestPlayer" style={{ height: '46px', width: 'auto' }} />
-              <span style={s.betaBadge}>BETA</span>
             </button>
 
             <button onClick={onToggle} style={{ ...s.toggleBtn, position: 'absolute', right: '0.75rem' }} aria-label={isMobile ? 'Cerrar menú' : 'Colapsar'}>
@@ -258,11 +257,6 @@ const s: Record<string, React.CSSProperties> = {
     borderRadius: '7px', display: 'flex', alignItems: 'center',
     justifyContent: 'center', flexShrink: 0,
     boxShadow: '0 2px 8px rgba(59,130,246,0.35)',
-  },
-  betaBadge: {
-    fontSize: '0.55rem', fontWeight: 700, background: '#EFF6FF',
-    color: '#3B82F6', border: '1px solid #BFDBFE',
-    borderRadius: '4px', padding: '1px 5px', letterSpacing: '0.06em',
   },
   toggleBtn: {
     width: '26px', height: '26px', borderRadius: '6px',

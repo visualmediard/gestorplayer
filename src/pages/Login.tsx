@@ -25,7 +25,6 @@ export default function Login() {
         {/* Logo */}
         <div style={s.logoWrap}>
           <img src={logoNegro} alt="GestPlayer" style={{ height: '44px', width: 'auto' }} />
-          <span style={s.betaBadge}>BETA</span>
         </div>
 
         <div style={s.divider} />
@@ -121,13 +120,6 @@ const s: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     fontSize: '1.25rem',
     color: '#0F172A',
-  },
-  betaBadge: {
-    fontSize: '0.6rem', fontWeight: 700,
-    background: '#EFF6FF', color: '#3B82F6',
-    border: '1px solid #BFDBFE',
-    borderRadius: '4px', padding: '2px 6px',
-    letterSpacing: '0.05em',
   },
   divider: {
     height: '1px',
