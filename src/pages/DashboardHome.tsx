@@ -3,9 +3,10 @@ import { supabase } from '../lib/supabase'
 import { resolveMediaUrl } from '../lib/mediaUrl'
 import { dedupeMedia } from '../lib/dedupeMedia'
 import { useAuth } from '../auth/AuthContext'
+import ZonePreview, { type ZoneBox } from '../components/ZonePreview'
 
 type MediaItem = { id: string; name: string; type: string; storage_path: string; created_at: string; zone_id?: string | null }
-type Program = { id: string; name: string; thumbnail_url: string | null; published_at: string | null }
+type Program = { id: string; name: string; thumbnail_url: string | null; published_at: string | null; width: number; height: number }
 type Screen = { id: string; name: string; last_heartbeat: string | null; current_program_id: string | null; is_active: boolean }
 type ProgramMap = Record<string, string>
 
@@ -27,6 +28,7 @@ export default function DashboardHome({
   const { profile } = useAuth()
   const [media, setMedia] = useState<MediaItem[]>([])
   const [programs, setPrograms] = useState<Program[]>([])
+  const [zonesByProgram, setZonesByProgram] = useState<Record<string, ZoneBox[]>>({})
   const [screens, setScreens] = useState<Screen[]>([])
   const [programMap, setProgramMap] = useState<ProgramMap>({})
   const [loading, setLoading] = useState(true)
@@ -42,13 +44,30 @@ export default function DashboardHome({
 
     const [{ data: mediaData }, { data: progData }, { data: screenData }] = await Promise.all([
       supabase.from('media_content').select('id, name, type, storage_path, created_at, zone_id').is('archived_at', null).order('created_at', { ascending: false }).limit(60),
-      supabase.from('programs').select('id, name, thumbnail_url, published_at').eq('organization_id', orgId ?? '').order('created_at', { ascending: false }).limit(8),
+      supabase.from('programs').select('id, name, thumbnail_url, published_at, width, height').eq('organization_id', orgId ?? '').order('created_at', { ascending: false }).limit(8),
       supabase.from('screens').select('id, name, last_heartbeat, current_program_id, is_active').eq('organization_id', orgId ?? '').order('name'),
     ])
 
     if (mediaData) setMedia(dedupeMedia(mediaData as MediaItem[]).slice(0, 8))
     if (progData) setPrograms(progData as Program[])
     if (screenData) setScreens(screenData as Screen[])
+
+    // Zonas de los programas que se listan, para dibujar su layout igual que
+    // en la tarjeta de Programas. Solo de esos ocho: traer las de toda la
+    // organización sería pedir datos que no se van a pintar.
+    if (progData && progData.length > 0) {
+      const { data: zoneData } = await supabase
+        .from('zones')
+        .select('id, program_id, x, y, width, height, background_color')
+        .in('program_id', (progData as Program[]).map(p => p.id))
+        .order('sort_order')
+
+      const byProgram: Record<string, ZoneBox[]> = {}
+      for (const z of (zoneData ?? []) as (ZoneBox & { program_id: string })[]) {
+        ;(byProgram[z.program_id] ??= []).push(z)
+      }
+      setZonesByProgram(byProgram)
+    }
 
     if (progData) {
       const map: ProgramMap = {}
@@ -168,10 +187,16 @@ export default function DashboardHome({
                 ? <p style={s.empty}>Sin programas todavía.</p>
                 : programs.map(p => (
                   <div key={p.id} style={s.listRow} className="table-row">
+                    {/* El layout de zonas manda sobre la miniatura subida a
+                        mano: dice cómo está montado el programa, que es lo que
+                        se quiere reconocer de un vistazo. Misma vista que la
+                        tarjeta de Programas. */}
                     <div style={s.thumb}>
-                      {p.thumbnail_url
-                        ? <img src={p.thumbnail_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        : <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1E3A5F, #2563EB)' }} />
+                      {(zonesByProgram[p.id] ?? []).length > 0
+                        ? <ZonePreview zones={zonesByProgram[p.id]} width={p.width} height={p.height} />
+                        : p.thumbnail_url
+                          ? <img src={p.thumbnail_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1E3A5F, #2563EB)' }} />
                       }
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
