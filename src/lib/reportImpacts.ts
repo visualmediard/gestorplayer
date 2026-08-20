@@ -36,7 +36,7 @@ export function drawImpactsSection(
 
   doc.setTextColor(15, 23, 42)
   doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
-  doc.text('Impactos estimados', M, y)
+  doc.text('Público alcanzado', M, y)
   y += 5
 
   // ── Tarjeta del titular ──────────────────────────────────────────────────
@@ -52,7 +52,11 @@ export function drawImpactsSection(
   doc.text(nf(imp.impacts), M + 7, y + 12)
   const numW = doc.getTextWidth(nf(imp.impacts))
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(21, 128, 61)
-  doc.text('personas', M + 9 + numW, y + 12)
+  // La unidad nombra lo que de verdad se contó. El número es el conteo bruto
+  // del proveedor: un auto suma 1, no los ~3 ocupantes que estimaría su factor
+  // de ocupación. Llamarlo "personas" diría que 41.920 autos son 41.920
+  // personas, y el desglose de abajo lo desmentiría a simple vista.
+  doc.text('vehículos y peatones', M + 9 + numW, y + 12)
 
   doc.setFontSize(8.5); doc.setTextColor(71, 85, 105)
   doc.text(coverageLabel, M + 7, y + 19)

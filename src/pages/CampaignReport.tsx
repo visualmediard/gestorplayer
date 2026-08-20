@@ -70,7 +70,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
   const [customTo, setCustomTo] = useState(isoDay(new Date()))
   const [daily, setDaily] = useState<{ date: string; plays: number }[]>([])
   const [byScreenRange, setByScreenRange] = useState<{ screen_name: string; zone_name: string; plays: number }[]>([])
-  // Impactos estimados: cruce de las reproducciones con el aforo del
+  // Público alcanzado: cruce de las reproducciones con el aforo del
   // emplazamiento. null = aún no cargado; days_counted 0 = no hay aforo para
   // esos días, y entonces la sección no se muestra.
   const [impacts, setImpacts] = useState<TrafficImpacts | null>(null)
@@ -336,7 +336,7 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
     }
     line('Estado', camp.status.toUpperCase())
 
-    // ── Impactos estimados ──
+    // ── Público alcanzado ──
     if (impacts && impacts.days_counted > 0) {
       y = drawImpactsSection(doc, pageW, y + 5, impacts,
         `La campana salio ${impacts.days_with_plays} dias en este periodo.`,
@@ -530,10 +530,10 @@ export default function CampaignReport({ campaignId, onBack }: { campaignId: str
       <div style={s.card}>
         {impacts && impacts.days_counted > 0 && (
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '1.25rem 1.4rem', marginBottom: '1.25rem', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' }}>
-            <h3 style={s.cardTitle}>Impactos estimados</h3>
+            <h3 style={s.cardTitle}>Público alcanzado</h3>
 
             <div style={{ fontSize: '2.1rem', fontWeight: 800, color: '#0F172A', lineHeight: 1.15, marginTop: '0.5rem' }}>
-              {nfmt(impacts.impacts)} <span style={{ fontSize: '1rem', fontWeight: 600, color: '#64748B' }}>personas</span>
+              {nfmt(impacts.impacts)} <span style={{ fontSize: '1rem', fontWeight: 600, color: '#64748B' }}>vehículos y peatones</span>
             </div>
 
             {/* Siempre visible, también al 100%: cuando cubre todo es argumento

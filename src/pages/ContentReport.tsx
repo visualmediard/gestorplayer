@@ -35,7 +35,7 @@ const fmtDay = (iso: string) => {
   return new Date(y, m - 1, d).toLocaleDateString('es-DO', { day: '2-digit', month: 'short' })
 }
 
-// Impactos estimados: cruce de reproducciones con el aforo del emplazamiento.
+// Público alcanzado: cruce de reproducciones con el aforo del emplazamiento.
 // Misma forma que devuelve campaign_traffic_impacts.
 type TrafficImpacts = {
   days_counted: number
@@ -435,10 +435,10 @@ export default function ContentReport({
 
       {impacts && impacts.days_counted > 0 && (
         <div style={s.card}>
-          <h3 style={s.cardTitle}>Impactos estimados</h3>
+          <h3 style={s.cardTitle}>Público alcanzado</h3>
 
           <div style={{ fontSize: '2.1rem', fontWeight: 800, color: '#0F172A', lineHeight: 1.15, marginTop: '0.5rem' }}>
-            {nfmt(impacts.impacts)} <span style={{ fontSize: '1rem', fontWeight: 600, color: '#64748B' }}>personas</span>
+            {nfmt(impacts.impacts)} <span style={{ fontSize: '1rem', fontWeight: 600, color: '#64748B' }}>vehículos y peatones</span>
           </div>
 
           {/* Siempre visible, también al 100%: cuando cubre todo es argumento
