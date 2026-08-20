@@ -21,6 +21,14 @@ import { resolveMediaUrl } from './lib/mediaUrl'
 
 type Page = 'home' | 'programs' | 'screens' | 'content' | 'stats' | 'campaigns' | 'settings' | 'superadmin'
 
+// Página de aterrizaje según rol. El vendedor no tiene "Inicio" en su menú
+// --solo Campañas y Estadísticas-- así que arrancarlo en el dashboard lo
+// dejaría en una sección que no puede ni volver a abrir desde el menú.
+function getInitialPage(role: string | null | undefined): Page {
+  if (role === 'seller') return 'campaigns'
+  return 'home'
+}
+
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
   useEffect(() => {
@@ -43,9 +51,12 @@ function useIsTablet() {
 
 function Gate() {
   const { session, profile, loading, signOut } = useAuth()
-  // Los tres roles (admin, operador, vendedor) tienen "Inicio" en su menú, así
-  // que todos arrancan aquí y no hace falta ajustar la página según el perfil.
   const [page, setPage] = useState<Page>('home')
+  // El perfil llega después del primer render, así que la página inicial se
+  // ajusta una sola vez cuando aparece. `pageInit` evita que un
+  // TOKEN_REFRESHED posterior devuelva al usuario a su aterrizaje mientras
+  // navega.
+  const [pageInit, setPageInit] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [pageKey, setPageKey] = useState(0)
@@ -56,6 +67,13 @@ function Gate() {
   const [campaignReportId, setCampaignReportId] = useState<string | null>(null)
   const isMobile = useIsMobile()
   const isTablet = useIsTablet()
+
+  useEffect(() => {
+    if (!pageInit && profile?.role) {
+      setPage(getInitialPage(profile.role))
+      setPageInit(true)
+    }
+  }, [profile, pageInit])
 
   // Tras autenticarse, si venía de un enlace /pair (u otra ruta protegida)
   // que guardó un destino de retorno, lo enviamos allí.

@@ -36,6 +36,15 @@ export default function DashboardHome({
 
   const nav = onNavigate ?? (() => {})
 
+  // El vendedor no tiene esta página en su menú, pero podría llegar por otra
+  // vía. Los tres paneles llevan botones de subir medios, crear programas y
+  // añadir pantallas: cosas que no gestiona. Se le ocultan junto con los
+  // contadores de pantallas, que enlazan a una sección que tampoco ve.
+  //
+  // Es solo la UI: la RLS aísla por organización, no por rol, así que esto
+  // ordena la pantalla, no protege el dato.
+  const isSeller = profile?.role === 'seller'
+
   async function load() {
     setLoading(true)
     const { data: profileData } = await supabase
@@ -106,19 +115,35 @@ export default function DashboardHome({
           <h1 style={s.title}>Bienvenido, {profile?.full_name} 👋</h1>
           <p style={s.sub}>{(profile as any)?.organization_name ?? 'GestPlayer'} · Panel de control</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <button style={{ ...s.statPill, cursor: 'pointer' }} onClick={() => { localStorage.setItem('gp_screens_filter', 'online'); nav('screens') }} title="Ver pantallas en línea">
-            <div style={{ ...s.dot, background: '#10B981', boxShadow: '0 0 6px #10B981' }} />
-            En línea: <strong>{online}</strong>
-          </button>
-          <button style={{ ...s.statPill, cursor: 'pointer' }} onClick={() => { localStorage.setItem('gp_screens_filter', 'offline'); nav('screens') }} title="Ver pantallas desconectadas">
-            <div style={{ ...s.dot, background: '#CBD5E1' }} />
-            Desconectado: <strong>{offline}</strong>
-          </button>
-        </div>
+        {!isSeller && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <button style={{ ...s.statPill, cursor: 'pointer' }} onClick={() => { localStorage.setItem('gp_screens_filter', 'online'); nav('screens') }} title="Ver pantallas en línea">
+              <div style={{ ...s.dot, background: '#10B981', boxShadow: '0 0 6px #10B981' }} />
+              En línea: <strong>{online}</strong>
+            </button>
+            <button style={{ ...s.statPill, cursor: 'pointer' }} onClick={() => { localStorage.setItem('gp_screens_filter', 'offline'); nav('screens') }} title="Ver pantallas desconectadas">
+              <div style={{ ...s.dot, background: '#CBD5E1' }} />
+              Desconectado: <strong>{offline}</strong>
+            </button>
+          </div>
+        )}
       </div>
 
-      {loading ? (
+      {isSeller ? (
+        // Sin los tres paneles no queda nada que mostrarle aquí. Un texto que
+        // lo oriente es mejor que una página en blanco.
+        <div style={{ ...s.panel, padding: '2rem', textAlign: 'center', color: '#64748B' }}>
+          <p style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0F172A', marginBottom: '0.35rem' }}>
+            Tu trabajo está en Campañas
+          </p>
+          <p style={{ fontSize: '0.85rem' }}>
+            Desde el menú puedes ver las campañas y sus estadísticas.
+          </p>
+          <button style={{ ...s.btnPrimary, margin: '1rem auto 0' }} onClick={() => nav('campaigns')}>
+            Ir a Campañas
+          </button>
+        </div>
+      ) : loading ? (
         <div style={s.grid3} className="dashboard-grid">
           {[0, 1, 2].map(i => <div key={i} style={{ height: '500px', borderRadius: '14px' }} className="skeleton" />)}
         </div>
