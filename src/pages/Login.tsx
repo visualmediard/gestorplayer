@@ -74,10 +74,10 @@ export default function Login() {
           </button>
         </form>
 
-        <p style={s.registerLink}>
-          ¿Tu empresa no tiene cuenta?{' '}
-          <a href="/register" style={{ color: '#2563EB', fontWeight: 600, textDecoration: 'none' }}>Regístrate</a>
-        </p>
+        {/* El enlace al registro se retira a propósito: las empresas llegan
+            por el enlace que les enviamos, no descubriéndolo aquí. La ruta
+            /register sigue existiendo y funcionando por URL directa; el estilo
+            s.registerLink se conserva por si el enlace vuelve. */}
       </div>
     </div>
   )
