@@ -17,6 +17,17 @@ type Campaign = {
   daily_start_time: string | null; daily_end_time: string | null
   status: 'draft' | 'active' | 'paused' | 'ended'
   created_at: string; deleted_at: string | null
+  // Vendedor dueño de la campaña. NULL = sin asignar, y entonces ningún
+  // vendedor la ve (la RLS la limita a admin y operator).
+  seller_id: string | null
+}
+
+type Seller = { id: string; full_name: string | null; email: string }
+
+// El correo es el identificador que el admin reconoce; el nombre, si lo hay,
+// se lee mejor. Se muestran los dos cuando existen.
+function sellerLabel(s: Seller): string {
+  return s.full_name ? `${s.full_name} · ${s.email}` : s.email
 }
 type CampaignStat = {
   campaign_id: string; campaign_name: string; client_name: string | null; status: string
@@ -80,7 +91,10 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   const [wizardOpen, setWizardOpen] = useState(false)
   const [editingId, setEditingId]   = useState<string | null>(null)
   const [step, setStep] = useState<1 | 2 | 3>(1)
-  const [w1, setW1] = useState({ name: '', client: '', starts: '', ends: '', tStart: '08:00', tEnd: '22:00' })
+  const [w1, setW1] = useState({ name: '', client: '', starts: '', ends: '', tStart: '08:00', tEnd: '22:00', seller: '' })
+  // Vendedores de la organización, para el desplegable. La RLS de profiles ya
+  // acota a la organización propia, así que no hace falta filtrar por ella.
+  const [sellers, setSellers] = useState<Seller[]>([])
   const [mediaSearch, setMediaSearch] = useState('')
   const [assigns, setAssigns] = useState<MediaAssign[]>([])
   const [subs, setSubs] = useState<SubAssign[]>([])
@@ -119,6 +133,11 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
       supabase.from('programs').select('id, name').eq('organization_id', orgId),
       supabase.from('zones').select('id, name, program_id'),
     ])
+
+    const { data: sellerRows } = await supabase
+      .from('profiles').select('id, full_name, email')
+      .eq('role', 'seller').order('full_name')
+    setSellers((sellerRows ?? []) as Seller[])
 
     if (campData) setCampaigns(campData as Campaign[])
     if (statData) setStats(statData as CampaignStat[])
@@ -169,7 +188,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
   function resetWizard() {
     setEditingId(null)
     setStep(1)
-    setW1({ name: '', client: '', starts: '', ends: '', tStart: '08:00', tEnd: '22:00' })
+    setW1({ name: '', client: '', starts: '', ends: '', tStart: '08:00', tEnd: '22:00', seller: '' })
     setMediaSearch(''); setAssigns([]); setSubs([]); setZoneSearch({})
     setWizardError(null)
     setShowUploadForm(false); setShowUrlForm(false); setUploadFile(null)
@@ -253,6 +272,9 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
       ends: camp.ends_at ? camp.ends_at.slice(0, 10) : '',
       tStart: camp.daily_start_time ? camp.daily_start_time.slice(0, 5) : '08:00',
       tEnd: camp.daily_end_time ? camp.daily_end_time.slice(0, 5) : '22:00',
+      // Reasignar el vendedor desde la edición es imprescindible: si no, un
+      // vendedor que se va deja campañas huérfanas sin forma de recuperarlas.
+      seller: camp.seller_id ?? '',
     })
     // Reconstruct assignments from injected media_content (match by storage_path)
     const { data: rows } = await supabase.from('media_content')
@@ -396,6 +418,8 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
         name: w1.name.trim(), client_name: w1.client.trim(),
         media_content_id: cover, starts_at: startsAt, ends_at: endsAt,
         daily_start_time: w1.tStart, daily_end_time: w1.tEnd,
+        // Cadena vacía = "Sin asignar": se guarda NULL, no ''.
+        seller_id: w1.seller || null,
       }).eq('id', editingId)
       if (error) { setWizardError(error.message); setPublishing(false); return }
       // Archive the previous placements instead of deleting them, so their
@@ -415,6 +439,7 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
         starts_at: startsAt, ends_at: endsAt,
         daily_start_time: w1.tStart, daily_end_time: w1.tEnd,
         status: 'active', created_by: profile?.id,
+        seller_id: w1.seller || null,
       }).select().single()
       if (error || !camp) { setWizardError(error?.message ?? 'Error al crear.'); setPublishing(false); return }
       campId = camp.id
@@ -588,6 +613,25 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
                     <div style={{ ...s.formGroup, gridColumn: '1 / -1' }}>
                       <label style={s.label}>Nombre del cliente</label>
                       <input style={s.input} value={w1.client} onChange={e => setW1({ ...w1, client: e.target.value })} placeholder="Ej: Coca-Cola RD" />
+                    </div>
+
+                    {/* Vendedor dueño. Opcional a propósito: si fuera
+                        obligatorio, no se podrían crear campañas mientras la
+                        organización no tenga ningún vendedor dado de alta. */}
+                    <div style={{ ...s.formGroup, gridColumn: '1 / -1' }}>
+                      <label style={s.label}>Vendedor</label>
+                      <select style={s.input} value={w1.seller}
+                        onChange={e => setW1({ ...w1, seller: e.target.value })}>
+                        <option value="">Sin asignar</option>
+                        {sellers.map(sv => (
+                          <option key={sv.id} value={sv.id}>{sellerLabel(sv)}</option>
+                        ))}
+                      </select>
+                      <span style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '0.25rem' }}>
+                        {sellers.length === 0
+                          ? 'No hay vendedores en tu organización todavía. Se invitan desde Configuración → Usuarios.'
+                          : 'Sin asignar, la campaña solo la verán los administradores.'}
+                      </span>
                     </div>
                     <div style={s.formGroup}>
                       <label style={s.label}>Fecha de inicio</label>
@@ -1108,6 +1152,17 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
                     {camp.client_name ?? '—'}
                   </div>
                 </div>
+
+                {/* Vendedor dueño. "Sin asignar" en gris es informacion util
+                    para el admin: esa campaña no la ve ningún vendedor. */}
+                <span style={{ fontSize: '0.75rem', color: camp.seller_id ? '#64748B' : '#CBD5E1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px', flexShrink: 0 }}
+                  title={camp.seller_id ? (sellers.find(sv => sv.id === camp.seller_id)?.email ?? '') : 'Sin vendedor asignado'}>
+                  {camp.seller_id
+                    ? (sellers.find(sv => sv.id === camp.seller_id)?.full_name
+                       ?? sellers.find(sv => sv.id === camp.seller_id)?.email
+                       ?? '—')
+                    : 'Sin asignar'}
+                </span>
 
                 <span title={badgeTitle} style={{ ...s.badge, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, flexShrink: 0 }}>
                   {badgeIcon && <span style={{ marginRight: '3px' }}>{badgeIcon}</span>}
