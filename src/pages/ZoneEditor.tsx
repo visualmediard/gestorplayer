@@ -76,6 +76,12 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     return () => clearInterval(iv)
   }, [])
   const [showZoneForm, setShowZoneForm] = useState(false)
+  // Límite de zonas del plan y consumo actual. El límite es de TODA la
+  // organización, no de este programa, así que el conteo no puede salir de
+  // `zones` (que solo tiene las de aquí) y se pide aparte. Es solo el aviso:
+  // la barrera real es el trigger de la base.
+  const [zoneLimit, setZoneLimit] = useState<number | null>(null)
+  const [orgZoneCount, setOrgZoneCount] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [published, setPublished] = useState(false)
@@ -155,6 +161,16 @@ export default function ZoneEditor({ programId, onBack }: Props) {
     const { data: zns } = await supabase.from('zones').select('*').eq('program_id', programId).order('sort_order')
     if (prog) setProgram(prog as Program)
     if (zns) setZones(zns as Zone[])
+
+    // Consumo de zonas de toda la organización: la RLS ya acota `zones` a la
+    // organización del usuario, así que un count sin filtro da el total suyo.
+    const { data: org } = await supabase.from('organizations').select('zone_limit').maybeSingle()
+    const limit = (org as { zone_limit: number | null } | null)?.zone_limit ?? null
+    setZoneLimit(limit)
+    if (limit != null) {
+      const { count } = await supabase.from('zones').select('id', { count: 'exact', head: true })
+      setOrgZoneCount(count ?? null)
+    }
   }
 
   async function loadEntries(zoneId: string) {
@@ -526,6 +542,19 @@ export default function ZoneEditor({ programId, onBack }: Props) {
       {showZoneForm && (
         <div style={s.card}>
           <h3 style={s.cardTitle}>Nueva zona</h3>
+
+          {zoneLimit != null && orgZoneCount != null && (
+            <div style={{
+              marginBottom: '0.9rem', padding: '0.55rem 0.8rem', borderRadius: '8px', fontSize: '0.8rem',
+              background: orgZoneCount >= zoneLimit ? '#FFF5F5' : '#F8FAFC',
+              border: `1px solid ${orgZoneCount >= zoneLimit ? '#FECACA' : '#E2E8F0'}`,
+              color: orgZoneCount >= zoneLimit ? '#B91C1C' : '#64748B',
+            }}>
+              {orgZoneCount >= zoneLimit
+                ? `Has alcanzado el límite de ${zoneLimit} ${zoneLimit === 1 ? 'zona' : 'zonas'} de tu plan. Contacta a tu proveedor para ampliarlo.`
+                : `Usas ${orgZoneCount} de ${zoneLimit} ${zoneLimit === 1 ? 'zona' : 'zonas'} de tu plan, contando todos tus programas.`}
+            </div>
+          )}
           <div style={s.formRow}>
             <div style={s.formGroup}><label style={s.label}>Nombre</label><input style={s.input} value={name} onChange={e => setName(e.target.value)} placeholder="Zona principal" /></div>
             <div style={s.formGroup}><label style={s.label}>X</label><input style={{ ...s.input, width: '80px' }} type="number" value={x} onChange={e => setX(+e.target.value)} /></div>

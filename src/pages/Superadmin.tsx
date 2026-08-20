@@ -19,6 +19,11 @@ type OrgRow = {
   used_bytes: number | string
   screen_count: number
   user_count: number
+  // NULL = sin límite. El conteo va al lado en la tabla: un límite sin el
+  // consumo delante no dice nada.
+  screen_limit: number | null
+  zone_limit: number | null
+  zone_count: number
 }
 
 const STATUS_LABEL: Record<OrgRow['status'], string> = {
@@ -51,6 +56,11 @@ export default function Superadmin() {
   const [limitInput, setLimitInput] = useState('')
   const [savingLimit, setSavingLimit] = useState(false)
   const [limitError, setLimitError] = useState<string | null>(null)
+  const [editingLimitsId, setEditingLimitsId] = useState<string | null>(null)
+  const [screenLimitInput, setScreenLimitInput] = useState('')
+  const [zoneLimitInput, setZoneLimitInput] = useState('')
+  const [savingLimits, setSavingLimits] = useState(false)
+  const [limitsError, setLimitsError] = useState<string | null>(null)
 
   // Eliminación definitiva: `target` es la organización abierta en el modal.
   const [target, setTarget] = useState<OrgRow | null>(null)
@@ -120,6 +130,43 @@ export default function Superadmin() {
 
     setRows(rs => rs.map(x => (x.id === r.id ? { ...x, storage_limit_mb: mb } : x)))
     setEditingId(null)
+  }
+
+  // ── Límites de pantallas y zonas ──────────────────────────────────────
+  // Se editan juntos porque viven en la misma RPC y en la misma fila. Vacío
+  // significa "sin límite", que es distinto de cero: cero no dejaría crear
+  // nada, y no hay forma de expresarlo con un número.
+  function startEditLimits(r: OrgRow) {
+    setEditingLimitsId(r.id)
+    setScreenLimitInput(r.screen_limit == null ? '' : String(r.screen_limit))
+    setZoneLimitInput(r.zone_limit == null ? '' : String(r.zone_limit))
+    setLimitsError(null)
+  }
+
+  async function saveLimits(r: OrgRow) {
+    const parse = (v: string): number | null | 'bad' => {
+      const t = v.trim()
+      if (t === '') return null                       // sin límite
+      const n = Number(t)
+      if (!Number.isInteger(n) || n < 1 || n > 10000) return 'bad'
+      return n
+    }
+    const sc = parse(screenLimitInput)
+    const zn = parse(zoneLimitInput)
+    if (sc === 'bad' || zn === 'bad') {
+      setLimitsError('Cada límite debe ser un entero entre 1 y 10000, o vacío para sin límite')
+      return
+    }
+
+    setSavingLimits(true); setLimitsError(null)
+    const { error } = await supabase.rpc('set_org_limits', {
+      p_org_id: r.id, p_screen_limit: sc, p_zone_limit: zn,
+    })
+    setSavingLimits(false)
+    if (error) { setLimitsError(error.message); return }
+
+    setRows(rs => rs.map(x => (x.id === r.id ? { ...x, screen_limit: sc, zone_limit: zn } : x)))
+    setEditingLimitsId(null)
   }
 
   function downloadBackup(name: string, backup: unknown) {
@@ -238,6 +285,7 @@ export default function Superadmin() {
                 <th style={s.th}>Alta</th>
                 <th style={s.th}>Almacenamiento</th>
                 <th style={{ ...s.th, textAlign: 'center' }}>Pantallas</th>
+                <th style={{ ...s.th, textAlign: 'center' }}>Zonas</th>
                 <th style={{ ...s.th, textAlign: 'center' }}>Usuarios</th>
                 <th style={s.th}>Carpeta R2</th>
                 <th style={{ ...s.th, textAlign: 'right' }}>Acción</th>
@@ -333,7 +381,57 @@ export default function Superadmin() {
                       )}
                     </td>
 
-                    <td style={{ ...s.td, textAlign: 'center', fontWeight: 600 }}>{r.screen_count}</td>
+                    {/* Uso / límite. Se editan los dos a la vez porque van en
+                        la misma RPC. Vacío = sin límite. */}
+                    <td style={{ ...s.td, textAlign: 'center' }} colSpan={editingLimitsId === r.id ? 2 : 1}>
+                      {editingLimitsId === r.id ? (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                          <input autoFocus value={screenLimitInput} placeholder="∞"
+                            onChange={e => setScreenLimitInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveLimits(r); if (e.key === 'Escape') setEditingLimitsId(null) }}
+                            title="Límite de pantallas"
+                            style={{ width: '52px', padding: '0.25rem 0.35rem', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '0.78rem', textAlign: 'center' }} />
+                          <span style={{ color: '#CBD5E1' }}>/</span>
+                          <input value={zoneLimitInput} placeholder="∞"
+                            onChange={e => setZoneLimitInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveLimits(r); if (e.key === 'Escape') setEditingLimitsId(null) }}
+                            title="Límite de zonas"
+                            style={{ width: '52px', padding: '0.25rem 0.35rem', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '0.78rem', textAlign: 'center' }} />
+                          <button onClick={() => saveLimits(r)} disabled={savingLimits}
+                            style={{ border: 'none', background: '#3B82F6', color: '#fff', borderRadius: '6px', padding: '0.25rem 0.5rem', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer' }}>
+                            {savingLimits ? '…' : 'OK'}
+                          </button>
+                          <button onClick={() => setEditingLimitsId(null)}
+                            style={{ border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', borderRadius: '6px', padding: '0.25rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}>
+                            ✕
+                          </button>
+                          {limitsError && (
+                            <div style={{ width: '100%', color: '#EF4444', fontSize: '0.68rem', marginTop: '0.2rem' }}>{limitsError}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <button onClick={() => startEditLimits(r)}
+                          title="Editar los límites de pantallas y zonas"
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', fontWeight: 600, color: '#0F172A', fontSize: '0.82rem' }}>
+                          {r.screen_count}
+                          <span style={{ color: '#94A3B8', fontWeight: 500 }}>
+                            {' / '}{r.screen_limit == null ? '∞' : r.screen_limit}
+                          </span>
+                        </button>
+                      )}
+                    </td>
+                    {editingLimitsId !== r.id && (
+                      <td style={{ ...s.td, textAlign: 'center' }}>
+                        <button onClick={() => startEditLimits(r)}
+                          title="Editar los límites de pantallas y zonas"
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', fontWeight: 600, color: '#0F172A', fontSize: '0.82rem' }}>
+                          {r.zone_count}
+                          <span style={{ color: '#94A3B8', fontWeight: 500 }}>
+                            {' / '}{r.zone_limit == null ? '∞' : r.zone_limit}
+                          </span>
+                        </button>
+                      </td>
+                    )}
                     <td style={{ ...s.td, textAlign: 'center', fontWeight: 600 }}>{r.user_count}</td>
 
                     <td style={s.td}>

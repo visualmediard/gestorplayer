@@ -188,6 +188,10 @@ export default function Screens() {
   const [adCounts, setAdCounts] = useState<AdCount[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+  // Límite de pantallas del plan. NULL = sin límite. Es solo el aviso: la
+  // barrera real es el trigger de la base, que rechaza el INSERT venga de
+  // donde venga. Sin esto el usuario solo se enteraría al intentar guardar.
+  const [screenLimit, setScreenLimit] = useState<number | null>(null)
   const [name, setName] = useState('')
   const [location, setLocation] = useState('')
   const [adCapacity, setAdCapacity] = useState(10)
@@ -248,6 +252,10 @@ export default function Screens() {
     const { data: progs } = await supabase.from('programs').select('id, name, width, height')
     if (progs) setPrograms(progs)
     setAdCounts(await fetchAdCounts())
+    // La RLS acota la fila a la organización del usuario. Si no puede leerla
+    // (rol sin acceso), queda en null y simplemente no se muestra el aviso.
+    const { data: org } = await supabase.from('organizations').select('screen_limit').maybeSingle()
+    setScreenLimit((org as { screen_limit: number | null } | null)?.screen_limit ?? null)
     setLoading(false)
   }
 
@@ -532,6 +540,19 @@ export default function Screens() {
       {showForm && (
         <div style={s.formCard}>
           <h3 style={s.formTitle}>Nueva pantalla</h3>
+
+          {screenLimit != null && (
+            <div style={{
+              marginBottom: '0.9rem', padding: '0.55rem 0.8rem', borderRadius: '8px', fontSize: '0.8rem',
+              background: screens.length >= screenLimit ? '#FFF5F5' : '#F8FAFC',
+              border: `1px solid ${screens.length >= screenLimit ? '#FECACA' : '#E2E8F0'}`,
+              color: screens.length >= screenLimit ? '#B91C1C' : '#64748B',
+            }}>
+              {screens.length >= screenLimit
+                ? `Has alcanzado el límite de ${screenLimit} ${screenLimit === 1 ? 'pantalla' : 'pantallas'} de tu plan. Contacta a tu proveedor para ampliarlo.`
+                : `Usas ${screens.length} de ${screenLimit} ${screenLimit === 1 ? 'pantalla' : 'pantallas'} de tu plan.`}
+            </div>
+          )}
           <div style={s.formRow}>
             <div style={s.formGroup}>
               <label style={s.label}>Nombre</label>
