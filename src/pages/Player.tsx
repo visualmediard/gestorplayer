@@ -206,6 +206,12 @@ export default function Player() {
     if (pub !== lastPublishedRef.current) {
       lastPublishedRef.current = pub
       setReloadKey(k => k + 1)
+      // Acuse inmediato. Aplicar la publicación es cuestión de un segundo --la
+      // suscripción en tiempo real la trae al instante-- pero sin esto el panel
+      // no se entera hasta el siguiente latido, hasta 30 s después, y el
+      // usuario ve "Sincronizando…" mucho despues de que la pantalla ya esté
+      // mostrando el anuncio nuevo. El retraso era del mensajero, no del envío.
+      heartbeat()
     }
   }
 

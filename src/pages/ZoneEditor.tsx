@@ -613,16 +613,77 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                 sola en cuanto vuelva a estar en línea — no hace falta volver a publicar.
               </p>
 
+              {/* Sin movimiento, veinte segundos de espera parecen un cuelgue.
+                  La barra es indeterminada a propósito: no sabemos cuánto
+                  falta --depende de cuándo el player haga su próximo poll--
+                  y una barra que avanza a un porcentaje inventado miente. */}
+              <style>{`
+                @keyframes gp-slide { 0% { left: -40% } 100% { left: 100% } }
+                @keyframes gp-pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+              `}</style>
+
+              {/* Los tres pasos, para que se vea dónde está el proceso. */}
+              {(() => {
+                const done = count('synced')
+                const stage = n === 0 ? 3 : done === n ? 3 : 2
+                const steps = ['Contenido guardado', 'Enviando a las pantallas', 'Listo en todas']
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.9rem' }}>
+                    {steps.map((label, i) => {
+                      const idx = i + 1
+                      const active = idx === stage && stage !== 3
+                      const passed = idx < stage || stage === 3
+                      return (
+                        <div key={label} style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{
+                            height: '4px', borderRadius: '999px', overflow: 'hidden', position: 'relative',
+                            background: passed ? '#10B981' : active ? '#DBEAFE' : '#E2E8F0',
+                          }}>
+                            {active && (
+                              <div style={{
+                                position: 'absolute', top: 0, bottom: 0, width: '40%',
+                                background: '#3B82F6', borderRadius: '999px',
+                                animation: 'gp-slide 1.1s ease-in-out infinite',
+                              }} />
+                            )}
+                          </div>
+                          <div style={{
+                            fontSize: '0.68rem', marginTop: '0.25rem',
+                            color: passed ? '#047857' : active ? '#1D4ED8' : '#94A3B8',
+                            fontWeight: passed || active ? 600 : 500,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          }}>
+                            {passed && idx < 3 ? '✓ ' : ''}{label}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '260px', overflowY: 'auto' }}>
                 {rows.map(({ sc, st }) => {
                   const ui = SYNC_UI[st]
                   return (
-                    <div key={sc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.55rem 0.7rem', borderRadius: '8px', background: ui.bg, border: `1px solid ${ui.border}` }}>
-                      <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: ui.dot, flexShrink: 0 }} />
+                    <div key={sc.id} style={{ position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.55rem 0.7rem', borderRadius: '8px', background: ui.bg, border: `1px solid ${ui.border}` }}>
+                      {/* El punto late solo mientras se sincroniza: en los
+                          demás estados, moverlo sería sugerir actividad que no
+                          está ocurriendo. */}
+                      <span style={{
+                        width: '9px', height: '9px', borderRadius: '50%', background: ui.dot, flexShrink: 0,
+                        animation: st === 'syncing' ? 'gp-pulse 1.1s ease-in-out infinite' : undefined,
+                      }} />
                       <span style={{ flex: 1, minWidth: 0, fontSize: '0.85rem', fontWeight: 600, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {sc.name}
                       </span>
                       <span style={{ fontSize: '0.75rem', fontWeight: 600, color: ui.fg, flexShrink: 0 }}>{ui.label}</span>
+
+                      {st === 'syncing' && (
+                        <span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: '3px', overflow: 'hidden' }}>
+                          <span style={{ position: 'absolute', top: 0, bottom: 0, width: '40%', background: ui.dot, animation: 'gp-slide 1.1s ease-in-out infinite' }} />
+                        </span>
+                      )}
                     </div>
                   )
                 })}
