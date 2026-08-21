@@ -148,7 +148,10 @@ export default function Programs({ initialEditId }: Props = {}) {
 
   return (
     <div>
-      <div style={s.topbar}>
+      {/* page-topbar: mismas reglas de móvil que Pantallas, para que el
+          buscador y el botón queden en la misma posición en las dos páginas.
+          Sin esta clase, el bloque se salía del viewport en 375 px. */}
+      <div style={s.topbar} className="page-topbar">
         <div>
           <h1 style={s.title}>Programas</h1>
           <p style={s.sub}>Define el layout de tus pantallas · {programs.length} programas</p>

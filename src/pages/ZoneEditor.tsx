@@ -626,18 +626,31 @@ export default function ZoneEditor({ programId, onBack }: Props) {
               {(() => {
                 const done = count('synced')
                 const stage = n === 0 ? 3 : done === n ? 3 : 2
-                const steps = ['Contenido guardado', 'Enviando a las pantallas', 'Listo en todas']
+                // ¿Hay algo ocurriendo AHORA? Solo si alguna pantalla está
+                // viva y pendiente. Si las que faltan están desconectadas, el
+                // envío no está "en curso": está detenido esperándolas, y
+                // seguir animando haría esperar al usuario sin motivo.
+                const moving = count('syncing') > 0
+                const steps = [
+                  'Contenido guardado',
+                  moving || stage === 3 ? 'Enviando a las pantallas' : 'Envío pendiente',
+                  stage === 3 ? 'Listo en todas' : moving ? 'Listo en todas' : 'Se completará al reconectar',
+                ]
                 return (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.9rem' }}>
                     {steps.map((label, i) => {
                       const idx = i + 1
-                      const active = idx === stage && stage !== 3
+                      // "Activo" = animado. Solo cuando algo avanza de verdad.
+                      const active = idx === stage && stage !== 3 && moving
+                      // Detenido: el paso al que le toca, pero sin nada vivo
+                      // que lo empuje. Se pinta en ámbar y QUIETO.
+                      const stalled = idx === stage && stage !== 3 && !moving
                       const passed = idx < stage || stage === 3
                       return (
                         <div key={label} style={{ flex: 1, minWidth: 0 }}>
                           <div style={{
                             height: '4px', borderRadius: '999px', overflow: 'hidden', position: 'relative',
-                            background: passed ? '#10B981' : active ? '#DBEAFE' : '#E2E8F0',
+                            background: passed ? '#10B981' : active ? '#DBEAFE' : stalled ? '#F59E0B' : '#E2E8F0',
                           }}>
                             {active && (
                               <div style={{
@@ -649,8 +662,8 @@ export default function ZoneEditor({ programId, onBack }: Props) {
                           </div>
                           <div style={{
                             fontSize: '0.68rem', marginTop: '0.25rem',
-                            color: passed ? '#047857' : active ? '#1D4ED8' : '#94A3B8',
-                            fontWeight: passed || active ? 600 : 500,
+                            color: passed ? '#047857' : active ? '#1D4ED8' : stalled ? '#B45309' : '#94A3B8',
+                            fontWeight: passed || active || stalled ? 600 : 500,
                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                           }}>
                             {passed && idx < 3 ? '✓ ' : ''}{label}
