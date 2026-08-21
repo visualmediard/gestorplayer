@@ -1217,6 +1217,16 @@ export default function Campaigns({ initialReportId }: { initialReportId?: strin
                 <div style={{ padding: '1rem 1.125rem' }}>
                   <p style={s.campName}>{camp.name}</p>
                   <p style={s.campClient}>{camp.client_name ?? '—'}</p>
+                  {/* Vendedor dueño. Solo aparece si lo tiene: en las que están
+                      sin asignar, un "—" más no aporta nada. */}
+                  {camp.seller_id && (
+                    <p style={{ ...s.campClient, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', marginTop: '4px', color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '999px', padding: '1px 8px', fontSize: '0.7rem', fontWeight: 600 }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg>
+                      {sellers.find(sv => sv.id === camp.seller_id)?.full_name
+                        ?? sellers.find(sv => sv.id === camp.seller_id)?.email
+                        ?? 'Vendedor'}
+                    </p>
+                  )}
 
                   <div style={{ marginTop: '0.75rem' }}>
                     <div style={{ height: '5px', background: '#F1F5F9', borderRadius: '999px', overflow: 'hidden' }}>
